@@ -48,6 +48,9 @@
     <ClCompile Include="simple_render_system.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ege_camera.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ege_window.hpp">
@@ -72,6 +75,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="simple_render_system.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ege_camera.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

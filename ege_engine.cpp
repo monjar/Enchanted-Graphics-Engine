@@ -1,5 +1,6 @@
 #include "ege_engine.hpp"
 #include "simple_render_system.hpp"
+#include "ege_camera.hpp"
 
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
@@ -24,14 +25,25 @@ namespace ege {
 
 	void EnchantedEngine::run() {
 		SimpleRenderSystem simpleRenderSystem{ egeDevice, egeRenderer.getSwapChainRenderPass() };
+        EgeCamera camera{};
+
+        //camera.setViewDirection(glm::vec3(0.f), glm::vec3(0.5f, 0.f, 1.f));
+        camera.setViewTarget(glm::vec3(-1.f, -2.f, -2.f), glm::vec3(0.f, 0.f, 2.5f));
+
 
 		while (!egeWindow.shouldClose()) {
 			glfwPollEvents();
 
+            float aspectRatio = egeRenderer.getAspectRatio();
+
+            //camera.setOrthographicProjection(-aspectRatio, aspectRatio, -1, 1, -1, 1);
+
+            camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 10.f);
+
 			if (auto commandBuffer = egeRenderer.beginFrame()) {
 				//Here we want to add more render passes. shadow casting etc
 				egeRenderer.beginSwapChainRenderPass(commandBuffer);
-				simpleRenderSystem.renderGameObjects(commandBuffer, gameObjects);
+				simpleRenderSystem.renderGameObjects(commandBuffer, gameObjects, camera);
 				egeRenderer.endSwapChainRenderPass(commandBuffer);
 				egeRenderer.endFrame();
 			}
@@ -105,7 +117,7 @@ namespace ege {
         std::shared_ptr<EgeModel> egeModel = createCubeModel(egeDevice, { 0.0f, 0.0f, 0.0f });
         auto cubeObj = EgeGameObject::createGameObject();
         cubeObj.model = egeModel;
-        cubeObj.transform.translation = { 0.0f, 0.0f, 0.5f };
+        cubeObj.transform.translation = { 0.0f, 0.0f, 2.5f };
         cubeObj.transform.scale = { 0.5f,0.5f, 0.5f };
 
         gameObjects.push_back(std::move(cubeObj));

@@ -62,8 +62,10 @@ namespace ege {
 
 
 
-	void SimpleRenderSystem::renderGameObjects(VkCommandBuffer commandBuffer, std::vector<EgeGameObject>& gameObjects) {
+	void SimpleRenderSystem::renderGameObjects(VkCommandBuffer commandBuffer, std::vector<EgeGameObject>& gameObjects, const EgeCamera& camera) {
 		egePipeline->bind(commandBuffer);
+
+		auto projectionView = camera.getProjection() * camera.getView();
 
 		for (auto& obj : gameObjects)
 		{
@@ -74,7 +76,7 @@ namespace ege {
 			SimplePushConstantData pushConstant{};
 			pushConstant.color
 				= obj.color;
-			pushConstant.transform = obj.transform.mat4();
+			pushConstant.transform = projectionView * obj.transform.mat4();
 
 			vkCmdPushConstants(commandBuffer, pipelineLayout,
 				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,

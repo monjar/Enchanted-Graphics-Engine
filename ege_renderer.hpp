@@ -25,6 +25,9 @@ namespace ege {
 		VkRenderPass getSwapChainRenderPass() const {
 			return egeSwapChain->getRenderPass();
 		}
+
+		float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
+
 		bool isFrameInProgress() const { return isFrameStarted; };
 
 		VkCommandBuffer getCurrentCommandBuffer() const {

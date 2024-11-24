@@ -16,9 +16,6 @@ namespace ege {
 
 		glm::mat4 mat4() { 
 
-
-
-
 			const float c3 = glm::cos(rotation.z);
 			const float s3 = glm::sin(rotation.z);
 			const float c2 = glm::cos(rotation.x);

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
@@ -155,6 +155,7 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ege_camera.cpp" />
     <ClCompile Include="ege_engine.cpp" />
     <ClCompile Include="ege_engine_device.cpp" />
     <ClCompile Include="ege_game_object.hpp" />
@@ -167,6 +168,7 @@
     <ClCompile Include="simple_render_system.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ege_camera.hpp" />
     <ClInclude Include="ege_engine.hpp" />
     <ClInclude Include="ege_engine_device.hpp" />
     <ClInclude Include="ege_model.hpp" />
