@@ -23,6 +23,7 @@ namespace ege {
 
 		bool wasWindowResized() { return wasFrameBufferResized; }
 		void resetWindowResizedFlag() { wasFrameBufferResized = false; }
+		GLFWwindow* getGLFWwindow() const { return window; }
 
 	private:
 

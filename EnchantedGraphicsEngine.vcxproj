@@ -163,6 +163,7 @@
     <ClCompile Include="ege_pipeline.cpp" />
     <ClCompile Include="ege_renderer.cpp" />
     <ClCompile Include="ege_window.cpp" />
+    <ClCompile Include="keyboard_movement_controller.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ege_swap_chain.cpp" />
     <ClCompile Include="simple_render_system.cpp" />
@@ -176,6 +177,7 @@
     <ClInclude Include="ege_renderer.hpp" />
     <ClInclude Include="ege_window.hpp" />
     <ClInclude Include="ege_swap_chain.hpp" />
+    <ClInclude Include="keyboard_movement_controller.hpp" />
     <ClInclude Include="simple_render_system.hpp" />
   </ItemGroup>
   <ItemGroup>
