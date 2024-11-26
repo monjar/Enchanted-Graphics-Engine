@@ -76,7 +76,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;C:\CppLibraries\tinyobjectloader;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
@@ -97,7 +97,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;C:\CppLibraries\tinyobjectloader;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
@@ -118,7 +118,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;C:\CppLibraries\tinyobjectloader;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
@@ -139,7 +139,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\VulkanSDK\1.4.304.0\Include;C:\CppLibraries\glfw-3.4.bin.WIN64\include;C:\CppLibraries\glm;C:\CppLibraries\tinyobjectloader;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp17</LanguageStandard>
     </ClCompile>
     <Link>
@@ -175,6 +175,7 @@
     <ClInclude Include="ege_model.hpp" />
     <ClInclude Include="ege_pipeline.hpp" />
     <ClInclude Include="ege_renderer.hpp" />
+    <ClInclude Include="ege_utils.hpp" />
     <ClInclude Include="ege_window.hpp" />
     <ClInclude Include="ege_swap_chain.hpp" />
     <ClInclude Include="keyboard_movement_controller.hpp" />
