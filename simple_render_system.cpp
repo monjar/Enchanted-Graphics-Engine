@@ -14,7 +14,7 @@ namespace ege {
 	struct SimplePushConstantData {
 		// by defult the float constructor fills out the diagonal
 		glm::mat4 transform{ 1.f };
-		alignas(16) glm::vec3 color;
+		glm::mat4 modelMatrix{ 1.f };
 	};
 
 	SimpleRenderSystem::SimpleRenderSystem(EgeDevice& device, VkRenderPass renderPass) : egeDevice{ device } {
@@ -73,9 +73,9 @@ namespace ege {
 
 
 			SimplePushConstantData pushConstant{};
-			pushConstant.color
-				= obj.color;
+			auto modelMatrix = obj.transform.mat4();
 			pushConstant.transform = projectionView * obj.transform.mat4();
+			pushConstant.modelMatrix = modelMatrix;
 
 			vkCmdPushConstants(commandBuffer, pipelineLayout,
 				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
