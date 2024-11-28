@@ -32,7 +32,7 @@ namespace ege {
 
 
         auto viewerObject = EgeGameObject::createGameObject();
-        viewerObject.transform.translation = glm::vec3(-1.f, -2.f, -0.f);
+        viewerObject.transform.translation = glm::vec3(0.f, -1.f, -0.f);
         KeyboardMovementController cameraController{};
 
         auto currentTime = std::chrono::high_resolution_clock::now();
@@ -71,12 +71,22 @@ namespace ege {
 
 	void EnchantedEngine::loadGameObjects() {
         std::shared_ptr<EgeModel> egeModel =
-            EgeModel::createModelFromFile(egeDevice, "models/smooth_vase.obj");
+            EgeModel::createModelFromFile(egeDevice, "models/flat_vase.obj");
         auto gameObj = EgeGameObject::createGameObject();
         gameObj.model = egeModel;
-        gameObj.transform.translation = { .0f, .0f, 2.5f };
+        gameObj.transform.translation = { -.5f, .0f, 2.5f };
         gameObj.transform.scale = glm::vec3(3.f);
         gameObjects.push_back(std::move(gameObj));
+
+
+
+        std::shared_ptr<EgeModel> egeModel2 =
+            EgeModel::createModelFromFile(egeDevice, "models/smooth_vase.obj");
+        auto gameObj2 = EgeGameObject::createGameObject();
+        gameObj2.model = egeModel2;
+        gameObj2.transform.translation = { .5f, .0f, 2.5f };
+        gameObj2.transform.scale = glm::vec3(3.f);
+        gameObjects.push_back(std::move(gameObj2));
 	}
 
 

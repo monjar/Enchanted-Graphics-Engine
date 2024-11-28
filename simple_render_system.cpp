@@ -14,7 +14,7 @@ namespace ege {
 	struct SimplePushConstantData {
 		// by defult the float constructor fills out the diagonal
 		glm::mat4 transform{ 1.f };
-		glm::mat4 modelMatrix{ 1.f };
+		glm::mat4 normalMatrix{ 1.f };
 	};
 
 	SimpleRenderSystem::SimpleRenderSystem(EgeDevice& device, VkRenderPass renderPass) : egeDevice{ device } {
@@ -69,13 +69,10 @@ namespace ege {
 
 		for (auto& obj : gameObjects)
 		{
-		
-
-
 			SimplePushConstantData pushConstant{};
 			auto modelMatrix = obj.transform.mat4();
-			pushConstant.transform = projectionView * obj.transform.mat4();
-			pushConstant.modelMatrix = modelMatrix;
+			pushConstant.transform = projectionView * modelMatrix;
+			pushConstant.normalMatrix = obj.transform.normalMatrix();
 
 			vkCmdPushConstants(commandBuffer, pipelineLayout,
 				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
