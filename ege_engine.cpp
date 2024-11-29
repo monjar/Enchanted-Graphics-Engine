@@ -1,6 +1,8 @@
 #include "ege_engine.hpp"
 
 #include "keyboard_movement_controller.hpp"
+
+#include "ege_buffer.hpp"
 #include "simple_render_system.hpp"
 #include "ege_camera.hpp"
 
@@ -14,9 +16,12 @@
 #include <stdexcept>
 
 namespace ege {
+	
+    struct GlobalUbo {
+        glm::mat4 projectionView{ 1.f };
+        glm::vec3 lightDirection = glm::normalize(glm::vec3{ 1.f, -3.f, -1.f });
+    };
 
-	
-	
 
 	EnchantedEngine::EnchantedEngine() {
 		loadGameObjects();
@@ -27,6 +32,17 @@ namespace ege {
 	}
 
 	void EnchantedEngine::run() {
+        std::vector<std::unique_ptr<EgeBuffer>> uboBuffers(EgeSwapChain::MAX_FRAMES_IN_FLIGHT);
+        for (int i = 0; i < uboBuffers.size(); i++) {
+            uboBuffers[i] = std::make_unique<EgeBuffer>(
+                egeDevice,
+                sizeof(GlobalUbo),
+                1,
+                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+            uboBuffers[i]->map();
+        }
+
 		SimpleRenderSystem simpleRenderSystem{ egeDevice, egeRenderer.getSwapChainRenderPass() };
         EgeCamera camera{};
 
@@ -55,9 +71,19 @@ namespace ege {
             camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 40.f);
 
 			if (auto commandBuffer = egeRenderer.beginFrame()) {
-				//Here we want to add more render passes. shadow casting etc
-				egeRenderer.beginSwapChainRenderPass(commandBuffer);
-				simpleRenderSystem.renderGameObjects(commandBuffer, gameObjects, camera);
+                int frameIndex = egeRenderer.getFrameIndex();
+                FrameInfo frameInfo{ frameIndex, frameTime, commandBuffer, camera };
+
+                // update
+                GlobalUbo ubo{};
+                ubo.projectionView = camera.getProjection() * camera.getView();
+
+                uboBuffers[frameIndex]->writeToBuffer(&ubo);
+                uboBuffers[frameIndex]->flush();
+
+                // render
+                egeRenderer.beginSwapChainRenderPass(commandBuffer);
+                simpleRenderSystem.renderGameObjects(frameInfo, gameObjects);
 				egeRenderer.endSwapChainRenderPass(commandBuffer);
 				egeRenderer.endFrame();
 			}

@@ -5,6 +5,8 @@
 #include "ege_pipeline.hpp"
 #include "ege_model.hpp"
 #include "ege_game_object.hpp"
+#include "ege_frame_info.hpp"
+
 
 
 #include <memory>
@@ -24,7 +26,8 @@ namespace ege {
 		SimpleRenderSystem(const SimpleRenderSystem& other) = delete;
 		SimpleRenderSystem& operator = (const SimpleRenderSystem&) = delete;
 
-		void renderGameObjects(VkCommandBuffer commandBuffer, std::vector<EgeGameObject> &gameObjects, const EgeCamera& camera);
+		void renderGameObjects(FrameInfo& frameInfo, std::vector<EgeGameObject>& gameObjects);
+
 
 	private:
 

@@ -62,10 +62,12 @@ namespace ege {
 
 
 
-	void SimpleRenderSystem::renderGameObjects(VkCommandBuffer commandBuffer, std::vector<EgeGameObject>& gameObjects, const EgeCamera& camera) {
-		egePipeline->bind(commandBuffer);
+	void SimpleRenderSystem::renderGameObjects(FrameInfo& frameInfo, std::vector<EgeGameObject>& gameObjects) {
+		egePipeline->bind(frameInfo.commandBuffer);
 
-		auto projectionView = camera.getProjection() * camera.getView();
+
+
+		auto projectionView = frameInfo.camera.getProjection() * frameInfo.camera.getView();
 
 		for (auto& obj : gameObjects)
 		{
@@ -74,11 +76,11 @@ namespace ege {
 			pushConstant.transform = projectionView * modelMatrix;
 			pushConstant.normalMatrix = obj.transform.normalMatrix();
 
-			vkCmdPushConstants(commandBuffer, pipelineLayout,
+			vkCmdPushConstants(frameInfo.commandBuffer, pipelineLayout,
 				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 				0, sizeof(SimplePushConstantData), &pushConstant);
-			obj.model->bind(commandBuffer);
-			obj.model->draw(commandBuffer);
+			obj.model->bind(frameInfo.commandBuffer);
+			obj.model->draw(frameInfo.commandBuffer);
 		}
 	}
 

@@ -1,5 +1,6 @@
 #pragma once 
 
+#include "ege_buffer.hpp"
 #include "ege_engine_device.hpp"
 
 #define GLM_FORCE_RADIANS
@@ -55,12 +56,10 @@ namespace ege {
 	private:
 
 		EgeDevice& egeDevice;
-		VkBuffer vertexBuffer;
-		VkDeviceMemory vertexBufferMemory;
+		std::unique_ptr<EgeBuffer> vertexBuffer;
 		uint32_t vertexCount;
 		bool hasIndexBuffer = false;
-		VkBuffer indexBuffer;
-		VkDeviceMemory indexBufferMemory;
+		std::unique_ptr<EgeBuffer> indexBuffer;
 		uint32_t indexCount;
 
 		void createVertexBuffers(const std::vector<Vertex>& vertices);

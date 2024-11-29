@@ -155,6 +155,7 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="ege_buffer.cpp" />
     <ClCompile Include="ege_camera.cpp" />
     <ClCompile Include="ege_engine.cpp" />
     <ClCompile Include="ege_engine_device.cpp" />
@@ -170,9 +171,11 @@
     <ClCompile Include="simple_render_system.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="ege_buffer.hpp" />
     <ClInclude Include="ege_camera.hpp" />
     <ClInclude Include="ege_engine.hpp" />
     <ClInclude Include="ege_engine_device.hpp" />
+    <ClInclude Include="ege_frame_info.hpp" />
     <ClInclude Include="ege_model.hpp" />
     <ClInclude Include="ege_pipeline.hpp" />
     <ClInclude Include="ege_renderer.hpp" />
