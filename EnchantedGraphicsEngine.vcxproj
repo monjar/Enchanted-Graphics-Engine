@@ -157,6 +157,7 @@
   <ItemGroup>
     <ClCompile Include="ege_buffer.cpp" />
     <ClCompile Include="ege_camera.cpp" />
+    <ClCompile Include="ege_descriptor.cpp" />
     <ClCompile Include="ege_engine.cpp" />
     <ClCompile Include="ege_engine_device.cpp" />
     <ClCompile Include="ege_game_object.cpp" />
@@ -173,6 +174,7 @@
   <ItemGroup>
     <ClInclude Include="ege_buffer.hpp" />
     <ClInclude Include="ege_camera.hpp" />
+    <ClInclude Include="ege_descriptors.hpp" />
     <ClInclude Include="ege_engine.hpp" />
     <ClInclude Include="ege_engine_device.hpp" />
     <ClInclude Include="ege_frame_info.hpp" />

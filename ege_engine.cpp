@@ -24,6 +24,11 @@ namespace ege {
 
 
 	EnchantedEngine::EnchantedEngine() {
+        globalPool =
+            EgeDescriptorPool::Builder(egeDevice)
+            .setMaxSets(EgeSwapChain::MAX_FRAMES_IN_FLIGHT)
+            .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, EgeSwapChain::MAX_FRAMES_IN_FLIGHT)
+            .build();
 		loadGameObjects();
 	}
 
@@ -43,7 +48,24 @@ namespace ege {
             uboBuffers[i]->map();
         }
 
-		SimpleRenderSystem simpleRenderSystem{ egeDevice, egeRenderer.getSwapChainRenderPass() };
+        auto globalSetLayout =
+            EgeDescriptorSetLayout::Builder(egeDevice)
+            .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
+            .build();
+
+        std::vector<VkDescriptorSet> globalDescriptorSets(EgeSwapChain::MAX_FRAMES_IN_FLIGHT);
+        for (int i = 0; i < globalDescriptorSets.size(); i++) {
+            auto bufferInfo = uboBuffers[i]->descriptorInfo();
+            EgeDescriptorWriter(*globalSetLayout, *globalPool)
+                .writeBuffer(0, &bufferInfo)
+                .build(globalDescriptorSets[i]);
+        }
+
+        SimpleRenderSystem simpleRenderSystem{
+            egeDevice,
+            egeRenderer.getSwapChainRenderPass(),
+            globalSetLayout->getDescriptorSetLayout() };
+
         EgeCamera camera{};
 
 
@@ -72,7 +94,13 @@ namespace ege {
 
 			if (auto commandBuffer = egeRenderer.beginFrame()) {
                 int frameIndex = egeRenderer.getFrameIndex();
-                FrameInfo frameInfo{ frameIndex, frameTime, commandBuffer, camera };
+                FrameInfo frameInfo{
+                      frameIndex,
+                      frameTime,
+                      commandBuffer,
+                      camera,
+                      globalDescriptorSets[frameIndex]
+                };
 
                 // update
                 GlobalUbo ubo{};

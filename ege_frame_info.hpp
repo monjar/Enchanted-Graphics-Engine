@@ -11,5 +11,6 @@ namespace ege {
 		float frameTime;
 		VkCommandBuffer commandBuffer;
 		EgeCamera& camera;
+		VkDescriptorSet globalDescriptorSet;
 	};
 }  // namespace lve

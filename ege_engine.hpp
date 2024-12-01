@@ -4,7 +4,7 @@
 #include "ege_model.hpp"
 #include "ege_game_object.hpp"
 #include "ege_renderer.hpp"
-
+#include "ege_descriptors.hpp"
 
 #include <memory>
 
@@ -36,7 +36,7 @@ namespace ege {
 		EgeDevice egeDevice{ egeWindow };
 		EgeRenderer egeRenderer{ egeWindow , egeDevice};
 
-
+		std::unique_ptr<EgeDescriptorPool> globalPool{};
 		std::vector<EgeGameObject> gameObjects;
 
 

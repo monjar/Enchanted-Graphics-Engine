@@ -17,7 +17,7 @@ namespace ege {
 	class SimpleRenderSystem {
 	public:
 
-		SimpleRenderSystem(EgeDevice& device, VkRenderPass renderPass);
+		SimpleRenderSystem(EgeDevice& device, VkRenderPass renderPass, VkDescriptorSetLayout globalSetLayout);
 		~SimpleRenderSystem();
 
 
@@ -31,7 +31,7 @@ namespace ege {
 
 	private:
 
-		void createPipelineLayout();
+		void createPipelineLayout(VkDescriptorSetLayout globalSetLayout);
 		void createPipeline(VkRenderPass renderPass);
 
 
