@@ -19,7 +19,9 @@ namespace ege {
 	
     struct GlobalUbo {
         glm::mat4 projectionView{ 1.f };
-        glm::vec3 lightDirection = glm::normalize(glm::vec3{ 1.f, -3.f, -1.f });
+        glm::vec4 ambientLightColor{ 1.f, 1.f, 1.f, .02f };  // w is intensity
+        glm::vec3 lightPosition{ -1.f };
+        alignas(16) glm::vec4 lightColor{ 0.f, 0.f, 1.f, 1.f };  // w is light intensity
     };
 
 
@@ -50,7 +52,7 @@ namespace ege {
 
         auto globalSetLayout =
             EgeDescriptorSetLayout::Builder(egeDevice)
-            .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
+            .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS)
             .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(EgeSwapChain::MAX_FRAMES_IN_FLIGHT);
@@ -70,7 +72,7 @@ namespace ege {
 
 
         auto viewerObject = EgeGameObject::createGameObject();
-        viewerObject.transform.translation = glm::vec3(0.f, -1.f, -0.f);
+        viewerObject.transform.translation = glm::vec3(0.f, -1.f, -3.f);
         KeyboardMovementController cameraController{};
 
         auto currentTime = std::chrono::high_resolution_clock::now();
@@ -90,7 +92,7 @@ namespace ege {
 
             //camera.setOrthographicProjection(-aspectRatio, aspectRatio, -1, 1, -1, 1);
 
-            camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 40.f);
+            camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
 
 			if (auto commandBuffer = egeRenderer.beginFrame()) {
                 int frameIndex = egeRenderer.getFrameIndex();
@@ -99,7 +101,8 @@ namespace ege {
                       frameTime,
                       commandBuffer,
                       camera,
-                      globalDescriptorSets[frameIndex]
+                      globalDescriptorSets[frameIndex],
+                      gameObjects
                 };
 
                 // update
@@ -111,7 +114,7 @@ namespace ege {
 
                 // render
                 egeRenderer.beginSwapChainRenderPass(commandBuffer);
-                simpleRenderSystem.renderGameObjects(frameInfo, gameObjects);
+                simpleRenderSystem.renderGameObjects(frameInfo);
 				egeRenderer.endSwapChainRenderPass(commandBuffer);
 				egeRenderer.endFrame();
 			}
@@ -128,19 +131,26 @@ namespace ege {
             EgeModel::createModelFromFile(egeDevice, "models/flat_vase.obj");
         auto gameObj = EgeGameObject::createGameObject();
         gameObj.model = egeModel;
-        gameObj.transform.translation = { -.5f, .0f, 2.5f };
+        gameObj.transform.translation = { -.5f, .5f, .0f };
         gameObj.transform.scale = glm::vec3(3.f);
-        gameObjects.push_back(std::move(gameObj));
+        gameObjects.emplace(gameObj.getId(), std::move(gameObj));
 
 
 
-        std::shared_ptr<EgeModel> egeModel2 =
+        egeModel =
             EgeModel::createModelFromFile(egeDevice, "models/smooth_vase.obj");
         auto gameObj2 = EgeGameObject::createGameObject();
-        gameObj2.model = egeModel2;
-        gameObj2.transform.translation = { .5f, .0f, 2.5f };
+        gameObj2.model = egeModel;
+        gameObj2.transform.translation = { .5f, .5f, .0f };
         gameObj2.transform.scale = glm::vec3(3.f);
-        gameObjects.push_back(std::move(gameObj2));
+        gameObjects.emplace(gameObj2.getId(), std::move(gameObj2));
+
+        egeModel = EgeModel::createModelFromFile(egeDevice, "models/plane.obj");
+        auto floor = EgeGameObject::createGameObject();
+        floor.model = egeModel;
+        floor.transform.translation = { 0.f, .5f, 0.f };
+        floor.transform.scale = { 3.f, 1.f, 3.f };
+        gameObjects.emplace(floor.getId(), std::move(floor));
 	}
 
 

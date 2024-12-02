@@ -37,7 +37,7 @@ namespace ege {
 		EgeRenderer egeRenderer{ egeWindow , egeDevice};
 
 		std::unique_ptr<EgeDescriptorPool> globalPool{};
-		std::vector<EgeGameObject> gameObjects;
+		EgeGameObject::Map gameObjects;
 
 
 	};

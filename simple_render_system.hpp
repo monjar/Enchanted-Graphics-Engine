@@ -1,10 +1,9 @@
 #pragma once
 
 
+#include "ege_game_object.hpp"
 #include "ege_camera.hpp"
 #include "ege_pipeline.hpp"
-#include "ege_model.hpp"
-#include "ege_game_object.hpp"
 #include "ege_frame_info.hpp"
 
 
@@ -26,7 +25,7 @@ namespace ege {
 		SimpleRenderSystem(const SimpleRenderSystem& other) = delete;
 		SimpleRenderSystem& operator = (const SimpleRenderSystem&) = delete;
 
-		void renderGameObjects(FrameInfo& frameInfo, std::vector<EgeGameObject>& gameObjects);
+		void renderGameObjects(FrameInfo& frameInfo);
 
 
 	private:

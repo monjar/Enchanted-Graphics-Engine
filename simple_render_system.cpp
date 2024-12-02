@@ -63,7 +63,7 @@ namespace ege {
 
 
 
-	void SimpleRenderSystem::renderGameObjects(FrameInfo& frameInfo, std::vector<EgeGameObject>& gameObjects) {
+	void SimpleRenderSystem::renderGameObjects(FrameInfo& frameInfo) {
 		egePipeline->bind(frameInfo.commandBuffer);
 
 
@@ -78,8 +78,9 @@ namespace ege {
 			0,
 			nullptr);
 
-		for (auto& obj : gameObjects)
-		{
+		for (auto& kv : frameInfo.gameObjects) {
+			auto& obj = kv.second;
+			if (obj.model == nullptr) continue;
 			SimplePushConstantData pushConstant{};
 			pushConstant.modelMatrix = obj.transform.mat4();
 			pushConstant.normalMatrix = obj.transform.normalMatrix();

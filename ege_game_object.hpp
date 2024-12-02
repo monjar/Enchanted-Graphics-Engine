@@ -6,6 +6,8 @@
 #include<glm/gtc/matrix_transform.hpp>
 
 #include <memory>
+#include <unordered_map>
+
 
 namespace ege {
 
@@ -22,6 +24,7 @@ namespace ege {
 	public:
 
 		using id_t = unsigned int;
+		using Map = std::unordered_map<id_t, EgeGameObject>;
 
 		static EgeGameObject createGameObject() {
 			static id_t currentId = 0;
