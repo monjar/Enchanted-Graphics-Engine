@@ -11,6 +11,10 @@
 #include <cstring>
 #include <unordered_map>
 
+#ifndef ENGINE_DIR
+#define ENGINE_DIR "../"
+#endif
+
 namespace std {
     template <>
     struct hash<ege::EgeModel::Vertex> {
@@ -38,7 +42,7 @@ namespace ege {
     std::unique_ptr<EgeModel> EgeModel::createModelFromFile(
         EgeDevice& device, const std::string& filepath) {
         Builder builder{};
-        builder.loadModel(filepath);
+        builder.loadModel(ENGINE_DIR + filepath);
         return std::make_unique<EgeModel>(device, builder);
     }
 

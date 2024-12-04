@@ -1,4 +1,4 @@
-#include"ege_window.hpp"
+#include "ege_window.hpp"
 #include <stdexcept>
 #include <iostream>
 namespace ege {

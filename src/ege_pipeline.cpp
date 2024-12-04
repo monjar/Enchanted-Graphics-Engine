@@ -6,6 +6,10 @@
 #include<iostream>
 #include<cassert>
 
+#ifndef ENGINE_DIR
+#define ENGINE_DIR "../"
+#endif
+
 namespace ege {
 
 	EgePipeline::EgePipeline(EgeDevice& device, const std::string& vertFilePath, const std::string& fragFilePath, const PipelineConfigInfo& configInfo) : egeDevice{ device } {
@@ -22,9 +26,11 @@ namespace ege {
 
 	std::vector<char> EgePipeline::readFile(const std::string& filePath) {
 		//read file in binary and seek end
-		std::ifstream file(filePath, std::ios::ate | std::ios::binary);
-		if (!file.is_open()) {
-			throw std::runtime_error("failed to open file: " + filePath);
+		std::string fullFilePath = ENGINE_DIR + filePath;
+		std::ifstream file{fullFilePath, std::ios::ate | std::ios::binary};
+		if (!file.is_open())
+		{
+			throw std::runtime_error("failed to open file: " + fullFilePath);
 		}
 
 		// tellg gets the last position, since we already did seek end its the end
