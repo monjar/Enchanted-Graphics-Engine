@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.9.34701.34
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EnchantedGraphicsEngine", "EnchantedGraphicsEngine.vcxproj", "{CB61B070-956D-49A0-AE18-A238FE56FBFA}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Debug|x64.ActiveCfg = Debug|x64
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Debug|x64.Build.0 = Debug|x64
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Debug|x86.ActiveCfg = Debug|Win32
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Debug|x86.Build.0 = Debug|Win32
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Release|x64.ActiveCfg = Release|x64
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Release|x64.Build.0 = Release|x64
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Release|x86.ActiveCfg = Release|Win32
+		{CB61B070-956D-49A0-AE18-A238FE56FBFA}.Release|x86.Build.0 = Release|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {F4ACE89B-D0AB-4E41-9C53-36AD6E1ED76A}
+	EndGlobalSection
+EndGlobal
