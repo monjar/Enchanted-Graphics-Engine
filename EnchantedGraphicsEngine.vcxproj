@@ -144,12 +144,14 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ege_engine.cpp" />
+    <ClCompile Include="ege_engine_device.cpp" />
     <ClCompile Include="ege_pipeline.cpp" />
     <ClCompile Include="ege_window.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ege_engine.hpp" />
+    <ClInclude Include="ege_engine_device.hpp" />
     <ClInclude Include="ege_pipeline.hpp" />
     <ClInclude Include="ege_window.hpp" />
   </ItemGroup>

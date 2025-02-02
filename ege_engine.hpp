@@ -10,6 +10,7 @@ namespace ege {
 		void run();
 	private:
 		EgeWindow egeWindow{ WIDTH, HEIGHT, "Hello World!" };
-		EgePipeline egePipeline{ "CompiledShaders/simple_shader.vert.spv", "CompiledShaders/simple_shader.frag.spv" };
+		EgeDevice egeDevice{ egeWindow };
+		EgePipeline egePipeline{ egeDevice, "CompiledShaders/simple_shader.vert.spv", "CompiledShaders/simple_shader.frag.spv", EgePipeline::defaultPipelineConfigInfo(WIDTH, HEIGHT)};
 	};
 }
