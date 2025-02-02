@@ -1,7 +1,7 @@
 #pragma once
 
 #include "ege_window.hpp"
-
+#include "ege_pipeline.hpp"
 namespace ege {
 
 	class EnchantedEngine {
@@ -10,6 +10,6 @@ namespace ege {
 		void run();
 	private:
 		EgeWindow egeWindow{ WIDTH, HEIGHT, "Hello World!" };
-
+		EgePipeline egePipeline{ "CompiledShaders/simple_shader.vert.spv", "CompiledShaders/simple_shader.frag.spv" };
 	};
 }

@@ -144,12 +144,19 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ege_engine.cpp" />
+    <ClCompile Include="ege_pipeline.cpp" />
     <ClCompile Include="ege_window.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ege_engine.hpp" />
+    <ClInclude Include="ege_pipeline.hpp" />
     <ClInclude Include="ege_window.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="compile.bat" />
+    <None Include="simple_shader.frag" />
+    <None Include="simple_shader.vert" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
