@@ -32,6 +32,7 @@ namespace ege {
 		EgePipeline(const EgePipeline&) = delete;
 		EgeWindow& operator =(const EgePipeline&) = delete;
 
+		void bind(VkCommandBuffer commandBuffer);
 
 		static PipelineConfigInfo defaultPipelineConfigInfo(uint32_t width, uint32_t height);
 	private:

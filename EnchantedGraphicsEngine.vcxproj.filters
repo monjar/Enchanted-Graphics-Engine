@@ -55,14 +55,14 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <None Include="simple_shader.vert">
-      <Filter>Shader Files</Filter>
-    </None>
-    <None Include="simple_shader.frag">
-      <Filter>Shader Files</Filter>
-    </None>
     <None Include="compile.bat">
       <Filter>Source Files</Filter>
+    </None>
+    <None Include="Shaders\simple_shader.frag">
+      <Filter>Shader Files</Filter>
+    </None>
+    <None Include="Shaders\simple_shader.vert">
+      <Filter>Shader Files</Filter>
     </None>
   </ItemGroup>
 </Project>
