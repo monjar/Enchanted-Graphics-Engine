@@ -7,6 +7,7 @@ namespace ege {
 
 
 	EnchantedEngine::EnchantedEngine() {
+		loadModels();
 		createPipelineLayout();
 		createPipeline();
 		createCommandBuffers();
@@ -27,6 +28,47 @@ namespace ege {
 		vkDeviceWaitIdle(egeDevice.device());
 	}
 
+
+
+	std::vector<EgeModel::Vertex> generateSierpinski(int level, EgeModel::Vertex a, EgeModel::Vertex b, EgeModel::Vertex c) {
+		if (level == 0) {
+			return { a, b, c };
+		}
+
+		// Calculate midpoints
+		EgeModel::Vertex ab = { {(a.position[0] + b.position[0]) / 2.0f, (a.position[1] + b.position[1]) / 2.0f} };
+		EgeModel::Vertex bc = { {(b.position[0] + c.position[0]) / 2.0f, (b.position[1] + c.position[1]) / 2.0f} };
+		EgeModel::Vertex ca = { {(c.position[0] + a.position[0]) / 2.0f, (c.position[1] + a.position[1]) / 2.0f} };
+
+		// Recursively generate subtriangles
+		auto v1 = generateSierpinski(level - 1, a, ab, ca);
+		auto v2 = generateSierpinski(level - 1, ab, b, bc);
+		auto v3 = generateSierpinski(level - 1, ca, bc, c);
+
+		// Merge results
+		std::vector<EgeModel::Vertex> vertices;
+		vertices.insert(vertices.end(), v1.begin(), v1.end());
+		vertices.insert(vertices.end(), v2.begin(), v2.end());
+		vertices.insert(vertices.end(), v3.begin(), v3.end());
+
+		return vertices;
+	}
+
+	std::vector<EgeModel::Vertex> getSierpinskiVertices(int level) {
+		EgeModel::Vertex a = { {0.0f, -0.5f} };
+		EgeModel::Vertex b = { {0.5f, 0.5f} };
+		EgeModel::Vertex c = { {-0.5f, 0.5f} };
+
+		return generateSierpinski(level, a, b, c);
+	}
+
+
+	void EnchantedEngine::loadModels() {
+		std::vector<EgeModel::Vertex> vertices{{{0.0f, -0.5f}}, {{0.5f, 0.5f}}, {{-0.5f, 0.5f}}};
+
+		vertices = getSierpinskiVertices(8);
+		egeModel = std::make_unique<EgeModel>(egeDevice, vertices);
+	}
 
 	void EnchantedEngine::createPipelineLayout() {
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
@@ -97,7 +139,9 @@ namespace ege {
 			vkCmdBeginRenderPass(commandBuffers[i], &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
 
 			egePipeline->bind(commandBuffers[i]);
-			vkCmdDraw(commandBuffers[i], 3, 1, 0, 0);
+			egeModel->bind(commandBuffers[i]);
+			egeModel->draw(commandBuffers[i]);
+
 
 			vkCmdEndRenderPass(commandBuffers[i]);
 			if (vkEndCommandBuffer(commandBuffers[i]) != VK_SUCCESS) {
