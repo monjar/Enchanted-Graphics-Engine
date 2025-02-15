@@ -33,6 +33,9 @@
     <ClCompile Include="ege_engine_device.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="ege_swap_chain.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ege_window.hpp">
@@ -45,6 +48,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="ege_engine_device.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="ege_swap_chain.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
