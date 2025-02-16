@@ -30,7 +30,7 @@ namespace ege {
 		~EgePipeline();
 
 		EgePipeline(const EgePipeline&) = delete;
-		EgeWindow& operator =(const EgePipeline&) = delete;
+		EgePipeline& operator =(const EgePipeline&) = delete;
 
 		void bind(VkCommandBuffer commandBuffer);
 

@@ -19,7 +19,7 @@ class EgeSwapChain {
   ~EgeSwapChain();
 
   EgeSwapChain(const EgeSwapChain &) = delete;
-  void operator=(const EgeSwapChain &) = delete;
+  EgeSwapChain& operator=(const EgeSwapChain &) = delete;
 
   VkFramebuffer getFrameBuffer(int index) { return swapChainFramebuffers[index]; }
   VkRenderPass getRenderPass() { return renderPass; }

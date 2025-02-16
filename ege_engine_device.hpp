@@ -35,7 +35,7 @@ namespace ege {
 
         // Not copyable or movable
         EgeDevice(const EgeDevice&) = delete;
-        void operator=(const EgeDevice&) = delete;
+        EgeDevice& operator=(const EgeDevice&) = delete;
         EgeDevice(EgeDevice&&) = delete;
         EgeDevice& operator=(EgeDevice&&) = delete;
 

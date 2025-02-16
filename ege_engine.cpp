@@ -36,9 +36,9 @@ namespace ege {
 		}
 
 		// Calculate midpoints
-		EgeModel::Vertex ab = { {(a.position[0] + b.position[0]) / 2.0f, (a.position[1] + b.position[1]) / 2.0f} };
-		EgeModel::Vertex bc = { {(b.position[0] + c.position[0]) / 2.0f, (b.position[1] + c.position[1]) / 2.0f} };
-		EgeModel::Vertex ca = { {(c.position[0] + a.position[0]) / 2.0f, (c.position[1] + a.position[1]) / 2.0f} };
+		EgeModel::Vertex ab = { {(a.position[0] + b.position[0]) / 2.0f, (a.position[1] + b.position[1]) / 2.0f} , {(a.color[0] + b.color[0]) / 2.0f, (a.color[1] + b.color[1]) / 2.0f, (a.color[2] + b.color[2]) / 2.0f} };
+		EgeModel::Vertex bc = { {(b.position[0] + c.position[0]) / 2.0f, (b.position[1] + c.position[1]) / 2.0f}, {(b.color[0] + c.color[0]) / 2.0f, (b.color[1] + c.color[1]) / 2.0f, (b.color[2] + c.color[2]) / 2.0f} };
+		EgeModel::Vertex ca = { {(c.position[0] + a.position[0]) / 2.0f, (c.position[1] + a.position[1]) / 2.0f}, {(c.color[0] + a.color[0]) / 2.0f, (c.color[1] + a.color[1]) / 2.0f, (c.color[2] + a.color[2]) / 2.0f} };
 
 		// Recursively generate subtriangles
 		auto v1 = generateSierpinski(level - 1, a, ab, ca);
@@ -55,9 +55,9 @@ namespace ege {
 	}
 
 	std::vector<EgeModel::Vertex> getSierpinskiVertices(int level) {
-		EgeModel::Vertex a = { {0.0f, -0.5f} };
-		EgeModel::Vertex b = { {0.5f, 0.5f} };
-		EgeModel::Vertex c = { {-0.5f, 0.5f} };
+		EgeModel::Vertex a = { {0.0f, -0.5f}, {1.0f, 0.0f, 0.0f} };
+		EgeModel::Vertex b = { {0.5f, 0.5f}, {0.0f, 1.0f, 0.0f} };
+		EgeModel::Vertex c = { {-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f} };
 
 		return generateSierpinski(level, a, b, c);
 	}
@@ -66,7 +66,7 @@ namespace ege {
 	void EnchantedEngine::loadModels() {
 		std::vector<EgeModel::Vertex> vertices{{{0.0f, -0.5f}}, {{0.5f, 0.5f}}, {{-0.5f, 0.5f}}};
 
-		vertices = getSierpinskiVertices(8);
+		vertices = getSierpinskiVertices(4);
 		egeModel = std::make_unique<EgeModel>(egeDevice, vertices);
 	}
 
@@ -131,7 +131,7 @@ namespace ege {
 			renderPassInfo.renderArea.extent = egeSwapChain.getSwapChainExtent();
 
 			std::array<VkClearValue, 2> clearValues{};
-			clearValues[0].color = { 0.1f, 0.1f, 0.1f, 1.0f };
+			clearValues[0].color = { 0.0f, 0.0f, 0.0f, 1.0f };
 			clearValues[1].depthStencil = { 1.0f, 0 };
 			renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
 			renderPassInfo.pClearValues = clearValues.data();
