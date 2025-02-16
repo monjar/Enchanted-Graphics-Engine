@@ -1,6 +1,7 @@
 #include "ege_swap_chain.hpp"
 
 // std
+#include <memory>
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -8,11 +9,20 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
-
 namespace ege {
 
-EgeSwapChain::EgeSwapChain(EgeDevice &deviceRef, VkExtent2D extent)
-    : device{deviceRef}, windowExtent{extent} {
+EgeSwapChain::EgeSwapChain(EgeDevice &deviceRef, VkExtent2D windowExtent) : device{deviceRef}, windowExtent{ windowExtent } {
+
+    init();
+}
+
+
+EgeSwapChain::EgeSwapChain(EgeDevice& deviceRef, VkExtent2D windowExtent, std::shared_ptr<EgeSwapChain> previousChain) : device{ deviceRef }, windowExtent{ windowExtent }, oldSwapChain{ previousChain } {
+    init();
+    oldSwapChain = nullptr;
+}
+
+void EgeSwapChain::init() {
   createSwapChain();
   createImageViews();
   createRenderPass();
@@ -162,7 +172,7 @@ void EgeSwapChain::createSwapChain() {
   createInfo.presentMode = presentMode;
   createInfo.clipped = VK_TRUE;
 
-  createInfo.oldSwapchain = VK_NULL_HANDLE;
+  createInfo.oldSwapchain = oldSwapChain == nullptr?  VK_NULL_HANDLE: oldSwapChain->swapChain;
 
   if (vkCreateSwapchainKHR(device.device(), &createInfo, nullptr, &swapChain) != VK_SUCCESS) {
     throw std::runtime_error("failed to create swap chain!");

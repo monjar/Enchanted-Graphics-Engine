@@ -21,13 +21,22 @@ namespace ege {
 
 		void createWindowSurface(VkInstance instance, VkSurfaceKHR* surface);
 
-	private:
-		GLFWwindow* window;
+		bool wasWindowResized() { return wasFrameBufferResized; }
+		void resetWindowResizedFlag() { wasFrameBufferResized = false; }
 
+	private:
+
+		static void frameBufferResizeCallBack(GLFWwindow* window, int width, int height);
 		void initWindow();
-		const int width;
-		const int height;
+
+		int width;
+		int height;
+		bool wasFrameBufferResized = false;
+
+
+
 		std::string windowName;
+		GLFWwindow* window;
 	};
 
 

@@ -33,12 +33,14 @@ namespace ege {
 		void createPipelineLayout();
 		void createPipeline();
 		void createCommandBuffers();
+		void freeCommandBuffers();
 		void drawFrame();
-
+		void recreateSwapChain();
+		void recordCommandBuffer(int imageIndex);
 
 		EgeWindow egeWindow{ WIDTH, HEIGHT, "Hello World!" };
 		EgeDevice egeDevice{ egeWindow };
-		EgeSwapChain egeSwapChain{ egeDevice, egeWindow.getExtent() };
+		std::unique_ptr<EgeSwapChain> egeSwapChain;
 		std::unique_ptr<EgePipeline> egePipeline;
 		VkPipelineLayout pipelineLayout;
 		std::vector<VkCommandBuffer> commandBuffers;
