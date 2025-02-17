@@ -1,10 +1,19 @@
 #include "ege_engine.hpp"
+
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm.hpp>
+
 #include <array>
 #include <stdexcept>
 
 namespace ege {
 
-
+	struct SimplePushConstantData {
+		glm::vec2 offset;
+		alignas(16) glm::vec3 color;
+	};
 
 	EnchantedEngine::EnchantedEngine() {
 		loadModels();
@@ -66,18 +75,25 @@ namespace ege {
 	void EnchantedEngine::loadModels() {
 		std::vector<EgeModel::Vertex> vertices{{{0.0f, -0.5f}}, {{0.5f, 0.5f}}, {{-0.5f, 0.5f}}};
 
-		vertices = getSierpinskiVertices(4);
+		//vertices = getSierpinskiVertices(4);
 		egeModel = std::make_unique<EgeModel>(egeDevice, vertices);
 	}
 
 	void EnchantedEngine::createPipelineLayout() {
+
+		VkPushConstantRange pushConstantRange{};
+		pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+		pushConstantRange.offset = 0;
+		pushConstantRange.size = sizeof(SimplePushConstantData);
+
+
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutInfo.setLayoutCount = 0;
 		pipelineLayoutInfo.pSetLayouts = nullptr;
 
 		pipelineLayoutInfo.pushConstantRangeCount = 0;
-		pipelineLayoutInfo.pPushConstantRanges = nullptr;
+		pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
 
 		if (vkCreatePipelineLayout(egeDevice.device(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
 			throw std::runtime_error("Failed to Create Pipeline Layout!");
@@ -144,6 +160,11 @@ namespace ege {
 	}
 
 	void EnchantedEngine::recordCommandBuffer(int imageIndex) {
+		static int frame = 0;
+		frame = (frame + 1) % 10000;
+
+
+
 		VkCommandBufferBeginInfo beginInfo{};
 		beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -179,7 +200,21 @@ namespace ege {
 
 		egePipeline->bind(commandBuffers[imageIndex]);
 		egeModel->bind(commandBuffers[imageIndex]);
-		egeModel->draw(commandBuffers[imageIndex]);
+
+		for (size_t i = 0; i < 4; i++)
+		{
+			SimplePushConstantData pushConstant{};
+			pushConstant.offset = { -0.5f + frame * 0.0002f, -0.4f + i * 0.25f };
+
+			pushConstant.color
+				= { 0.0f ,0.0f, 0.2f + 0.2f * i };
+
+			vkCmdPushConstants(commandBuffers[imageIndex], pipelineLayout,
+				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+				0, sizeof(SimplePushConstantData), &pushConstant);
+			egeModel->draw(commandBuffers[imageIndex]);
+
+		}
 
 		vkCmdEndRenderPass(commandBuffers[imageIndex]);
 		if (vkEndCommandBuffer(commandBuffers[imageIndex]) != VK_SUCCESS) {
