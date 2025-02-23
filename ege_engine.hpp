@@ -1,10 +1,10 @@
 #pragma once
 
 #include "ege_window.hpp"
-#include "ege_pipeline.hpp"
-#include "ege_swap_chain.hpp"
 #include "ege_model.hpp"
 #include "ege_game_object.hpp"
+#include "ege_renderer.hpp"
+
 
 #include <memory>
 
@@ -30,22 +30,13 @@ namespace ege {
 	private:
 
 		void loadGameObjects();
-		void createPipelineLayout();
-		void createPipeline();
-		void createCommandBuffers();
-		void freeCommandBuffers();
-		void drawFrame();
-		void recreateSwapChain();
-		void recordCommandBuffer(int imageIndex);
-		void renderGameObjects(VkCommandBuffer commandBuffer);
 
 
 		EgeWindow egeWindow{ WIDTH, HEIGHT, "Hello World!" };
 		EgeDevice egeDevice{ egeWindow };
-		std::unique_ptr<EgeSwapChain> egeSwapChain;
-		std::unique_ptr<EgePipeline> egePipeline;
-		VkPipelineLayout pipelineLayout;
-		std::vector<VkCommandBuffer> commandBuffers;
+		EgeRenderer egeRenderer{ egeWindow , egeDevice};
+
+
 		std::vector<EgeGameObject> gameObjects;
 
 

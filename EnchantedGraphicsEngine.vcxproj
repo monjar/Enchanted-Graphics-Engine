@@ -160,17 +160,21 @@
     <ClCompile Include="ege_game_object.hpp" />
     <ClCompile Include="ege_model.cpp" />
     <ClCompile Include="ege_pipeline.cpp" />
+    <ClCompile Include="ege_renderer.cpp" />
     <ClCompile Include="ege_window.cpp" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="ege_swap_chain.cpp" />
+    <ClCompile Include="simple_render_system.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ege_engine.hpp" />
     <ClInclude Include="ege_engine_device.hpp" />
     <ClInclude Include="ege_model.hpp" />
     <ClInclude Include="ege_pipeline.hpp" />
+    <ClInclude Include="ege_renderer.hpp" />
     <ClInclude Include="ege_window.hpp" />
     <ClInclude Include="ege_swap_chain.hpp" />
+    <ClInclude Include="simple_render_system.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="compile.bat" />
