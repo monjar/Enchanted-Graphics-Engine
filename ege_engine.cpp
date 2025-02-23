@@ -4,6 +4,7 @@
 #define GLM_FORCE_RADIANS
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 
 #include <array>
 #include <stdexcept>
@@ -11,12 +12,14 @@
 namespace ege {
 
 	struct SimplePushConstantData {
+		// by defult the float constructor fills out the diagonal
+		glm::mat2 transform{ 1.f };
 		glm::vec2 offset;
 		alignas(16) glm::vec3 color;
 	};
 
 	EnchantedEngine::EnchantedEngine() {
-		loadModels();
+		loadGameObjects();
 		createPipelineLayout();
 		recreateSwapChain();
 		createCommandBuffers();
@@ -72,11 +75,21 @@ namespace ege {
 	}
 
 
-	void EnchantedEngine::loadModels() {
+	void EnchantedEngine::loadGameObjects() {
 		std::vector<EgeModel::Vertex> vertices{{{0.0f, -0.5f}}, {{0.5f, 0.5f}}, {{-0.5f, 0.5f}}};
 
 		//vertices = getSierpinskiVertices(4);
-		egeModel = std::make_unique<EgeModel>(egeDevice, vertices);
+		auto egeModel = std::make_shared<EgeModel>(egeDevice, vertices);
+
+		auto triangle = EgeGameObject::createGameObject();
+		triangle.model = egeModel;
+		triangle.color = { .1f, .8f, .1f };
+		triangle.transform2d.translation.x = .2f;
+		triangle.transform2d.scale = { 2.f, .5f };
+		// be wary that the y axis in vulkan points down. meaning -1 is actually top
+		triangle.transform2d.rotation = 0.25 * glm::two_pi<float>();
+
+		gameObjects.push_back(std::move(triangle));
 	}
 
 	void EnchantedEngine::createPipelineLayout() {
@@ -160,9 +173,6 @@ namespace ege {
 	}
 
 	void EnchantedEngine::recordCommandBuffer(int imageIndex) {
-		static int frame = 0;
-		frame = (frame + 1) % 10000;
-
 
 
 		VkCommandBufferBeginInfo beginInfo{};
@@ -197,30 +207,36 @@ namespace ege {
 		vkCmdSetViewport(commandBuffers[imageIndex], 0, 1, &viewport);
 		vkCmdSetScissor(commandBuffers[imageIndex], 0, 1, &scissor);
 
-
-		egePipeline->bind(commandBuffers[imageIndex]);
-		egeModel->bind(commandBuffers[imageIndex]);
-
-		for (size_t i = 0; i < 4; i++)
-		{
-			SimplePushConstantData pushConstant{};
-			pushConstant.offset = { -0.5f + frame * 0.0002f, -0.4f + i * 0.25f };
-
-			pushConstant.color
-				= { 0.0f ,0.0f, 0.2f + 0.2f * i };
-
-			vkCmdPushConstants(commandBuffers[imageIndex], pipelineLayout,
-				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-				0, sizeof(SimplePushConstantData), &pushConstant);
-			egeModel->draw(commandBuffers[imageIndex]);
-
-		}
+		renderGameObjects(commandBuffers[imageIndex]);
 
 		vkCmdEndRenderPass(commandBuffers[imageIndex]);
 		if (vkEndCommandBuffer(commandBuffers[imageIndex]) != VK_SUCCESS) {
 			throw std::runtime_error("failed to record command buffer!");
 		}
 	}
+
+	void EnchantedEngine::renderGameObjects(VkCommandBuffer commandBuffer) {
+		egePipeline->bind(commandBuffer);
+
+		for (auto& obj : gameObjects)
+		{
+			obj.transform2d.rotation = glm::mod(obj.transform2d.rotation + 0.001f, glm::two_pi<float>());
+
+
+			SimplePushConstantData pushConstant{};
+			pushConstant.offset = obj.transform2d.translation;
+
+			pushConstant.color
+				= obj.color;
+			pushConstant.transform = obj.transform2d.mat2();
+			vkCmdPushConstants(commandBuffer, pipelineLayout,
+				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+				0, sizeof(SimplePushConstantData), &pushConstant);
+			obj.model->bind(commandBuffer);
+			obj.model->draw(commandBuffer);
+		}
+	}
+
 	void EnchantedEngine::drawFrame() {
 		uint32_t imageIndex;
 		auto result = egeSwapChain->acquireNextImage(&imageIndex);

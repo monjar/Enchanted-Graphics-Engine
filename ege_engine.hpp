@@ -4,7 +4,7 @@
 #include "ege_pipeline.hpp"
 #include "ege_swap_chain.hpp"
 #include "ege_model.hpp"
-
+#include "ege_game_object.hpp"
 
 #include <memory>
 
@@ -29,7 +29,7 @@ namespace ege {
 		void run();
 	private:
 
-		void loadModels();
+		void loadGameObjects();
 		void createPipelineLayout();
 		void createPipeline();
 		void createCommandBuffers();
@@ -37,6 +37,8 @@ namespace ege {
 		void drawFrame();
 		void recreateSwapChain();
 		void recordCommandBuffer(int imageIndex);
+		void renderGameObjects(VkCommandBuffer commandBuffer);
+
 
 		EgeWindow egeWindow{ WIDTH, HEIGHT, "Hello World!" };
 		EgeDevice egeDevice{ egeWindow };
@@ -44,7 +46,7 @@ namespace ege {
 		std::unique_ptr<EgePipeline> egePipeline;
 		VkPipelineLayout pipelineLayout;
 		std::vector<VkCommandBuffer> commandBuffers;
-		std::unique_ptr<EgeModel> egeModel;
+		std::vector<EgeGameObject> gameObjects;
 
 
 	};

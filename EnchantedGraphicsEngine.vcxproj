@@ -157,6 +157,7 @@
   <ItemGroup>
     <ClCompile Include="ege_engine.cpp" />
     <ClCompile Include="ege_engine_device.cpp" />
+    <ClCompile Include="ege_game_object.hpp" />
     <ClCompile Include="ege_model.cpp" />
     <ClCompile Include="ege_pipeline.cpp" />
     <ClCompile Include="ege_window.cpp" />
