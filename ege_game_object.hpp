@@ -3,23 +3,48 @@
 
 #include "ege_model.hpp"
 
+#include<glm/gtc/matrix_transform.hpp>
+
 #include <memory>
 
 namespace ege {
 
-	struct Transform2dComponent {
-		glm::vec2 translation{};
-		glm::vec2 scale {1.f, 1.f};
-		float rotation;
+	struct TransformComponent {
+		glm::vec3 translation{};
+		glm::vec3 scale {1.f, 1.f, 1.f};
+		glm::vec3 rotation{};
 
-		glm::mat2 mat2() { 
-			const float sinTheta = glm::sin(rotation);
-			const float cosTheta = glm::cos(rotation);
+		glm::mat4 mat4() { 
 
-			glm::mat2 rotMatrix{ {cosTheta, sinTheta} , {-sinTheta, cosTheta} };
-			// the constructor gets columns as input and not rows.
-			glm::mat2 scaleMat{ {scale.x, 0.0f}, {0.0f, scale.y}};
-			return rotMatrix * scaleMat;
+
+
+
+			const float c3 = glm::cos(rotation.z);
+			const float s3 = glm::sin(rotation.z);
+			const float c2 = glm::cos(rotation.x);
+			const float s2 = glm::sin(rotation.x);
+			const float c1 = glm::cos(rotation.y);
+			const float s1 = glm::sin(rotation.y);
+			return glm::mat4{
+				{
+					scale.x * (c1 * c3 + s1 * s2 * s3),
+					scale.x * (c2 * s3),
+					scale.x * (c1 * s2 * s3 - c3 * s1),
+					0.0f,
+				},
+				{
+					scale.y * (c3 * s1 * s2 - c1 * s3),
+					scale.y * (c2 * c3),
+					scale.y * (c1 * c3 * s2 + s1 * s3),
+					0.0f,
+				},
+				{
+					scale.z * (c2 * s1),
+					scale.z * (-s2),
+					scale.z * (c1 * c2),
+					0.0f,
+				},
+				{translation.x, translation.y, translation.z, 1.0f} };
 		}
 	};
 
@@ -45,7 +70,7 @@ namespace ege {
 
 		std::shared_ptr<EgeModel> model{};
 		glm::vec3 color{};
-		Transform2dComponent transform2d{ };
+		TransformComponent transform{ };
 
 	private:
 

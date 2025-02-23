@@ -13,8 +13,7 @@ namespace ege {
 
 	struct SimplePushConstantData {
 		// by defult the float constructor fills out the diagonal
-		glm::mat2 transform{ 1.f };
-		glm::vec2 offset;
+		glm::mat4 transform{ 1.f };
 		alignas(16) glm::vec3 color;
 	};
 
@@ -68,15 +67,15 @@ namespace ege {
 
 		for (auto& obj : gameObjects)
 		{
-			obj.transform2d.rotation = glm::mod(obj.transform2d.rotation + 0.001f, glm::two_pi<float>());
+			obj.transform.rotation.y = glm::mod(obj.transform.rotation.y + 0.0001f, glm::two_pi<float>());
+			obj.transform.rotation.x = glm::mod(obj.transform.rotation.x + 0.0001f, glm::two_pi<float>());
 
 
 			SimplePushConstantData pushConstant{};
-			pushConstant.offset = obj.transform2d.translation;
-
 			pushConstant.color
 				= obj.color;
-			pushConstant.transform = obj.transform2d.mat2();
+			pushConstant.transform = obj.transform.mat4();
+
 			vkCmdPushConstants(commandBuffer, pipelineLayout,
 				VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
 				0, sizeof(SimplePushConstantData), &pushConstant);
