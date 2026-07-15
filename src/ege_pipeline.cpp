@@ -6,8 +6,10 @@
 #include<iostream>
 #include<cassert>
 
-#ifndef ENGINE_DIR
-#define ENGINE_DIR "../"
+// Directory the build writes compiled SPIR-V into. Defined by CMake; the
+// fallback only covers the case of running with the build tree as the cwd.
+#ifndef EGE_SHADER_ROOT
+#define EGE_SHADER_ROOT "shaders"
 #endif
 
 namespace ege {
@@ -26,7 +28,7 @@ namespace ege {
 
 	std::vector<char> EgePipeline::readFile(const std::string& filePath) {
 		//read file in binary and seek end
-		std::string fullFilePath = ENGINE_DIR + filePath;
+		std::string fullFilePath = std::string{EGE_SHADER_ROOT} + "/" + filePath;
 		std::ifstream file{fullFilePath, std::ios::ate | std::ios::binary};
 		if (!file.is_open())
 		{

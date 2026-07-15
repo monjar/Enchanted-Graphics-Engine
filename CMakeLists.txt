@@ -127,13 +127,23 @@ file(GLOB_RECURSE GLSL_SOURCE_FILES
   "${PROJECT_SOURCE_DIR}/shaders/*.vert"
 )
 
+if (NOT GLSL_VALIDATOR)
+  message(FATAL_ERROR "glslangValidator not found - cannot compile shaders")
+endif()
+
+# Compiled SPIR-V is a build artifact, so it belongs in the build tree rather
+# than beside the GLSL sources.
+set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")
+
 foreach(GLSL ${GLSL_SOURCE_FILES})
   get_filename_component(FILE_NAME ${GLSL} NAME)
-  set(SPIRV "${PROJECT_SOURCE_DIR}/shaders/${FILE_NAME}.spv")
+  set(SPIRV "${SHADER_OUTPUT_DIR}/${FILE_NAME}.spv")
   add_custom_command(
     OUTPUT ${SPIRV}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${SHADER_OUTPUT_DIR}
     COMMAND ${GLSL_VALIDATOR} -V ${GLSL} -o ${SPIRV}
-    DEPENDS ${GLSL})
+    DEPENDS ${GLSL}
+    COMMENT "Compiling shader ${FILE_NAME}")
   list(APPEND SPIRV_BINARY_FILES ${SPIRV})
 endforeach(GLSL)
 
@@ -141,3 +151,9 @@ add_custom_target(
     Shaders
     DEPENDS ${SPIRV_BINARY_FILES}
 )
+
+# Building the executable must compile the shaders it loads at runtime.
+add_dependencies(${PROJECT_NAME} Shaders)
+
+target_compile_definitions(${PROJECT_NAME} PRIVATE
+  EGE_SHADER_ROOT="${SHADER_OUTPUT_DIR}")

@@ -55,7 +55,7 @@ namespace ege {
 		pipelineConfig.renderPass = renderPass;
 		pipelineConfig.pipelineLayout = pipelineLayout;
 		egePipeline = std::make_unique<EgePipeline>(
-			egeDevice, "CompiledShaders/simple_shader.vert.spv", "CompiledShaders/simple_shader.frag.spv", pipelineConfig
+			egeDevice, "simple_shader.vert.spv", "simple_shader.frag.spv", pipelineConfig
 		);
 
 	}
