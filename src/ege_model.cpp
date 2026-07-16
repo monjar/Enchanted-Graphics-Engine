@@ -11,8 +11,10 @@
 #include <cstring>
 #include <unordered_map>
 
-#ifndef ENGINE_DIR
-#define ENGINE_DIR "../"
+// Root the engine resolves relative asset paths against. Defined by CMake;
+// the fallback only covers running with the repository root as the cwd.
+#ifndef EGE_ASSET_ROOT
+#define EGE_ASSET_ROOT "assets"
 #endif
 
 namespace std {
@@ -42,7 +44,7 @@ namespace ege {
     std::unique_ptr<EgeModel> EgeModel::createModelFromFile(
         EgeDevice& device, const std::string& filepath) {
         Builder builder{};
-        builder.loadModel(ENGINE_DIR + filepath);
+        builder.loadModel(std::string{EGE_ASSET_ROOT} + "/" + filepath);
         return std::make_unique<EgeModel>(device, builder);
     }
 

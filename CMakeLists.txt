@@ -156,4 +156,5 @@ add_custom_target(
 add_dependencies(${PROJECT_NAME} Shaders)
 
 target_compile_definitions(${PROJECT_NAME} PRIVATE
-  EGE_SHADER_ROOT="${SHADER_OUTPUT_DIR}")
+  EGE_SHADER_ROOT="${SHADER_OUTPUT_DIR}"
+  EGE_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
