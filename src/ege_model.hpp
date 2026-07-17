@@ -37,6 +37,13 @@ namespace ege {
 			std::vector<uint32_t> indices{};
 			void loadModel(const std::string& filepath);
 
+			// Procedurally generated primitives. All are unit-sized and centred on
+			// the origin, wound counter-clockwise when viewed from outside, with
+			// per-face normals for the box/plane and per-vertex normals for the
+			// sphere.
+			static Builder box();
+			static Builder plane();
+			static Builder sphere(uint32_t latitudeSegments = 16, uint32_t longitudeSegments = 32);
 		};
 
 

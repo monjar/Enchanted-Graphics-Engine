@@ -4,6 +4,7 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 #define GLM_ENABLE_EXPERIMENTAL
+#include <glm/gtc/constants.hpp>
 #include <glm/gtx/hash.hpp>
 
 
@@ -207,5 +208,127 @@ namespace ege {
                 indices.push_back(uniqueVertices[vertex]);
             }
         }
+    }
+
+    EgeModel::Builder EgeModel::Builder::box() {
+        Builder builder{};
+
+        // One quad per face. Faces do not share vertices because each carries its
+        // own normal.
+        const glm::vec3 faceNormals[6] = {
+            { 1.f,  0.f,  0.f}, {-1.f,  0.f,  0.f},
+            { 0.f,  1.f,  0.f}, { 0.f, -1.f,  0.f},
+            { 0.f,  0.f,  1.f}, { 0.f,  0.f, -1.f},
+        };
+        // Tangent/bitangent pairs spanning each face, chosen so that
+        // cross(tangent, bitangent) points along the face normal.
+        const glm::vec3 faceTangents[6] = {
+            { 0.f,  0.f, -1.f}, { 0.f,  0.f,  1.f},
+            { 1.f,  0.f,  0.f}, { 1.f,  0.f,  0.f},
+            { 1.f,  0.f,  0.f}, {-1.f,  0.f,  0.f},
+        };
+        const glm::vec3 faceBitangents[6] = {
+            { 0.f,  1.f,  0.f}, { 0.f,  1.f,  0.f},
+            { 0.f,  0.f, -1.f}, { 0.f,  0.f,  1.f},
+            { 0.f,  1.f,  0.f}, { 0.f,  1.f,  0.f},
+        };
+
+        for (uint32_t face = 0; face < 6; face++) {
+            const glm::vec3 n = faceNormals[face];
+            const glm::vec3 t = faceTangents[face];
+            const glm::vec3 b = faceBitangents[face];
+            const uint32_t base = static_cast<uint32_t>(builder.vertices.size());
+
+            // Corners in (u, v) order: (0,0) (1,0) (1,1) (0,1)
+            const glm::vec2 corners[4] = {{0.f, 0.f}, {1.f, 0.f}, {1.f, 1.f}, {0.f, 1.f}};
+            for (const glm::vec2& c : corners) {
+                Vertex vertex{};
+                vertex.position = 0.5f * (n + t * (2.f * c.x - 1.f) + b * (2.f * c.y - 1.f));
+                vertex.normal = n;
+                vertex.uv = c;
+                vertex.color = glm::vec3{1.f};
+                builder.vertices.push_back(vertex);
+            }
+
+            builder.indices.insert(
+                builder.indices.end(),
+                {base + 0, base + 1, base + 2, base + 2, base + 3, base + 0});
+        }
+
+        return builder;
+    }
+
+    EgeModel::Builder EgeModel::Builder::plane() {
+        Builder builder{};
+
+        // Unit quad in the XZ plane, facing +Y.
+        const glm::vec3 positions[4] = {
+            {-0.5f, 0.f, -0.5f}, {0.5f, 0.f, -0.5f}, {0.5f, 0.f, 0.5f}, {-0.5f, 0.f, 0.5f}};
+        const glm::vec2 uvs[4] = {{0.f, 0.f}, {1.f, 0.f}, {1.f, 1.f}, {0.f, 1.f}};
+
+        for (uint32_t i = 0; i < 4; i++) {
+            Vertex vertex{};
+            vertex.position = positions[i];
+            vertex.normal = {0.f, 1.f, 0.f};
+            vertex.uv = uvs[i];
+            vertex.color = glm::vec3{1.f};
+            builder.vertices.push_back(vertex);
+        }
+
+        // Wound so that cross(p1 - p0, p2 - p0) points along +Y, matching the
+        // stored normal.
+        builder.indices = {0, 3, 2, 2, 1, 0};
+        return builder;
+    }
+
+    EgeModel::Builder EgeModel::Builder::sphere(
+        uint32_t latitudeSegments, uint32_t longitudeSegments) {
+        Builder builder{};
+
+        assert(latitudeSegments >= 2 && "sphere needs at least 2 latitude segments");
+        assert(longitudeSegments >= 3 && "sphere needs at least 3 longitude segments");
+
+        // UV sphere. Poles are duplicated per longitude so that each ring shares a
+        // consistent u coordinate, which also gives the seam column distinct uvs.
+        for (uint32_t lat = 0; lat <= latitudeSegments; lat++) {
+            const float v = static_cast<float>(lat) / static_cast<float>(latitudeSegments);
+            const float theta = v * glm::pi<float>();
+            const float sinTheta = glm::sin(theta);
+            const float cosTheta = glm::cos(theta);
+
+            for (uint32_t lon = 0; lon <= longitudeSegments; lon++) {
+                const float u = static_cast<float>(lon) / static_cast<float>(longitudeSegments);
+                const float phi = u * glm::two_pi<float>();
+
+                Vertex vertex{};
+                // Unit radius 0.5 so the sphere matches the box's unit extent.
+                vertex.normal = {sinTheta * glm::cos(phi), cosTheta, sinTheta * glm::sin(phi)};
+                vertex.position = 0.5f * vertex.normal;
+                vertex.uv = {u, v};
+                vertex.color = glm::vec3{1.f};
+                builder.vertices.push_back(vertex);
+            }
+        }
+
+        const uint32_t stride = longitudeSegments + 1;
+        for (uint32_t lat = 0; lat < latitudeSegments; lat++) {
+            for (uint32_t lon = 0; lon < longitudeSegments; lon++) {
+                const uint32_t topLeft = lat * stride + lon;
+                const uint32_t bottomLeft = topLeft + stride;
+
+                // Skip the degenerate triangle at each pole, where both of the
+                // ring's vertices collapse onto the same point.
+                if (lat != 0) {
+                    builder.indices.insert(
+                        builder.indices.end(), {topLeft, topLeft + 1, bottomLeft});
+                }
+                if (lat != latitudeSegments - 1) {
+                    builder.indices.insert(
+                        builder.indices.end(), {topLeft + 1, bottomLeft + 1, bottomLeft});
+                }
+            }
+        }
+
+        return builder;
     }
 }
