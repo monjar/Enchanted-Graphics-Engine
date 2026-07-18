@@ -73,6 +73,9 @@ namespace ege {
 
         auto viewerObject = EgeGameObject::createGameObject();
         viewerObject.transform.translation = glm::vec3(0.f, -1.f, -3.f);
+        // Pitched down slightly so the default view frames the scene instead of
+        // leaving it along the bottom edge.
+        viewerObject.transform.rotation.x = -.35f;
         KeyboardMovementController cameraController{};
 
         auto currentTime = std::chrono::high_resolution_clock::now();
@@ -127,30 +130,38 @@ namespace ege {
 
 
 	void EnchantedEngine::loadGameObjects() {
-        std::shared_ptr<EgeModel> egeModel =
-            EgeModel::createModelFromFile(egeDevice, "models/flat_vase.obj");
-        auto gameObj = EgeGameObject::createGameObject();
-        gameObj.model = egeModel;
-        gameObj.transform.translation = { -.5f, .5f, .0f };
-        gameObj.transform.scale = glm::vec3(3.f);
-        gameObjects.emplace(gameObj.getId(), std::move(gameObj));
+        // Built from procedural primitives rather than OBJ files so that a clean
+        // checkout runs with no binary assets present. Note this scene treats -Y
+        // as up, matching the camera and light placement inherited from the
+        // tutorial code.
+        auto addObject = [this](
+            std::shared_ptr<EgeModel> model,
+            glm::vec3 translation,
+            glm::vec3 scale,
+            glm::vec3 rotation = glm::vec3{0.f}) {
+                auto object = EgeGameObject::createGameObject();
+                object.model = std::move(model);
+                object.transform.translation = translation;
+                object.transform.scale = scale;
+                object.transform.rotation = rotation;
+                gameObjects.emplace(object.getId(), std::move(object));
+            };
 
+        std::shared_ptr<EgeModel> plane =
+            std::make_shared<EgeModel>(egeDevice, EgeModel::Builder::plane());
+        std::shared_ptr<EgeModel> box =
+            std::make_shared<EgeModel>(egeDevice, EgeModel::Builder::box());
+        std::shared_ptr<EgeModel> sphere =
+            std::make_shared<EgeModel>(egeDevice, EgeModel::Builder::sphere());
 
+        // Floor, rotated a half turn about X so its +Y normal points along -Y,
+        // which is up in this scene and therefore towards the light.
+        addObject(plane, {0.f, .5f, 0.f}, {6.f, 1.f, 6.f}, {glm::pi<float>(), 0.f, 0.f});
 
-        egeModel =
-            EgeModel::createModelFromFile(egeDevice, "models/smooth_vase.obj");
-        auto gameObj2 = EgeGameObject::createGameObject();
-        gameObj2.model = egeModel;
-        gameObj2.transform.translation = { .5f, .5f, .0f };
-        gameObj2.transform.scale = glm::vec3(3.f);
-        gameObjects.emplace(gameObj2.getId(), std::move(gameObj2));
-
-        egeModel = EgeModel::createModelFromFile(egeDevice, "models/plane.obj");
-        auto floor = EgeGameObject::createGameObject();
-        floor.model = egeModel;
-        floor.transform.translation = { 0.f, .5f, 0.f };
-        floor.transform.scale = { 3.f, 1.f, 3.f };
-        gameObjects.emplace(floor.getId(), std::move(floor));
+        // Both primitives are unit-sized, so at half scale they sit on the floor
+        // when raised by a quarter unit.
+        addObject(box, {-.6f, .25f, 0.f}, glm::vec3{.5f});
+        addObject(sphere, {.6f, .25f, 0.f}, glm::vec3{.5f});
 	}
 
 
