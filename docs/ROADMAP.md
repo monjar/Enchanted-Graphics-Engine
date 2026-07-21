@@ -33,7 +33,7 @@ The repository as checked out **does not run**. Four cheap defects gate every la
 ### 1.2 Inherited bugs to clean up
 
 - `EgeBuffer::getAlignmentSize()` returns `instanceSize` instead of `alignmentSize` — harmless today, breaks the moment dynamic-offset UBOs appear.
-- `PipelineConfigInfo` members are not zero-initialised; unset `pNext`/`flags` fields are indeterminate.
+- `PipelineConfigInfo` has no member initializers. The one call site brace-initializes it and it is still an aggregate under C++17, so the fields do get zeroed today — but the deleted copy constructor makes it a non-aggregate under C++20, where the same code stops compiling.
 - `TransformComponent::normalMatrix()` uses the inverse-scale shortcut, which is only correct without shear.
 - `EgeCamera` takes `float near, far` — both are macros under `<windows.h>`.
 - `GLM_FORCE_RADIANS` / `GLM_FORCE_DEPTH_ZERO_TO_ONE` are repeated in five translation units; if one ever forgets them the ODR violation is silent and the depth math breaks.
