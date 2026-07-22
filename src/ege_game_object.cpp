@@ -33,6 +33,20 @@ namespace ege {
 	}
 
 
+	// The upper 3x3 of mat4() is M = R * S, with R orthonormal and S a positive
+	// diagonal scale. For that form the usual transpose(inverse(M)) simplifies
+	// exactly:
+	//
+	//     transpose(inverse(R * S)) = transpose(inverse(S) * transpose(R))
+	//                               = R * inverse(S)
+	//
+	// because inverse(S) is diagonal and therefore its own transpose. So scaling
+	// each rotation column by 1/scale is not an approximation here, it is the
+	// exact normal matrix.
+	//
+	// This holds only while the transform stays a pure T * R * S composition. If
+	// shear, non-uniform parent transforms or a general matrix are ever
+	// introduced, this must go back to transpose(inverse(M)).
 	glm::mat3 TransformComponent::normalMatrix(){
 		const float c3 = glm::cos(rotation.z);
 		const float s3 = glm::sin(rotation.z);
