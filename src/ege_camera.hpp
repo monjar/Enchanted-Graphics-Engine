@@ -12,9 +12,10 @@ namespace ege {
 	public:
 	
 
-		void setOrthographicProjection(float left, float right, float top, float botom, float near, float far);
+		void setOrthographicProjection(
+			float left, float right, float top, float bottom, float nearPlane, float farPlane);
 
-		void setPerspectiveProjection(float fovY, float aspect, float near, float far);
+		void setPerspectiveProjection(float fovY, float aspect, float nearPlane, float farPlane);
 
 		void setViewDirection(
 			glm::vec3 position, glm::vec3 direction, glm::vec3 up = glm::vec3{ 0.f, -1.f, 0.f });
