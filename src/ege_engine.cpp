@@ -6,8 +6,6 @@
 #include "simple_render_system.hpp"
 #include "ege_camera.hpp"
 
-#define GLM_FORCE_RADIANS
-#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 

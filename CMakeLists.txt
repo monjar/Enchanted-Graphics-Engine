@@ -158,3 +158,13 @@ add_dependencies(${PROJECT_NAME} Shaders)
 target_compile_definitions(${PROJECT_NAME} PRIVATE
   EGE_SHADER_ROOT="${SHADER_OUTPUT_DIR}"
   EGE_ASSET_ROOT="${CMAKE_SOURCE_DIR}/assets")
+
+# GLM is configured per translation unit by macros that must be identical
+# everywhere, so they are set once on the target rather than per file.
+#   GLM_FORCE_RADIANS          - angle arguments are radians, never degrees
+#   GLM_FORCE_DEPTH_ZERO_TO_ONE - Vulkan clip space is [0, 1], not OpenGL's [-1, 1]
+#   GLM_ENABLE_EXPERIMENTAL     - required by glm/gtx headers
+target_compile_definitions(${PROJECT_NAME} PUBLIC
+  GLM_FORCE_RADIANS
+  GLM_FORCE_DEPTH_ZERO_TO_ONE
+  GLM_ENABLE_EXPERIMENTAL)
