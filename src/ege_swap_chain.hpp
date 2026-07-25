@@ -24,7 +24,7 @@ class EgeSwapChain {
   EgeSwapChain& operator=(const EgeSwapChain &) = delete;
 
   VkFramebuffer getFrameBuffer(int index) { return swapChainFramebuffers[index]; }
-  VkRenderPass getRenderPass() { return renderPass; }
+  VkRenderPass getRenderPass() const { return renderPass; }
   VkImageView getImageView(int index) { return swapChainImageViews[index]; }
   size_t imageCount() { return swapChainImages.size(); }
   VkFormat getSwapChainImageFormat() { return swapChainImageFormat; }
@@ -87,4 +87,4 @@ class EgeSwapChain {
   size_t currentFrame = 0;
 };
 
-}  // namespace lve
+}  // namespace ege

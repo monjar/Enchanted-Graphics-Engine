@@ -11,4 +11,4 @@ namespace ege {
 		(hashCombine(seed, rest), ...);
 	};
 
-}  // namespace lve
+}  // namespace ege

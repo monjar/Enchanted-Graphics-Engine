@@ -38,4 +38,4 @@ namespace ege {
             gameObject.transform.translation += moveSpeed * dt * glm::normalize(moveDir);
         }
     }
-}  // namespace lve
+}  // namespace ege

@@ -14,4 +14,4 @@ namespace ege {
 		VkDescriptorSet globalDescriptorSet;
 		EgeGameObject::Map& gameObjects;
 	};
-}  // namespace lve
+}  // namespace ege

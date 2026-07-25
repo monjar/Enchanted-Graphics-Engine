@@ -16,8 +16,8 @@ namespace ege {
 		glm::vec3 scale {1.f, 1.f, 1.f};
 		glm::vec3 rotation{};
 
-		glm::mat4 mat4();
-		glm::mat3 normalMatrix();
+		glm::mat4 mat4() const;
+		glm::mat3 normalMatrix() const;
 	};
 
 	class EgeGameObject {
@@ -39,7 +39,7 @@ namespace ege {
 
 
 
-		id_t getId() { return id; }
+		id_t getId() const { return id; }
 
 		std::shared_ptr<EgeModel> model{};
 		glm::vec3 color{};

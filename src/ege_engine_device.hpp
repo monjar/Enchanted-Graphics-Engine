@@ -40,7 +40,7 @@ namespace ege {
         EgeDevice& operator=(EgeDevice&&) = delete;
 
         VkCommandPool getCommandPool() { return commandPool; }
-        VkDevice device() { return device_; }
+        VkDevice device() const { return device_; }
         VkSurfaceKHR surface() { return surface_; }
         VkQueue graphicsQueue() { return graphicsQueue_; }
         VkQueue presentQueue() { return presentQueue_; }
@@ -105,4 +105,4 @@ namespace ege {
         const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
     };
 
-}  // namespace lve
+}  // namespace ege
