@@ -17,6 +17,12 @@ endif()
 
 project(${NAME} VERSION 0.1.0)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
+include(CompilerWarnings)
+
+# Emit compile_commands.json for clangd, clang-tidy and editor tooling.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # 1. Set VULKAN_SDK_PATH in .env.cmake to target specific vulkan version
 if (DEFINED VULKAN_SDK_PATH)
   set(Vulkan_INCLUDE_DIRS "${VULKAN_SDK_PATH}/Include") # 1.1 Make sure this include path is correct
@@ -168,3 +174,4 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC
   GLM_FORCE_RADIANS
   GLM_FORCE_DEPTH_ZERO_TO_ONE
   GLM_ENABLE_EXPERIMENTAL)
+ege_set_target_warnings(${PROJECT_NAME})
