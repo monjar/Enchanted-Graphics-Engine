@@ -38,7 +38,7 @@ namespace ege {
 
 	void EnchantedEngine::run() {
         std::vector<std::unique_ptr<EgeBuffer>> uboBuffers(EgeSwapChain::MAX_FRAMES_IN_FLIGHT);
-        for (int i = 0; i < uboBuffers.size(); i++) {
+        for (size_t i = 0; i < uboBuffers.size(); i++) {
             uboBuffers[i] = std::make_unique<EgeBuffer>(
                 egeDevice,
                 sizeof(GlobalUbo),
@@ -54,7 +54,7 @@ namespace ege {
             .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(EgeSwapChain::MAX_FRAMES_IN_FLIGHT);
-        for (int i = 0; i < globalDescriptorSets.size(); i++) {
+        for (size_t i = 0; i < globalDescriptorSets.size(); i++) {
             auto bufferInfo = uboBuffers[i]->descriptorInfo();
             EgeDescriptorWriter(*globalSetLayout, *globalPool)
                 .writeBuffer(0, &bufferInfo)
@@ -96,7 +96,7 @@ namespace ege {
             camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
 
 			if (auto commandBuffer = egeRenderer.beginFrame()) {
-                int frameIndex = egeRenderer.getFrameIndex();
+                const uint32_t frameIndex = egeRenderer.getFrameIndex();
                 FrameInfo frameInfo{
                       frameIndex,
                       frameTime,

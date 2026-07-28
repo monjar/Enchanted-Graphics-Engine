@@ -60,7 +60,6 @@ else()
 	message(STATUS "Using glfw lib at: ${GLFW_LIB}")
 endif()
 
-include_directories(external)
 
 # If TINYOBJ_PATH not specified in .env.cmake, try fetching from git repo
 if (NOT TINYOBJ_PATH)
@@ -91,7 +90,6 @@ if (WIN32)
   target_include_directories(${PROJECT_NAME} PUBLIC
     ${PROJECT_SOURCE_DIR}/src
     ${Vulkan_INCLUDE_DIRS}
-    ${TINYOBJ_PATH}
     ${GLFW_INCLUDE_DIRS}
     ${GLM_PATH}
     )
@@ -106,7 +104,6 @@ elseif (UNIX)
     message(STATUS "CREATING BUILD FOR UNIX")
     target_include_directories(${PROJECT_NAME} PUBLIC
       ${PROJECT_SOURCE_DIR}/src
-      ${TINYOBJ_PATH}
     )
     target_link_libraries(${PROJECT_NAME} glfw ${Vulkan_LIBRARIES})
 endif()
@@ -174,4 +171,9 @@ target_compile_definitions(${PROJECT_NAME} PUBLIC
   GLM_FORCE_RADIANS
   GLM_FORCE_DEPTH_ZERO_TO_ONE
   GLM_ENABLE_EXPERIMENTAL)
-ege_set_target_warnings(${PROJECT_NAME})
+# SYSTEM so third-party headers are exempt from our warning set.
+target_include_directories(${PROJECT_NAME} SYSTEM PUBLIC
+  ${PROJECT_SOURCE_DIR}/external
+  ${TINYOBJ_PATH})
+
+ege_set_target_warnings(${PROJECT_NAME} WARNINGS_AS_ERRORS)

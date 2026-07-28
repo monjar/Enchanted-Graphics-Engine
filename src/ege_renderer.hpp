@@ -34,7 +34,7 @@ namespace ege {
 			assert(isFrameStarted && "Cannot get command buffer when frame not in progress");
 			return commandBuffers[currentFrameIndex];
 		}
-		int getFrameIndex() const {
+		uint32_t getFrameIndex() const {
 			assert(isFrameStarted && "Cannot get frame Index When not in progress");
 			return currentFrameIndex;
 		}
@@ -55,7 +55,7 @@ namespace ege {
 		std::unique_ptr<EgeSwapChain> egeSwapChain;
 		std::vector<VkCommandBuffer> commandBuffers;
 		uint32_t currentImageIndex;
-		int currentFrameIndex{ 0 };
+		uint32_t currentFrameIndex{ 0 };
 		bool isFrameStarted{ false };
 
 

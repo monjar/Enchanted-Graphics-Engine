@@ -1,5 +1,7 @@
 #include "ege_camera.hpp"
 
+#include <cmath>
+
 
 #include <cassert>
 #include <limits>
@@ -19,7 +21,7 @@ namespace ege {
 
     void EgeCamera::setPerspectiveProjection(float fovy, float aspect, float nearPlane, float farPlane) {
         assert(glm::abs(aspect - std::numeric_limits<float>::epsilon()) > 0.0f);
-        const float tanHalfFovy = tan(fovy / 2.f);
+        const float tanHalfFovy = std::tan(fovy / 2.f);
         projectionMatrix = glm::mat4{ 0.0f };
         projectionMatrix[0][0] = 1.f / (aspect * tanHalfFovy);
         projectionMatrix[1][1] = 1.f / (tanHalfFovy);

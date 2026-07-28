@@ -46,7 +46,7 @@ namespace ege {
         VkQueue presentQueue() { return presentQueue_; }
 
         SwapChainSupportDetails getSwapChainSupport() { return querySwapChainSupport(physicalDevice); }
-        uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties);
+        uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags memoryProperties);
         QueueFamilyIndices findPhysicalQueueFamilies() { return findQueueFamilies(physicalDevice); }
         VkFormat findSupportedFormat(
             const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
@@ -55,7 +55,7 @@ namespace ege {
         void createBuffer(
             VkDeviceSize size,
             VkBufferUsageFlags usage,
-            VkMemoryPropertyFlags properties,
+            VkMemoryPropertyFlags memoryProperties,
             VkBuffer& buffer,
             VkDeviceMemory& bufferMemory);
         VkCommandBuffer beginSingleTimeCommands();
@@ -66,7 +66,7 @@ namespace ege {
 
         void createImageWithInfo(
             const VkImageCreateInfo& imageInfo,
-            VkMemoryPropertyFlags properties,
+            VkMemoryPropertyFlags memoryProperties,
             VkImage& image,
             VkDeviceMemory& imageMemory);
 

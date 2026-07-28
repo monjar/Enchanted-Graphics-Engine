@@ -11,13 +11,13 @@
 #include <stdexcept>
 namespace ege {
 
-EgeSwapChain::EgeSwapChain(EgeDevice &deviceRef, VkExtent2D windowExtent) : device{deviceRef}, windowExtent{ windowExtent } {
+EgeSwapChain::EgeSwapChain(EgeDevice &deviceRef, VkExtent2D extent) : device{deviceRef}, windowExtent{ extent } {
 
     init();
 }
 
 
-EgeSwapChain::EgeSwapChain(EgeDevice& deviceRef, VkExtent2D windowExtent, std::shared_ptr<EgeSwapChain> previousChain) : device{ deviceRef }, windowExtent{ windowExtent }, oldSwapChain{ previousChain } {
+EgeSwapChain::EgeSwapChain(EgeDevice& deviceRef, VkExtent2D extent, std::shared_ptr<EgeSwapChain> previousChain) : device{ deviceRef }, windowExtent{ extent }, oldSwapChain{ std::move(previousChain) } {
     init();
     oldSwapChain = nullptr;
 }
@@ -42,7 +42,7 @@ EgeSwapChain::~EgeSwapChain() {
     swapChain = nullptr;
   }
 
-  for (int i = 0; i < depthImages.size(); i++) {
+  for (size_t i = 0; i < depthImages.size(); i++) {
     vkDestroyImageView(device.device(), depthImageViews[i], nullptr);
     vkDestroyImage(device.device(), depthImages[i], nullptr);
     vkFreeMemory(device.device(), depthImageMemorys[i], nullptr);
@@ -277,7 +277,6 @@ void EgeSwapChain::createFramebuffers() {
   for (size_t i = 0; i < imageCount(); i++) {
     std::array<VkImageView, 2> attachments = {swapChainImageViews[i], depthImageViews[i]};
 
-    VkExtent2D swapChainExtent = getSwapChainExtent();
     VkFramebufferCreateInfo framebufferInfo = {};
     framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     framebufferInfo.renderPass = renderPass;
@@ -300,13 +299,11 @@ void EgeSwapChain::createFramebuffers() {
 void EgeSwapChain::createDepthResources() {
   VkFormat depthFormat = findDepthFormat();
   swapChainDepthFormat = depthFormat;
-  VkExtent2D swapChainExtent = getSwapChainExtent();
-
   depthImages.resize(imageCount());
   depthImageMemorys.resize(imageCount());
   depthImageViews.resize(imageCount());
 
-  for (int i = 0; i < depthImages.size(); i++) {
+  for (size_t i = 0; i < depthImages.size(); i++) {
     VkImageCreateInfo imageInfo{};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;

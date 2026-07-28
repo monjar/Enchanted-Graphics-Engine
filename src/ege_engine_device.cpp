@@ -10,10 +10,10 @@ namespace ege {
 
     // local callback functions
     static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
-        VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-        VkDebugUtilsMessageTypeFlagsEXT messageType,
+        VkDebugUtilsMessageSeverityFlagBitsEXT /*messageSeverity*/,
+        VkDebugUtilsMessageTypeFlagsEXT /*messageType*/,
         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-        void* pUserData) {
+        void* /*pUserData*/) {
         std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
 
         return VK_FALSE;
@@ -24,9 +24,8 @@ namespace ege {
         const VkDebugUtilsMessengerCreateInfoEXT* pCreateInfo,
         const VkAllocationCallbacks* pAllocator,
         VkDebugUtilsMessengerEXT* pDebugMessenger) {
-        auto func = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
-            instance,
-            "vkCreateDebugUtilsMessengerEXT");
+        auto func = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
         if (func != nullptr) {
             return func(instance, pCreateInfo, pAllocator, pDebugMessenger);
         }
@@ -39,16 +38,15 @@ namespace ege {
         VkInstance instance,
         VkDebugUtilsMessengerEXT debugMessenger,
         const VkAllocationCallbacks* pAllocator) {
-        auto func = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
-            instance,
-            "vkDestroyDebugUtilsMessengerEXT");
+        auto func = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
         if (func != nullptr) {
             func(instance, debugMessenger, pAllocator);
         }
     }
 
     // class member functions
-    EgeDevice::EgeDevice(EgeWindow& window) : window{ window } {
+    EgeDevice::EgeDevice(EgeWindow& windowRef) : window{ windowRef } {
         createInstance();
         setupDebugMessenger();
         createSurface();
@@ -96,7 +94,7 @@ namespace ege {
             createInfo.ppEnabledLayerNames = validationLayers.data();
 
             populateDebugMessengerCreateInfo(debugCreateInfo);
-            createInfo.pNext = (VkDebugUtilsMessengerCreateInfoEXT*)&debugCreateInfo;
+            createInfo.pNext = &debugCreateInfo;
         }
         else {
             createInfo.enabledLayerCount = 0;
@@ -329,7 +327,7 @@ namespace ege {
         std::vector<VkQueueFamilyProperties> queueFamilies(queueFamilyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(device, &queueFamilyCount, queueFamilies.data());
 
-        int i = 0;
+        uint32_t i = 0;
         for (const auto& queueFamily : queueFamilies) {
             if (queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
                 indices.graphicsFamily = i;
@@ -394,12 +392,12 @@ namespace ege {
         throw std::runtime_error("failed to find supported format!");
     }
 
-    uint32_t EgeDevice::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    uint32_t EgeDevice::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags memoryProperties) {
         VkPhysicalDeviceMemoryProperties memProperties;
         vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
         for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
             if ((typeFilter & (1 << i)) &&
-                (memProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+                (memProperties.memoryTypes[i].propertyFlags & memoryProperties) == memoryProperties) {
                 return i;
             }
         }
@@ -410,7 +408,7 @@ namespace ege {
     void EgeDevice::createBuffer(
         VkDeviceSize size,
         VkBufferUsageFlags usage,
-        VkMemoryPropertyFlags properties,
+        VkMemoryPropertyFlags memoryProperties,
         VkBuffer& buffer,
         VkDeviceMemory& bufferMemory) {
         VkBufferCreateInfo bufferInfo{};
@@ -429,7 +427,7 @@ namespace ege {
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
+        allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, memoryProperties);
 
         if (vkAllocateMemory(device_, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
             throw std::runtime_error("failed to allocate vertex buffer memory!");
@@ -511,7 +509,7 @@ namespace ege {
 
     void EgeDevice::createImageWithInfo(
         const VkImageCreateInfo& imageInfo,
-        VkMemoryPropertyFlags properties,
+        VkMemoryPropertyFlags memoryProperties,
         VkImage& image,
         VkDeviceMemory& imageMemory) {
         if (vkCreateImage(device_, &imageInfo, nullptr, &image) != VK_SUCCESS) {
@@ -524,7 +522,7 @@ namespace ege {
         VkMemoryAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties);
+        allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, memoryProperties);
 
         if (vkAllocateMemory(device_, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
             throw std::runtime_error("failed to allocate image memory!");

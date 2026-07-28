@@ -14,7 +14,7 @@ namespace ege {
 
 class EgeSwapChain {
  public:
-  static constexpr int MAX_FRAMES_IN_FLIGHT = 2;
+  static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
   EgeSwapChain(EgeDevice &deviceRef, VkExtent2D windowExtent);
   EgeSwapChain(EgeDevice &deviceRef, VkExtent2D windowExtent, std::shared_ptr<EgeSwapChain> previousChain);
@@ -23,12 +23,12 @@ class EgeSwapChain {
   EgeSwapChain(const EgeSwapChain &) = delete;
   EgeSwapChain& operator=(const EgeSwapChain &) = delete;
 
-  VkFramebuffer getFrameBuffer(int index) { return swapChainFramebuffers[index]; }
+  VkFramebuffer getFrameBuffer(uint32_t index) const { return swapChainFramebuffers[index]; }
   VkRenderPass getRenderPass() const { return renderPass; }
-  VkImageView getImageView(int index) { return swapChainImageViews[index]; }
-  size_t imageCount() { return swapChainImages.size(); }
-  VkFormat getSwapChainImageFormat() { return swapChainImageFormat; }
-  VkExtent2D getSwapChainExtent() { return swapChainExtent; }
+  VkImageView getImageView(uint32_t index) const { return swapChainImageViews[index]; }
+  size_t imageCount() const { return swapChainImages.size(); }
+  VkFormat getSwapChainImageFormat() const { return swapChainImageFormat; }
+  VkExtent2D getSwapChainExtent() const { return swapChainExtent; }
   uint32_t width() { return swapChainExtent.width; }
   uint32_t height() { return swapChainExtent.height; }
 
@@ -40,8 +40,8 @@ class EgeSwapChain {
   VkResult acquireNextImage(uint32_t *imageIndex);
   VkResult submitCommandBuffers(const VkCommandBuffer *buffers, uint32_t *imageIndex);
 
-  bool compareSwapFormats(const EgeSwapChain& swapChain) const {
-      return swapChain.swapChainDepthFormat == swapChainDepthFormat && swapChain.swapChainImageFormat == swapChainImageFormat;
+  bool compareSwapFormats(const EgeSwapChain& other) const {
+      return other.swapChainDepthFormat == swapChainDepthFormat && other.swapChainImageFormat == swapChainImageFormat;
   }
 
  private:

@@ -30,8 +30,8 @@ namespace ege {
     // *************** Descriptor Set Layout *********************
 
     EgeDescriptorSetLayout::EgeDescriptorSetLayout(
-        EgeDevice& egeDevice, std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> bindings)
-        : egeDevice{ egeDevice }, bindings{ bindings } {
+        EgeDevice& device, std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> layoutBindings)
+        : egeDevice{ device }, bindings{ std::move(layoutBindings) } {
         std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings{};
         for (auto kv : bindings) {
             setLayoutBindings.push_back(kv.second);
@@ -80,11 +80,11 @@ namespace ege {
     // *************** Descriptor Pool *********************
 
     EgeDescriptorPool::EgeDescriptorPool(
-        EgeDevice& egeDevice,
+        EgeDevice& device,
         uint32_t maxSets,
         VkDescriptorPoolCreateFlags poolFlags,
         const std::vector<VkDescriptorPoolSize>& poolSizes)
-        : egeDevice{ egeDevice } {
+        : egeDevice{ device } {
         VkDescriptorPoolCreateInfo descriptorPoolInfo{};
         descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         descriptorPoolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -132,8 +132,8 @@ namespace ege {
 
     // *************** Descriptor Writer *********************
 
-    EgeDescriptorWriter::EgeDescriptorWriter(EgeDescriptorSetLayout& setLayout, EgeDescriptorPool& pool)
-        : setLayout{ setLayout }, pool{ pool } {}
+    EgeDescriptorWriter::EgeDescriptorWriter(EgeDescriptorSetLayout& layout, EgeDescriptorPool& descriptorPool)
+        : setLayout{ layout }, pool{ descriptorPool } {}
 
     EgeDescriptorWriter& EgeDescriptorWriter::writeBuffer(
         uint32_t binding, VkDescriptorBufferInfo* bufferInfo) {
@@ -190,7 +190,8 @@ namespace ege {
         for (auto& write : writes) {
             write.dstSet = set;
         }
-        vkUpdateDescriptorSets(pool.egeDevice.device(), writes.size(), writes.data(), 0, nullptr);
+        vkUpdateDescriptorSets(
+            pool.egeDevice.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
 }  // namespace ege

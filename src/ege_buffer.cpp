@@ -31,19 +31,19 @@ namespace ege {
 
     EgeBuffer::EgeBuffer(
         EgeDevice& device,
-        VkDeviceSize instanceSize,
-        uint32_t instanceCount,
-        VkBufferUsageFlags usageFlags,
-        VkMemoryPropertyFlags memoryPropertyFlags,
-        VkDeviceSize minOffsetAlignment)
+        VkDeviceSize instanceSize_,
+        uint32_t instanceCount_,
+        VkBufferUsageFlags usageFlags_,
+        VkMemoryPropertyFlags memoryPropertyFlags_,
+        VkDeviceSize minOffsetAlignment_)
         : egeDevice{ device },
-        instanceSize{ instanceSize },
-        instanceCount{ instanceCount },
-        usageFlags{ usageFlags },
-        memoryPropertyFlags{ memoryPropertyFlags } {
-        alignmentSize = getAlignment(instanceSize, minOffsetAlignment);
-        bufferSize = alignmentSize * instanceCount;
-        device.createBuffer(bufferSize, usageFlags, memoryPropertyFlags, buffer, memory);
+        instanceSize{ instanceSize_ },
+        instanceCount{ instanceCount_ },
+        usageFlags{ usageFlags_ },
+        memoryPropertyFlags{ memoryPropertyFlags_ } {
+        alignmentSize = getAlignment(instanceSize_, minOffsetAlignment_);
+        bufferSize = alignmentSize * instanceCount_;
+        device.createBuffer(bufferSize, usageFlags_, memoryPropertyFlags_, buffer, memory);
     }
 
     EgeBuffer::~EgeBuffer() {
@@ -94,7 +94,7 @@ namespace ege {
             memcpy(mapped, data, bufferSize);
         }
         else {
-            char* memOffset = (char*)mapped;
+            char* memOffset = static_cast<char*>(mapped);
             memOffset += offset;
             memcpy(memOffset, data, size);
         }
@@ -163,7 +163,7 @@ namespace ege {
      * @param index Used in offset calculation
      *
      */
-    void EgeBuffer::writeToIndex(void* data, int index) {
+    void EgeBuffer::writeToIndex(void* data, uint32_t index) {
         writeToBuffer(data, instanceSize, index * alignmentSize);
     }
 
@@ -173,7 +173,7 @@ namespace ege {
      * @param index Used in offset calculation
      *
      */
-    VkResult EgeBuffer::flushIndex(int index) { return flush(alignmentSize, index * alignmentSize); }
+    VkResult EgeBuffer::flushIndex(uint32_t index) { return flush(alignmentSize, index * alignmentSize); }
 
     /**
      * Create a buffer info descriptor
@@ -182,7 +182,7 @@ namespace ege {
      *
      * @return VkDescriptorBufferInfo for instance at index
      */
-    VkDescriptorBufferInfo EgeBuffer::descriptorInfoForIndex(int index) {
+    VkDescriptorBufferInfo EgeBuffer::descriptorInfoForIndex(uint32_t index) {
         return descriptorInfo(alignmentSize, index * alignmentSize);
     }
 
@@ -195,7 +195,7 @@ namespace ege {
      *
      * @return VkResult of the invalidate call
      */
-    VkResult EgeBuffer::invalidateIndex(int index) {
+    VkResult EgeBuffer::invalidateIndex(uint32_t index) {
         return invalidate(alignmentSize, index * alignmentSize);
     }
 

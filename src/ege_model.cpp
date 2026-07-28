@@ -64,7 +64,7 @@ namespace ege {
         };
 
         stagingBuffer.map();
-        stagingBuffer.writeToBuffer((void*)vertices.data());
+        stagingBuffer.writeToBuffer(const_cast<void*>(static_cast<const void*>(vertices.data())));
 
         vertexBuffer = std::make_unique<EgeBuffer>(
             egeDevice,
@@ -98,7 +98,7 @@ namespace ege {
         };
 
         stagingBuffer.map();
-        stagingBuffer.writeToBuffer((void*)indices.data());
+        stagingBuffer.writeToBuffer(const_cast<void*>(static_cast<const void*>(indices.data())));
 
         indexBuffer = std::make_unique<EgeBuffer>(
             egeDevice,
@@ -173,30 +173,30 @@ namespace ege {
 
                 if (index.vertex_index >= 0) {
                     vertex.position = {
-                        attrib.vertices[3 * index.vertex_index + 0],
-                        attrib.vertices[3 * index.vertex_index + 1],
-                        attrib.vertices[3 * index.vertex_index + 2],
+                        attrib.vertices[3 * static_cast<size_t>(index.vertex_index) + 0],
+                        attrib.vertices[3 * static_cast<size_t>(index.vertex_index) + 1],
+                        attrib.vertices[3 * static_cast<size_t>(index.vertex_index) + 2],
                     };
 
                     vertex.color = {
-                        attrib.colors[3 * index.vertex_index + 0],
-                        attrib.colors[3 * index.vertex_index + 1],
-                        attrib.colors[3 * index.vertex_index + 2],
+                        attrib.colors[3 * static_cast<size_t>(index.vertex_index) + 0],
+                        attrib.colors[3 * static_cast<size_t>(index.vertex_index) + 1],
+                        attrib.colors[3 * static_cast<size_t>(index.vertex_index) + 2],
                     };
                 }
 
                 if (index.normal_index >= 0) {
                     vertex.normal = {
-                        attrib.normals[3 * index.normal_index + 0],
-                        attrib.normals[3 * index.normal_index + 1],
-                        attrib.normals[3 * index.normal_index + 2],
+                        attrib.normals[3 * static_cast<size_t>(index.normal_index) + 0],
+                        attrib.normals[3 * static_cast<size_t>(index.normal_index) + 1],
+                        attrib.normals[3 * static_cast<size_t>(index.normal_index) + 2],
                     };
                 }
 
                 if (index.texcoord_index >= 0) {
                     vertex.uv = {
-                        attrib.texcoords[2 * index.texcoord_index + 0],
-                        attrib.texcoords[2 * index.texcoord_index + 1],
+                        attrib.texcoords[2 * static_cast<size_t>(index.texcoord_index) + 0],
+                        attrib.texcoords[2 * static_cast<size_t>(index.texcoord_index) + 1],
                     };
                 }
 

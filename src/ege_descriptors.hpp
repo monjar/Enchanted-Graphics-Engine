@@ -13,7 +13,7 @@ namespace ege {
     public:
         class Builder {
         public:
-            Builder(EgeDevice& egeDevice) : egeDevice{ egeDevice } {}
+            Builder(EgeDevice& device) : egeDevice{ device } {}
 
             Builder& addBinding(
                 uint32_t binding,
@@ -47,7 +47,7 @@ namespace ege {
     public:
         class Builder {
         public:
-            Builder(EgeDevice& egeDevice) : egeDevice{ egeDevice } {}
+            Builder(EgeDevice& device) : egeDevice{ device } {}
 
             Builder& addPoolSize(VkDescriptorType descriptorType, uint32_t count);
             Builder& setPoolFlags(VkDescriptorPoolCreateFlags flags);
