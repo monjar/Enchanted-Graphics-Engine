@@ -3,7 +3,7 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 .vscode/
-.env.cmake
+# .env.cmake is no longer used; dependencies are resolved by cmake/Dependencies.cmake
 
 build/**
 build

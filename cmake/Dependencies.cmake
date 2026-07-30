@@ -11,6 +11,27 @@
 
 include(CPM)
 
+# Re-expose a dependency's interface include directories as SYSTEM.
+#
+# A package resolved by find_package usually marks its includes SYSTEM already,
+# but one built from source through CPM does not, which puts third-party
+# headers under our warning set. With warnings as errors that turns any
+# upstream sloppiness into a build failure in our tree.
+function(ege_make_includes_system target)
+  if(NOT TARGET ${target})
+    return()
+  endif()
+  get_target_property(aliased ${target} ALIASED_TARGET)
+  if(aliased)
+    set(target ${aliased})
+  endif()
+  get_target_property(includes ${target} INTERFACE_INCLUDE_DIRECTORIES)
+  if(includes)
+    set_target_properties(${target} PROPERTIES
+      INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${includes}")
+  endif()
+endfunction()
+
 # ---------------------------------------------------------------------------
 # Vulkan - required, must come from the system
 # ---------------------------------------------------------------------------
@@ -45,6 +66,8 @@ elseif(TARGET glfw3)
 else()
   message(FATAL_ERROR "GLFW resolved but exported no usable target")
 endif()
+ege_make_includes_system(glfw)
+ege_make_includes_system(glfw3)
 add_library(ege::glfw ALIAS ege_glfw)
 
 # ---------------------------------------------------------------------------
@@ -59,16 +82,16 @@ CPMAddPackage(
   EXCLUDE_FROM_ALL YES
 )
 
-if(TARGET glm::glm)
-  add_library(ege_glm INTERFACE)
-  target_link_libraries(ege_glm INTERFACE glm::glm)
-elseif(glm_ADDED)
-  add_library(ege_glm INTERFACE)
+add_library(ege_glm INTERFACE)
+if(glm_ADDED)
+  # Built from source: use the source tree directly so it can be marked SYSTEM.
   target_include_directories(ege_glm SYSTEM INTERFACE ${glm_SOURCE_DIR})
+elseif(TARGET glm::glm)
+  ege_make_includes_system(glm::glm)
+  target_link_libraries(ege_glm INTERFACE glm::glm)
 else()
   # Older distribution packages ship headers with no CMake config at all.
   find_path(GLM_INCLUDE_DIR glm/glm.hpp REQUIRED)
-  add_library(ege_glm INTERFACE)
   target_include_directories(ege_glm SYSTEM INTERFACE ${GLM_INCLUDE_DIR})
 endif()
 add_library(ege::glm ALIAS ege_glm)
