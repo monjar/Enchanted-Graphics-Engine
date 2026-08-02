@@ -7,7 +7,7 @@
 
 #include "ege_buffer.hpp"
 
- // std
+// std
 #include <cassert>
 #include <cstring>
 
@@ -22,7 +22,8 @@ namespace ege {
      *
      * @return VkResult of the buffer mapping call
      */
-    VkDeviceSize EgeBuffer::getAlignment(VkDeviceSize instanceSize, VkDeviceSize minOffsetAlignment) {
+    VkDeviceSize EgeBuffer::getAlignment(
+        VkDeviceSize instanceSize, VkDeviceSize minOffsetAlignment) {
         if (minOffsetAlignment > 0) {
             return (instanceSize + minOffsetAlignment - 1) & ~(minOffsetAlignment - 1);
         }
@@ -36,11 +37,11 @@ namespace ege {
         VkBufferUsageFlags usageFlags_,
         VkMemoryPropertyFlags memoryPropertyFlags_,
         VkDeviceSize minOffsetAlignment_)
-        : egeDevice{ device },
-        instanceSize{ instanceSize_ },
-        instanceCount{ instanceCount_ },
-        usageFlags{ usageFlags_ },
-        memoryPropertyFlags{ memoryPropertyFlags_ } {
+        : egeDevice{device},
+          instanceSize{instanceSize_},
+          instanceCount{instanceCount_},
+          usageFlags{usageFlags_},
+          memoryPropertyFlags{memoryPropertyFlags_} {
         alignmentSize = getAlignment(instanceSize_, minOffsetAlignment_);
         bufferSize = alignmentSize * instanceCount_;
         device.createBuffer(bufferSize, usageFlags_, memoryPropertyFlags_, buffer, memory);
@@ -53,10 +54,11 @@ namespace ege {
     }
 
     /**
-     * Map a memory range of this buffer. If successful, mapped points to the specified buffer range.
+     * Map a memory range of this buffer. If successful, mapped points to the specified buffer
+     * range.
      *
-     * @param size (Optional) Size of the memory range to map. Pass VK_WHOLE_SIZE to map the complete
-     * buffer range.
+     * @param size (Optional) Size of the memory range to map. Pass VK_WHOLE_SIZE to map the
+     * complete buffer range.
      * @param offset (Optional) Byte offset from beginning
      *
      * @return VkResult of the buffer mapping call
@@ -82,8 +84,8 @@ namespace ege {
      * Copies the specified data to the mapped buffer. Default value writes whole buffer range
      *
      * @param data Pointer to the data to copy
-     * @param size (Optional) Size of the data to copy. Pass VK_WHOLE_SIZE to flush the complete buffer
-     * range.
+     * @param size (Optional) Size of the data to copy. Pass VK_WHOLE_SIZE to flush the complete
+     * buffer range.
      * @param offset (Optional) Byte offset from beginning of mapped region
      *
      */
@@ -92,8 +94,7 @@ namespace ege {
 
         if (size == VK_WHOLE_SIZE) {
             memcpy(mapped, data, bufferSize);
-        }
-        else {
+        } else {
             char* memOffset = static_cast<char*>(mapped);
             memOffset += offset;
             memcpy(memOffset, data, size);
@@ -125,8 +126,8 @@ namespace ege {
      *
      * @note Only required for non-coherent memory
      *
-     * @param size (Optional) Size of the memory range to invalidate. Pass VK_WHOLE_SIZE to invalidate
-     * the complete buffer range.
+     * @param size (Optional) Size of the memory range to invalidate. Pass VK_WHOLE_SIZE to
+     * invalidate the complete buffer range.
      * @param offset (Optional) Byte offset from beginning
      *
      * @return VkResult of the invalidate call
@@ -157,7 +158,8 @@ namespace ege {
     }
 
     /**
-     * Copies "instanceSize" bytes of data to the mapped buffer at an offset of index * alignmentSize
+     * Copies "instanceSize" bytes of data to the mapped buffer at an offset of index *
+     * alignmentSize
      *
      * @param data Pointer to the data to copy
      * @param index Used in offset calculation
@@ -168,12 +170,15 @@ namespace ege {
     }
 
     /**
-     *  Flush the memory range at index * alignmentSize of the buffer to make it visible to the device
+     *  Flush the memory range at index * alignmentSize of the buffer to make it visible to the
+     * device
      *
      * @param index Used in offset calculation
      *
      */
-    VkResult EgeBuffer::flushIndex(uint32_t index) { return flush(alignmentSize, index * alignmentSize); }
+    VkResult EgeBuffer::flushIndex(uint32_t index) {
+        return flush(alignmentSize, index * alignmentSize);
+    }
 
     /**
      * Create a buffer info descriptor

@@ -19,6 +19,7 @@ namespace ege {
         uint32_t presentFamily;
         bool graphicsFamilyHasValue = false;
         bool presentFamilyHasValue = false;
+
         bool isComplete() { return graphicsFamilyHasValue && presentFamilyHasValue; }
     };
 
@@ -40,16 +41,27 @@ namespace ege {
         EgeDevice& operator=(EgeDevice&&) = delete;
 
         VkCommandPool getCommandPool() { return commandPool; }
+
         VkDevice device() const { return device_; }
+
         VkSurfaceKHR surface() { return surface_; }
+
         VkQueue graphicsQueue() { return graphicsQueue_; }
+
         VkQueue presentQueue() { return presentQueue_; }
 
-        SwapChainSupportDetails getSwapChainSupport() { return querySwapChainSupport(physicalDevice); }
+        SwapChainSupportDetails getSwapChainSupport() {
+            return querySwapChainSupport(physicalDevice);
+        }
+
         uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags memoryProperties);
+
         QueueFamilyIndices findPhysicalQueueFamilies() { return findQueueFamilies(physicalDevice); }
+
         VkFormat findSupportedFormat(
-            const std::vector<VkFormat>& candidates, VkImageTiling tiling, VkFormatFeatureFlags features);
+            const std::vector<VkFormat>& candidates,
+            VkImageTiling tiling,
+            VkFormatFeatureFlags features);
 
         // Buffer Helper Functions
         void createBuffer(
@@ -101,8 +113,8 @@ namespace ege {
         VkQueue graphicsQueue_;
         VkQueue presentQueue_;
 
-        const std::vector<const char*> validationLayers = { "VK_LAYER_KHRONOS_validation" };
-        const std::vector<const char*> deviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+        const std::vector<const char*> validationLayers = {"VK_LAYER_KHRONOS_validation"};
+        const std::vector<const char*> deviceExtensions = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     };
 
 }  // namespace ege

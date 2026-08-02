@@ -1,11 +1,11 @@
 #include "ege_model.hpp"
+
 #include "ege_utils.hpp"
 // libs
 #define TINYOBJLOADER_IMPLEMENTATION
-#include <tiny_obj_loader.h>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtx/hash.hpp>
-
+#include <tiny_obj_loader.h>
 
 #include <cassert>
 #include <cstring>
@@ -18,7 +18,7 @@
 #endif
 
 namespace std {
-    template <>
+    template<>
     struct hash<ege::EgeModel::Vertex> {
         size_t operator()(ege::EgeModel::Vertex const& vertex) const {
             size_t seed = 0;
@@ -30,16 +30,12 @@ namespace std {
 
 namespace ege {
 
-
-    EgeModel::EgeModel(EgeDevice& device, const EgeModel::Builder& builder) : egeDevice{ device } {
+    EgeModel::EgeModel(EgeDevice& device, const EgeModel::Builder& builder) : egeDevice{device} {
         createVertexBuffers(builder.vertices);
         createIndexBuffers(builder.indices);
     }
 
-
-    EgeModel::~EgeModel() {
- 
-    }
+    EgeModel::~EgeModel() {}
 
     std::unique_ptr<EgeModel> EgeModel::createModelFromFile(
         EgeDevice& device, const std::string& filepath) {
@@ -47,7 +43,6 @@ namespace ege {
         builder.loadModel(std::string{EGE_ASSET_ROOT} + "/" + filepath);
         return std::make_unique<EgeModel>(device, builder);
     }
-
 
     void EgeModel::createVertexBuffers(const std::vector<Vertex>& vertices) {
         vertexCount = static_cast<uint32_t>(vertices.size());
@@ -74,7 +69,6 @@ namespace ege {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         egeDevice.copyBuffer(stagingBuffer.getBuffer(), vertexBuffer->getBuffer(), bufferSize);
-
     }
 
     void EgeModel::createIndexBuffers(const std::vector<uint32_t>& indices) {
@@ -110,27 +104,23 @@ namespace ege {
         egeDevice.copyBuffer(stagingBuffer.getBuffer(), indexBuffer->getBuffer(), bufferSize);
     }
 
-
     void EgeModel::draw(VkCommandBuffer commandBuffer) {
         if (hasIndexBuffer) {
             vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
-        }
-        else {
+        } else {
             vkCmdDraw(commandBuffer, vertexCount, 1, 0, 0);
         }
     }
 
-
     void EgeModel::bind(VkCommandBuffer commandBuffer) {
-        VkBuffer buffers[] = { vertexBuffer->getBuffer() };
-        VkDeviceSize offsets[] = { 0 };
+        VkBuffer buffers[] = {vertexBuffer->getBuffer()};
+        VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
 
         if (hasIndexBuffer) {
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
         }
     }
-
 
     std::vector<VkVertexInputBindingDescription> EgeModel::Vertex::getBindingDescriptions() {
         std::vector<VkVertexInputBindingDescription> bindingDescriptions(1);
@@ -140,18 +130,19 @@ namespace ege {
         return bindingDescriptions;
     }
 
-
     std::vector<VkVertexInputAttributeDescription> EgeModel::Vertex::getAttributeDescriptions() {
         std::vector<VkVertexInputAttributeDescription> attributeDescriptions{};
 
-        attributeDescriptions.push_back({ 0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position) });
-        attributeDescriptions.push_back({ 1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color) });
-        attributeDescriptions.push_back({ 2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal) });
-        attributeDescriptions.push_back({ 3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv) });
+        attributeDescriptions.push_back(
+            {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, position)});
+        attributeDescriptions.push_back(
+            {1, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, color)});
+        attributeDescriptions.push_back(
+            {2, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(Vertex, normal)});
+        attributeDescriptions.push_back({3, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(Vertex, uv)});
 
         return attributeDescriptions;
     }
-
 
     void EgeModel::Builder::loadModel(const std::string& filepath) {
         tinyobj::attrib_t attrib;
@@ -215,21 +206,30 @@ namespace ege {
         // One quad per face. Faces do not share vertices because each carries its
         // own normal.
         const glm::vec3 faceNormals[6] = {
-            { 1.f,  0.f,  0.f}, {-1.f,  0.f,  0.f},
-            { 0.f,  1.f,  0.f}, { 0.f, -1.f,  0.f},
-            { 0.f,  0.f,  1.f}, { 0.f,  0.f, -1.f},
+            {1.f, 0.f, 0.f},
+            {-1.f, 0.f, 0.f},
+            {0.f, 1.f, 0.f},
+            {0.f, -1.f, 0.f},
+            {0.f, 0.f, 1.f},
+            {0.f, 0.f, -1.f},
         };
         // Tangent/bitangent pairs spanning each face, chosen so that
         // cross(tangent, bitangent) points along the face normal.
         const glm::vec3 faceTangents[6] = {
-            { 0.f,  0.f, -1.f}, { 0.f,  0.f,  1.f},
-            { 1.f,  0.f,  0.f}, { 1.f,  0.f,  0.f},
-            { 1.f,  0.f,  0.f}, {-1.f,  0.f,  0.f},
+            {0.f, 0.f, -1.f},
+            {0.f, 0.f, 1.f},
+            {1.f, 0.f, 0.f},
+            {1.f, 0.f, 0.f},
+            {1.f, 0.f, 0.f},
+            {-1.f, 0.f, 0.f},
         };
         const glm::vec3 faceBitangents[6] = {
-            { 0.f,  1.f,  0.f}, { 0.f,  1.f,  0.f},
-            { 0.f,  0.f, -1.f}, { 0.f,  0.f,  1.f},
-            { 0.f,  1.f,  0.f}, { 0.f,  1.f,  0.f},
+            {0.f, 1.f, 0.f},
+            {0.f, 1.f, 0.f},
+            {0.f, 0.f, -1.f},
+            {0.f, 0.f, 1.f},
+            {0.f, 1.f, 0.f},
+            {0.f, 1.f, 0.f},
         };
 
         for (uint32_t face = 0; face < 6; face++) {
@@ -330,4 +330,4 @@ namespace ege {
 
         return builder;
     }
-}
+}  // namespace ege

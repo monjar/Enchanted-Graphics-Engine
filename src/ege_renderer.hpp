@@ -1,63 +1,55 @@
 #pragma once
 
-#include "ege_window.hpp"
-#include "ege_swap_chain.hpp"
 #include "ege_model.hpp"
+#include "ege_swap_chain.hpp"
+#include "ege_window.hpp"
 
 #include <memory>
-
 #include <vector>
 
 namespace ege {
 
-	class EgeRenderer {
-	public:
+    class EgeRenderer {
+    public:
+        EgeRenderer(EgeWindow& window, EgeDevice& device);
+        ~EgeRenderer();
 
-		EgeRenderer(EgeWindow &window, EgeDevice &device);
-		~EgeRenderer();
+        // Delete copy constructor and operator1
+        EgeRenderer(const EgeRenderer& other) = delete;
+        EgeRenderer& operator=(const EgeRenderer&) = delete;
 
+        VkRenderPass getSwapChainRenderPass() const { return egeSwapChain->getRenderPass(); }
 
+        float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
 
-		//Delete copy constructor and operator1
-		EgeRenderer(const EgeRenderer& other) = delete;
-		EgeRenderer& operator = (const EgeRenderer&) = delete;
+        bool isFrameInProgress() const { return isFrameStarted; };
 
-		VkRenderPass getSwapChainRenderPass() const {
-			return egeSwapChain->getRenderPass();
-		}
+        VkCommandBuffer getCurrentCommandBuffer() const {
+            assert(isFrameStarted && "Cannot get command buffer when frame not in progress");
+            return commandBuffers[currentFrameIndex];
+        }
 
-		float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
+        uint32_t getFrameIndex() const {
+            assert(isFrameStarted && "Cannot get frame Index When not in progress");
+            return currentFrameIndex;
+        }
 
-		bool isFrameInProgress() const { return isFrameStarted; };
+        VkCommandBuffer beginFrame();
+        void endFrame();
+        void beginSwapChainRenderPass(VkCommandBuffer commandBuffer);
+        void endSwapChainRenderPass(VkCommandBuffer commandBuffer);
 
-		VkCommandBuffer getCurrentCommandBuffer() const {
-			assert(isFrameStarted && "Cannot get command buffer when frame not in progress");
-			return commandBuffers[currentFrameIndex];
-		}
-		uint32_t getFrameIndex() const {
-			assert(isFrameStarted && "Cannot get frame Index When not in progress");
-			return currentFrameIndex;
-		}
-		VkCommandBuffer beginFrame();
-		void endFrame();
-		void beginSwapChainRenderPass(VkCommandBuffer commandBuffer);
-		void endSwapChainRenderPass(VkCommandBuffer commandBuffer);
+    private:
+        void createCommandBuffers();
+        void freeCommandBuffers();
+        void recreateSwapChain();
 
-	private:
-
-		void createCommandBuffers();
-		void freeCommandBuffers();
-		void recreateSwapChain();
-
-
-		EgeWindow& egeWindow;
-		EgeDevice& egeDevice;
-		std::unique_ptr<EgeSwapChain> egeSwapChain;
-		std::vector<VkCommandBuffer> commandBuffers;
-		uint32_t currentImageIndex;
-		uint32_t currentFrameIndex{ 0 };
-		bool isFrameStarted{ false };
-
-
-	};
-}
+        EgeWindow& egeWindow;
+        EgeDevice& egeDevice;
+        std::unique_ptr<EgeSwapChain> egeSwapChain;
+        std::vector<VkCommandBuffer> commandBuffers;
+        uint32_t currentImageIndex;
+        uint32_t currentFrameIndex{0};
+        bool isFrameStarted{false};
+    };
+}  // namespace ege

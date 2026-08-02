@@ -13,7 +13,7 @@ namespace ege {
     public:
         class Builder {
         public:
-            Builder(EgeDevice& device) : egeDevice{ device } {}
+            Builder(EgeDevice& device) : egeDevice{device} {}
 
             Builder& addBinding(
                 uint32_t binding,
@@ -28,7 +28,8 @@ namespace ege {
         };
 
         EgeDescriptorSetLayout(
-            EgeDevice& egeDevice, std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> bindings);
+            EgeDevice& egeDevice,
+            std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> bindings);
         ~EgeDescriptorSetLayout();
         EgeDescriptorSetLayout(const EgeDescriptorSetLayout&) = delete;
         EgeDescriptorSetLayout& operator=(const EgeDescriptorSetLayout&) = delete;
@@ -47,7 +48,7 @@ namespace ege {
     public:
         class Builder {
         public:
-            Builder(EgeDevice& device) : egeDevice{ device } {}
+            Builder(EgeDevice& device) : egeDevice{device} {}
 
             Builder& addPoolSize(VkDescriptorType descriptorType, uint32_t count);
             Builder& setPoolFlags(VkDescriptorPoolCreateFlags flags);

@@ -6,12 +6,12 @@
 #include <vulkan/vulkan.h>
 
 namespace ege {
-	struct FrameInfo {
-		uint32_t frameIndex;
-		float frameTime;
-		VkCommandBuffer commandBuffer;
-		EgeCamera& camera;
-		VkDescriptorSet globalDescriptorSet;
-		EgeGameObject::Map& gameObjects;
-	};
+    struct FrameInfo {
+        uint32_t frameIndex;
+        float frameTime;
+        VkCommandBuffer commandBuffer;
+        EgeCamera& camera;
+        VkDescriptorSet globalDescriptorSet;
+        EgeGameObject::Map& gameObjects;
+    };
 }  // namespace ege

@@ -12,79 +12,91 @@
 
 namespace ege {
 
-class EgeSwapChain {
- public:
-  static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+    class EgeSwapChain {
+    public:
+        static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-  EgeSwapChain(EgeDevice &deviceRef, VkExtent2D windowExtent);
-  EgeSwapChain(EgeDevice &deviceRef, VkExtent2D windowExtent, std::shared_ptr<EgeSwapChain> previousChain);
-  ~EgeSwapChain();
+        EgeSwapChain(EgeDevice& deviceRef, VkExtent2D windowExtent);
+        EgeSwapChain(
+            EgeDevice& deviceRef,
+            VkExtent2D windowExtent,
+            std::shared_ptr<EgeSwapChain> previousChain);
+        ~EgeSwapChain();
 
-  EgeSwapChain(const EgeSwapChain &) = delete;
-  EgeSwapChain& operator=(const EgeSwapChain &) = delete;
+        EgeSwapChain(const EgeSwapChain&) = delete;
+        EgeSwapChain& operator=(const EgeSwapChain&) = delete;
 
-  VkFramebuffer getFrameBuffer(uint32_t index) const { return swapChainFramebuffers[index]; }
-  VkRenderPass getRenderPass() const { return renderPass; }
-  VkImageView getImageView(uint32_t index) const { return swapChainImageViews[index]; }
-  size_t imageCount() const { return swapChainImages.size(); }
-  VkFormat getSwapChainImageFormat() const { return swapChainImageFormat; }
-  VkExtent2D getSwapChainExtent() const { return swapChainExtent; }
-  uint32_t width() { return swapChainExtent.width; }
-  uint32_t height() { return swapChainExtent.height; }
+        VkFramebuffer getFrameBuffer(uint32_t index) const { return swapChainFramebuffers[index]; }
 
-  float extentAspectRatio() {
-    return static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height);
-  }
-  VkFormat findDepthFormat();
+        VkRenderPass getRenderPass() const { return renderPass; }
 
-  VkResult acquireNextImage(uint32_t *imageIndex);
-  VkResult submitCommandBuffers(const VkCommandBuffer *buffers, uint32_t *imageIndex);
+        VkImageView getImageView(uint32_t index) const { return swapChainImageViews[index]; }
 
-  bool compareSwapFormats(const EgeSwapChain& other) const {
-      return other.swapChainDepthFormat == swapChainDepthFormat && other.swapChainImageFormat == swapChainImageFormat;
-  }
+        size_t imageCount() const { return swapChainImages.size(); }
 
- private:
-  void init();
-  void createSwapChain();
-  void createImageViews();
-  void createDepthResources();
-  void createRenderPass();
-  void createFramebuffers();
-  void createSyncObjects();
+        VkFormat getSwapChainImageFormat() const { return swapChainImageFormat; }
 
-  // Helper functions
-  VkSurfaceFormatKHR chooseSwapSurfaceFormat(
-      const std::vector<VkSurfaceFormatKHR> &availableFormats);
-  VkPresentModeKHR chooseSwapPresentMode(
-      const std::vector<VkPresentModeKHR> &availablePresentModes);
-  VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR &capabilities);
+        VkExtent2D getSwapChainExtent() const { return swapChainExtent; }
 
-  VkFormat swapChainImageFormat;
-  VkFormat swapChainDepthFormat;
-  VkExtent2D swapChainExtent;
+        uint32_t width() { return swapChainExtent.width; }
 
-  std::vector<VkFramebuffer> swapChainFramebuffers;
-  VkRenderPass renderPass;
+        uint32_t height() { return swapChainExtent.height; }
 
-  std::vector<VkImage> depthImages;
-  std::vector<VkDeviceMemory> depthImageMemorys;
-  std::vector<VkImageView> depthImageViews;
-  std::vector<VkImage> swapChainImages;
-  std::vector<VkImageView> swapChainImageViews;
+        float extentAspectRatio() {
+            return static_cast<float>(swapChainExtent.width) /
+                   static_cast<float>(swapChainExtent.height);
+        }
 
-  EgeDevice&device;
-  VkExtent2D windowExtent;
+        VkFormat findDepthFormat();
 
-  VkSwapchainKHR swapChain;
-  std::shared_ptr<EgeSwapChain> oldSwapChain;
+        VkResult acquireNextImage(uint32_t* imageIndex);
+        VkResult submitCommandBuffers(const VkCommandBuffer* buffers, uint32_t* imageIndex);
 
+        bool compareSwapFormats(const EgeSwapChain& other) const {
+            return other.swapChainDepthFormat == swapChainDepthFormat &&
+                   other.swapChainImageFormat == swapChainImageFormat;
+        }
 
-  std::vector<VkSemaphore> imageAvailableSemaphores;
-  std::vector<VkSemaphore> renderFinishedSemaphores;
-  std::vector<VkFence> inFlightFences;
-  std::vector<VkFence> imagesInFlight;
-  size_t currentFrame = 0;
-};
+    private:
+        void init();
+        void createSwapChain();
+        void createImageViews();
+        void createDepthResources();
+        void createRenderPass();
+        void createFramebuffers();
+        void createSyncObjects();
+
+        // Helper functions
+        VkSurfaceFormatKHR chooseSwapSurfaceFormat(
+            const std::vector<VkSurfaceFormatKHR>& availableFormats);
+        VkPresentModeKHR chooseSwapPresentMode(
+            const std::vector<VkPresentModeKHR>& availablePresentModes);
+        VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
+
+        VkFormat swapChainImageFormat;
+        VkFormat swapChainDepthFormat;
+        VkExtent2D swapChainExtent;
+
+        std::vector<VkFramebuffer> swapChainFramebuffers;
+        VkRenderPass renderPass;
+
+        std::vector<VkImage> depthImages;
+        std::vector<VkDeviceMemory> depthImageMemorys;
+        std::vector<VkImageView> depthImageViews;
+        std::vector<VkImage> swapChainImages;
+        std::vector<VkImageView> swapChainImageViews;
+
+        EgeDevice& device;
+        VkExtent2D windowExtent;
+
+        VkSwapchainKHR swapChain;
+        std::shared_ptr<EgeSwapChain> oldSwapChain;
+
+        std::vector<VkSemaphore> imageAvailableSemaphores;
+        std::vector<VkSemaphore> renderFinishedSemaphores;
+        std::vector<VkFence> inFlightFences;
+        std::vector<VkFence> imagesInFlight;
+        size_t currentFrame = 0;
+    };
 
 }  // namespace ege
