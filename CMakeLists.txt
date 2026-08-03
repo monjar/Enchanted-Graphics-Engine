@@ -7,11 +7,8 @@ project(Enchanted
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# Emit compile_commands.json for clangd, clang-tidy and editor tooling.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Default to Release so an unqualified `cmake -S . -B build` does not silently
-# produce an unoptimised binary.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS
@@ -24,35 +21,54 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+option(EGE_BUILD_TESTS "Build the test suite" ON)
+
 include(CompilerWarnings)
 include(Dependencies)
 include(Shaders)
 
 # ---------------------------------------------------------------------------
-# Engine executable
+# Enchanted - the engine, as a library
+#
+# Everything except the entry point lives here, so that the application, the
+# tests and eventually the editor all link the same code rather than each
+# recompiling it.
 # ---------------------------------------------------------------------------
 file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
-add_executable(EnchantedEngine ${ENGINE_SOURCES})
+add_library(Enchanted STATIC ${ENGINE_SOURCES})
+add_library(ege::engine ALIAS Enchanted)
 
-target_include_directories(EnchantedEngine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(Enchanted PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 
-target_link_libraries(EnchantedEngine PRIVATE
+target_link_libraries(Enchanted PUBLIC
   Vulkan::Vulkan
   ege::glfw
   ege::glm
   ege::tinyobj)
 
-target_compile_definitions(EnchantedEngine PRIVATE
+target_compile_definitions(Enchanted PRIVATE
   EGE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
+ege_set_target_warnings(Enchanted WARNINGS_AS_ERRORS)
+
+ege_add_shaders(Enchanted "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
+
+# ---------------------------------------------------------------------------
+# EnchantedEngine - the application
+# ---------------------------------------------------------------------------
+add_executable(EnchantedEngine app/main.cpp)
+target_link_libraries(EnchantedEngine PRIVATE ege::engine)
 ege_set_target_warnings(EnchantedEngine WARNINGS_AS_ERRORS)
 
-# Compiles the shaders, makes them a build dependency, and defines
-# EGE_SHADER_ROOT on the target.
-ege_add_shaders(EnchantedEngine "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
-
-# Visual Studio otherwise launches the debugger from the build directory.
 set_property(TARGET EnchantedEngine
   PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+if(EGE_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
+endif()
