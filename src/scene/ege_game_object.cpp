@@ -1,4 +1,4 @@
-#include "ege_game_object.hpp"
+#include "scene/ege_game_object.hpp"
 
 namespace ege {
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ege_window.hpp"
+#include "platform/ege_window.hpp"
 
 // std lib headers
 #include <string>

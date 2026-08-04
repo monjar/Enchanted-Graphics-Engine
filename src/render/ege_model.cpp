@@ -1,6 +1,6 @@
-#include "ege_model.hpp"
+#include "render/ege_model.hpp"
 
-#include "ege_utils.hpp"
+#include "core/ege_utils.hpp"
 // libs
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <glm/gtc/constants.hpp>

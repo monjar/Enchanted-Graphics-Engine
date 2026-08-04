@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ege_engine_device.hpp"
+#include "rhi/ege_engine_device.hpp"
 
 // vulkan headers
 #include <vulkan/vulkan.h>

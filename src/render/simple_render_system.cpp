@@ -1,4 +1,4 @@
-#include "simple_render_system.hpp"
+#include "render/simple_render_system.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>

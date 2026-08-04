@@ -1,4 +1,4 @@
-#include "ege_window.hpp"
+#include "platform/ege_window.hpp"
 
 #include <iostream>
 #include <stdexcept>

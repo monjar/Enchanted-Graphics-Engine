@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ege_buffer.hpp"
-#include "ege_engine_device.hpp"
+#include "rhi/ege_buffer.hpp"
+#include "rhi/ege_engine_device.hpp"
 
 #include <glm/glm.hpp>
 

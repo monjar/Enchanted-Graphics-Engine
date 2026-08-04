@@ -1,4 +1,4 @@
-#include "ege_renderer.hpp"
+#include "render/ege_renderer.hpp"
 
 #include <array>
 #include <stdexcept>

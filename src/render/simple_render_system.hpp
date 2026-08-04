@@ -1,9 +1,9 @@
 #pragma once
 
-#include "ege_camera.hpp"
-#include "ege_frame_info.hpp"
-#include "ege_game_object.hpp"
-#include "ege_pipeline.hpp"
+#include "render/ege_camera.hpp"
+#include "render/ege_frame_info.hpp"
+#include "scene/ege_game_object.hpp"
+#include "rhi/ege_pipeline.hpp"
 
 #include <memory>
 #include <vector>

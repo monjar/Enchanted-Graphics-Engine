@@ -5,7 +5,7 @@
  * https://github.com/SaschaWillems/Vulkan/blob/master/base/VulkanBuffer.h
  */
 
-#include "ege_buffer.hpp"
+#include "rhi/ege_buffer.hpp"
 
 // std
 #include <cassert>

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "ege_descriptors.hpp"
-#include "ege_game_object.hpp"
-#include "ege_model.hpp"
-#include "ege_renderer.hpp"
-#include "ege_window.hpp"
+#include "rhi/ege_descriptors.hpp"
+#include "scene/ege_game_object.hpp"
+#include "render/ege_model.hpp"
+#include "render/ege_renderer.hpp"
+#include "platform/ege_window.hpp"
 
 #include <memory>
 #include <vector>

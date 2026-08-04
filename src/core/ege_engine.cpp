@@ -1,9 +1,9 @@
-#include "ege_engine.hpp"
+#include "core/ege_engine.hpp"
 
-#include "ege_buffer.hpp"
-#include "ege_camera.hpp"
-#include "keyboard_movement_controller.hpp"
-#include "simple_render_system.hpp"
+#include "rhi/ege_buffer.hpp"
+#include "render/ege_camera.hpp"
+#include "platform/keyboard_movement_controller.hpp"
+#include "render/simple_render_system.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>

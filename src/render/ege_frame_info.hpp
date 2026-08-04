@@ -1,7 +1,7 @@
 #pragma once
 
-#include "ege_camera.hpp"
-#include "ege_game_object.hpp"
+#include "render/ege_camera.hpp"
+#include "scene/ege_game_object.hpp"
 // lib
 #include <vulkan/vulkan.h>
 
