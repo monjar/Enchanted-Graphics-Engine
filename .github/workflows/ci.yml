@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: clang-format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check formatting
+        run: |
+          clang-format --version
+          clang-format --dry-run --Werror \
+            $(git ls-files 'src/*.cpp' 'src/*.hpp' 'app/*.cpp' 'tests/*.cpp')
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux / Release
+            os: ubuntu-24.04
+            preset: default
+          - name: Linux / Debug
+            os: ubuntu-24.04
+            preset: debug
+          - name: Linux / ASan + UBSan
+            os: ubuntu-24.04
+            preset: asan
+          - name: Linux / C++20
+            os: ubuntu-24.04
+            preset: cxx20
+          - name: Windows / Release
+            os: windows-2022
+            preset: default
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libvulkan-dev vulkan-validationlayers glslang-tools \
+            mesa-vulkan-drivers xorg-dev libwayland-dev libxkbcommon-dev \
+            xvfb
+
+      - name: Install Vulkan SDK (Windows)
+        if: runner.os == 'Windows'
+        uses: humbletim/install-vulkan-sdk@v1.2
+        with:
+          version: latest
+          cache: true
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }} --parallel
+
+      - name: Test
+        working-directory: build/${{ matrix.preset }}
+        run: ctest --output-on-failure
+
+      # Renders the demo scene under lavapipe with the validation layers on and
+      # fails on any validation message. This is what catches Vulkan misuse that
+      # happens to work on one driver but is not actually legal.
+      - name: Headless render smoke test
+        if: runner.os == 'Linux'
+        env:
+          VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
+          VK_LOADER_LAYERS_ENABLE: VK_LAYER_KHRONOS_validation
+          ASAN_OPTIONS: detect_leaks=0
+        run: |
+          set -o pipefail
+          timeout 120 xvfb-run -a --server-args="-screen 0 800x600x24" \
+            ./scripts/run_for.sh 8 ./build/${{ matrix.preset }}/bin/EnchantedEngine \
+            2>&1 | tee render.log
+
+          if grep -qiE "validation layer:.*(Error|Warning)" render.log; then
+            echo "::error::Vulkan validation layer reported a problem"
+            grep -iE "validation layer:" render.log
+            exit 1
+          fi
+          echo "Rendered with no validation messages."
