@@ -19,8 +19,8 @@
 
 namespace std {
     template<>
-    struct hash<ege::EgeModel::Vertex> {
-        size_t operator()(ege::EgeModel::Vertex const& vertex) const {
+    struct hash<ege::Model::Vertex> {
+        size_t operator()(ege::Model::Vertex const& vertex) const {
             size_t seed = 0;
             ege::hashCombine(seed, vertex.position, vertex.color, vertex.normal, vertex.uv);
             return seed;
@@ -30,28 +30,27 @@ namespace std {
 
 namespace ege {
 
-    EgeModel::EgeModel(EgeDevice& device, const EgeModel::Builder& builder) : egeDevice{device} {
+    Model::Model(Device& deviceRef, const Model::Builder& builder) : device{deviceRef} {
         createVertexBuffers(builder.vertices);
         createIndexBuffers(builder.indices);
     }
 
-    EgeModel::~EgeModel() {}
+    Model::~Model() {}
 
-    std::unique_ptr<EgeModel> EgeModel::createModelFromFile(
-        EgeDevice& device, const std::string& filepath) {
+    std::unique_ptr<Model> Model::createModelFromFile(Device& device, const std::string& filepath) {
         Builder builder{};
         builder.loadModel(std::string{EGE_ASSET_ROOT} + "/" + filepath);
-        return std::make_unique<EgeModel>(device, builder);
+        return std::make_unique<Model>(device, builder);
     }
 
-    void EgeModel::createVertexBuffers(const std::vector<Vertex>& vertices) {
+    void Model::createVertexBuffers(const std::vector<Vertex>& vertices) {
         vertexCount = static_cast<uint32_t>(vertices.size());
         assert(vertexCount >= 3 && "Vertex count must be at least 3");
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertexCount;
         uint32_t vertexSize = sizeof(vertices[0]);
 
-        EgeBuffer stagingBuffer{
-            egeDevice,
+        Buffer stagingBuffer{
+            device,
             vertexSize,
             vertexCount,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -61,17 +60,17 @@ namespace ege {
         stagingBuffer.map();
         stagingBuffer.writeToBuffer(const_cast<void*>(static_cast<const void*>(vertices.data())));
 
-        vertexBuffer = std::make_unique<EgeBuffer>(
-            egeDevice,
+        vertexBuffer = std::make_unique<Buffer>(
+            device,
             vertexSize,
             vertexCount,
             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        egeDevice.copyBuffer(stagingBuffer.getBuffer(), vertexBuffer->getBuffer(), bufferSize);
+        device.copyBuffer(stagingBuffer.getBuffer(), vertexBuffer->getBuffer(), bufferSize);
     }
 
-    void EgeModel::createIndexBuffers(const std::vector<uint32_t>& indices) {
+    void Model::createIndexBuffers(const std::vector<uint32_t>& indices) {
         indexCount = static_cast<uint32_t>(indices.size());
         hasIndexBuffer = indexCount > 0;
 
@@ -83,8 +82,8 @@ namespace ege {
 
         uint32_t indexSize = sizeof(indices[0]);
 
-        EgeBuffer stagingBuffer{
-            egeDevice,
+        Buffer stagingBuffer{
+            device,
             indexSize,
             indexCount,
             VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
@@ -94,17 +93,17 @@ namespace ege {
         stagingBuffer.map();
         stagingBuffer.writeToBuffer(const_cast<void*>(static_cast<const void*>(indices.data())));
 
-        indexBuffer = std::make_unique<EgeBuffer>(
-            egeDevice,
+        indexBuffer = std::make_unique<Buffer>(
+            device,
             indexSize,
             indexCount,
             VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
-        egeDevice.copyBuffer(stagingBuffer.getBuffer(), indexBuffer->getBuffer(), bufferSize);
+        device.copyBuffer(stagingBuffer.getBuffer(), indexBuffer->getBuffer(), bufferSize);
     }
 
-    void EgeModel::draw(VkCommandBuffer commandBuffer) {
+    void Model::draw(VkCommandBuffer commandBuffer) {
         if (hasIndexBuffer) {
             vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
         } else {
@@ -112,7 +111,7 @@ namespace ege {
         }
     }
 
-    void EgeModel::bind(VkCommandBuffer commandBuffer) {
+    void Model::bind(VkCommandBuffer commandBuffer) {
         VkBuffer buffers[] = {vertexBuffer->getBuffer()};
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
@@ -122,7 +121,7 @@ namespace ege {
         }
     }
 
-    std::vector<VkVertexInputBindingDescription> EgeModel::Vertex::getBindingDescriptions() {
+    std::vector<VkVertexInputBindingDescription> Model::Vertex::getBindingDescriptions() {
         std::vector<VkVertexInputBindingDescription> bindingDescriptions(1);
         bindingDescriptions[0].binding = 0;
         bindingDescriptions[0].stride = sizeof(Vertex);
@@ -130,7 +129,7 @@ namespace ege {
         return bindingDescriptions;
     }
 
-    std::vector<VkVertexInputAttributeDescription> EgeModel::Vertex::getAttributeDescriptions() {
+    std::vector<VkVertexInputAttributeDescription> Model::Vertex::getAttributeDescriptions() {
         std::vector<VkVertexInputAttributeDescription> attributeDescriptions{};
 
         attributeDescriptions.push_back(
@@ -144,7 +143,7 @@ namespace ege {
         return attributeDescriptions;
     }
 
-    void EgeModel::Builder::loadModel(const std::string& filepath) {
+    void Model::Builder::loadModel(const std::string& filepath) {
         tinyobj::attrib_t attrib;
         std::vector<tinyobj::shape_t> shapes;
         std::vector<tinyobj::material_t> materials;
@@ -200,7 +199,7 @@ namespace ege {
         }
     }
 
-    EgeModel::Builder EgeModel::Builder::box() {
+    Model::Builder Model::Builder::box() {
         Builder builder{};
 
         // One quad per face. Faces do not share vertices because each carries its
@@ -257,7 +256,7 @@ namespace ege {
         return builder;
     }
 
-    EgeModel::Builder EgeModel::Builder::plane() {
+    Model::Builder Model::Builder::plane() {
         Builder builder{};
 
         // Unit quad in the XZ plane, facing +Y.
@@ -280,8 +279,7 @@ namespace ege {
         return builder;
     }
 
-    EgeModel::Builder EgeModel::Builder::sphere(
-        uint32_t latitudeSegments, uint32_t longitudeSegments) {
+    Model::Builder Model::Builder::sphere(uint32_t latitudeSegments, uint32_t longitudeSegments) {
         Builder builder{};
 
         assert(latitudeSegments >= 2 && "sphere needs at least 2 latitude segments");

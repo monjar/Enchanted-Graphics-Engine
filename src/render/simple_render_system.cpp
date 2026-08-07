@@ -15,14 +15,14 @@ namespace ege {
     };
 
     SimpleRenderSystem::SimpleRenderSystem(
-        EgeDevice& device, VkRenderPass renderPass, VkDescriptorSetLayout globalSetLayout)
-        : egeDevice{device} {
+        Device& deviceRef, VkRenderPass renderPass, VkDescriptorSetLayout globalSetLayout)
+        : device{deviceRef} {
         createPipelineLayout(globalSetLayout);
         createPipeline(renderPass);
     }
 
     SimpleRenderSystem::~SimpleRenderSystem() {
-        vkDestroyPipelineLayout(egeDevice.device(), pipelineLayout, nullptr);
+        vkDestroyPipelineLayout(device.device(), pipelineLayout, nullptr);
     }
 
     void SimpleRenderSystem::createPipelineLayout(VkDescriptorSetLayout globalSetLayout) {
@@ -39,7 +39,7 @@ namespace ege {
         pipelineLayoutInfo.pushConstantRangeCount = 1;
         pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
         if (vkCreatePipelineLayout(
-                egeDevice.device(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
+                device.device(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
             throw std::runtime_error("failed to create pipeline layout!");
         }
     }
@@ -47,15 +47,15 @@ namespace ege {
     void SimpleRenderSystem::createPipeline(VkRenderPass renderPass) {
         assert(pipelineLayout != nullptr && "Cannot create pipeline before pipeline layout");
         PipelineConfigInfo pipelineConfig{};
-        EgePipeline::defaultPipelineConfigInfo(pipelineConfig);
+        Pipeline::defaultPipelineConfigInfo(pipelineConfig);
         pipelineConfig.renderPass = renderPass;
         pipelineConfig.pipelineLayout = pipelineLayout;
-        egePipeline = std::make_unique<EgePipeline>(
-            egeDevice, "simple_shader.vert.spv", "simple_shader.frag.spv", pipelineConfig);
+        pipeline = std::make_unique<Pipeline>(
+            device, "simple_shader.vert.spv", "simple_shader.frag.spv", pipelineConfig);
     }
 
     void SimpleRenderSystem::renderGameObjects(FrameInfo& frameInfo) {
-        egePipeline->bind(frameInfo.commandBuffer);
+        pipeline->bind(frameInfo.commandBuffer);
 
         vkCmdBindDescriptorSets(
             frameInfo.commandBuffer,

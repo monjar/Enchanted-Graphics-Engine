@@ -7,15 +7,15 @@
 
 namespace ege {
 
-    class EgeWindow {
+    class Window {
     public:
-        EgeWindow(int w, int h, std::string name);
-        ~EgeWindow();
+        Window(int w, int h, std::string name);
+        ~Window();
 
-        // Delete copy constructor and operator because we want the relation between EgeWindow and
+        // Delete copy constructor and operator because we want the relation between Window and
         // glfWindow to be 1 to 1
-        EgeWindow(const EgeWindow& other) = delete;
-        EgeWindow& operator=(const EgeWindow&) = delete;
+        Window(const Window& other) = delete;
+        Window& operator=(const Window&) = delete;
 
         bool shouldClose() { return glfwWindowShouldClose(window); }
 

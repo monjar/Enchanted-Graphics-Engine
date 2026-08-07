@@ -8,7 +8,7 @@ namespace ege {
 
     // *************** Descriptor Set Layout Builder *********************
 
-    EgeDescriptorSetLayout::Builder& EgeDescriptorSetLayout::Builder::addBinding(
+    DescriptorSetLayout::Builder& DescriptorSetLayout::Builder::addBinding(
         uint32_t binding,
         VkDescriptorType descriptorType,
         VkShaderStageFlags stageFlags,
@@ -23,16 +23,16 @@ namespace ege {
         return *this;
     }
 
-    std::unique_ptr<EgeDescriptorSetLayout> EgeDescriptorSetLayout::Builder::build() const {
-        return std::make_unique<EgeDescriptorSetLayout>(egeDevice, bindings);
+    std::unique_ptr<DescriptorSetLayout> DescriptorSetLayout::Builder::build() const {
+        return std::make_unique<DescriptorSetLayout>(device, bindings);
     }
 
     // *************** Descriptor Set Layout *********************
 
-    EgeDescriptorSetLayout::EgeDescriptorSetLayout(
-        EgeDevice& device,
+    DescriptorSetLayout::DescriptorSetLayout(
+        Device& deviceRef,
         std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> layoutBindings)
-        : egeDevice{device}, bindings{std::move(layoutBindings)} {
+        : device{deviceRef}, bindings{std::move(layoutBindings)} {
         std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings{};
         for (auto kv : bindings) {
             setLayoutBindings.push_back(kv.second);
@@ -44,47 +44,47 @@ namespace ege {
         descriptorSetLayoutInfo.pBindings = setLayoutBindings.data();
 
         if (vkCreateDescriptorSetLayout(
-                egeDevice.device(), &descriptorSetLayoutInfo, nullptr, &descriptorSetLayout) !=
+                device.device(), &descriptorSetLayoutInfo, nullptr, &descriptorSetLayout) !=
             VK_SUCCESS) {
             throw std::runtime_error("failed to create descriptor set layout!");
         }
     }
 
-    EgeDescriptorSetLayout::~EgeDescriptorSetLayout() {
-        vkDestroyDescriptorSetLayout(egeDevice.device(), descriptorSetLayout, nullptr);
+    DescriptorSetLayout::~DescriptorSetLayout() {
+        vkDestroyDescriptorSetLayout(device.device(), descriptorSetLayout, nullptr);
     }
 
     // *************** Descriptor Pool Builder *********************
 
-    EgeDescriptorPool::Builder& EgeDescriptorPool::Builder::addPoolSize(
+    DescriptorPool::Builder& DescriptorPool::Builder::addPoolSize(
         VkDescriptorType descriptorType, uint32_t count) {
         poolSizes.push_back({descriptorType, count});
         return *this;
     }
 
-    EgeDescriptorPool::Builder& EgeDescriptorPool::Builder::setPoolFlags(
+    DescriptorPool::Builder& DescriptorPool::Builder::setPoolFlags(
         VkDescriptorPoolCreateFlags flags) {
         poolFlags = flags;
         return *this;
     }
 
-    EgeDescriptorPool::Builder& EgeDescriptorPool::Builder::setMaxSets(uint32_t count) {
+    DescriptorPool::Builder& DescriptorPool::Builder::setMaxSets(uint32_t count) {
         maxSets = count;
         return *this;
     }
 
-    std::unique_ptr<EgeDescriptorPool> EgeDescriptorPool::Builder::build() const {
-        return std::make_unique<EgeDescriptorPool>(egeDevice, maxSets, poolFlags, poolSizes);
+    std::unique_ptr<DescriptorPool> DescriptorPool::Builder::build() const {
+        return std::make_unique<DescriptorPool>(device, maxSets, poolFlags, poolSizes);
     }
 
     // *************** Descriptor Pool *********************
 
-    EgeDescriptorPool::EgeDescriptorPool(
-        EgeDevice& device,
+    DescriptorPool::DescriptorPool(
+        Device& deviceRef,
         uint32_t maxSets,
         VkDescriptorPoolCreateFlags poolFlags,
         const std::vector<VkDescriptorPoolSize>& poolSizes)
-        : egeDevice{device} {
+        : device{deviceRef} {
         VkDescriptorPoolCreateInfo descriptorPoolInfo{};
         descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         descriptorPoolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
@@ -93,16 +93,16 @@ namespace ege {
         descriptorPoolInfo.flags = poolFlags;
 
         if (vkCreateDescriptorPool(
-                egeDevice.device(), &descriptorPoolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
+                device.device(), &descriptorPoolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
             throw std::runtime_error("failed to create descriptor pool!");
         }
     }
 
-    EgeDescriptorPool::~EgeDescriptorPool() {
-        vkDestroyDescriptorPool(egeDevice.device(), descriptorPool, nullptr);
+    DescriptorPool::~DescriptorPool() {
+        vkDestroyDescriptorPool(device.device(), descriptorPool, nullptr);
     }
 
-    bool EgeDescriptorPool::allocateDescriptor(
+    bool DescriptorPool::allocateDescriptor(
         const VkDescriptorSetLayout descriptorSetLayout, VkDescriptorSet& descriptor) const {
         VkDescriptorSetAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -112,31 +112,30 @@ namespace ege {
 
         // Might want to create a "DescriptorPoolManager" class that handles this case, and builds
         // a new pool whenever an old pool fills up. But this is beyond our current scope
-        if (vkAllocateDescriptorSets(egeDevice.device(), &allocInfo, &descriptor) != VK_SUCCESS) {
+        if (vkAllocateDescriptorSets(device.device(), &allocInfo, &descriptor) != VK_SUCCESS) {
             return false;
         }
         return true;
     }
 
-    void EgeDescriptorPool::freeDescriptors(std::vector<VkDescriptorSet>& descriptors) const {
+    void DescriptorPool::freeDescriptors(std::vector<VkDescriptorSet>& descriptors) const {
         vkFreeDescriptorSets(
-            egeDevice.device(),
+            device.device(),
             descriptorPool,
             static_cast<uint32_t>(descriptors.size()),
             descriptors.data());
     }
 
-    void EgeDescriptorPool::resetPool() {
-        vkResetDescriptorPool(egeDevice.device(), descriptorPool, 0);
+    void DescriptorPool::resetPool() {
+        vkResetDescriptorPool(device.device(), descriptorPool, 0);
     }
 
     // *************** Descriptor Writer *********************
 
-    EgeDescriptorWriter::EgeDescriptorWriter(
-        EgeDescriptorSetLayout& layout, EgeDescriptorPool& descriptorPool)
+    DescriptorWriter::DescriptorWriter(DescriptorSetLayout& layout, DescriptorPool& descriptorPool)
         : setLayout{layout}, pool{descriptorPool} {}
 
-    EgeDescriptorWriter& EgeDescriptorWriter::writeBuffer(
+    DescriptorWriter& DescriptorWriter::writeBuffer(
         uint32_t binding, VkDescriptorBufferInfo* bufferInfo) {
         assert(
             setLayout.bindings.count(binding) == 1 && "Layout does not contain specified binding");
@@ -158,7 +157,7 @@ namespace ege {
         return *this;
     }
 
-    EgeDescriptorWriter& EgeDescriptorWriter::writeImage(
+    DescriptorWriter& DescriptorWriter::writeImage(
         uint32_t binding, VkDescriptorImageInfo* imageInfo) {
         assert(
             setLayout.bindings.count(binding) == 1 && "Layout does not contain specified binding");
@@ -180,7 +179,7 @@ namespace ege {
         return *this;
     }
 
-    bool EgeDescriptorWriter::build(VkDescriptorSet& set) {
+    bool DescriptorWriter::build(VkDescriptorSet& set) {
         bool success = pool.allocateDescriptor(setLayout.getDescriptorSetLayout(), set);
         if (!success) {
             return false;
@@ -189,16 +188,12 @@ namespace ege {
         return true;
     }
 
-    void EgeDescriptorWriter::overwrite(VkDescriptorSet& set) {
+    void DescriptorWriter::overwrite(VkDescriptorSet& set) {
         for (auto& write : writes) {
             write.dstSet = set;
         }
         vkUpdateDescriptorSets(
-            pool.egeDevice.device(),
-            static_cast<uint32_t>(writes.size()),
-            writes.data(),
-            0,
-            nullptr);
+            pool.device.device(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
     }
 
 }  // namespace ege

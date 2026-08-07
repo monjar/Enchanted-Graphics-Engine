@@ -12,19 +12,17 @@
 
 namespace ege {
 
-    class EgeSwapChain {
+    class SwapChain {
     public:
         static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-        EgeSwapChain(EgeDevice& deviceRef, VkExtent2D windowExtent);
-        EgeSwapChain(
-            EgeDevice& deviceRef,
-            VkExtent2D windowExtent,
-            std::shared_ptr<EgeSwapChain> previousChain);
-        ~EgeSwapChain();
+        SwapChain(Device& deviceRef, VkExtent2D windowExtent);
+        SwapChain(
+            Device& deviceRef, VkExtent2D windowExtent, std::shared_ptr<SwapChain> previousChain);
+        ~SwapChain();
 
-        EgeSwapChain(const EgeSwapChain&) = delete;
-        EgeSwapChain& operator=(const EgeSwapChain&) = delete;
+        SwapChain(const SwapChain&) = delete;
+        SwapChain& operator=(const SwapChain&) = delete;
 
         VkFramebuffer getFrameBuffer(uint32_t index) const { return swapChainFramebuffers[index]; }
 
@@ -52,7 +50,7 @@ namespace ege {
         VkResult acquireNextImage(uint32_t* imageIndex);
         VkResult submitCommandBuffers(const VkCommandBuffer* buffers, uint32_t* imageIndex);
 
-        bool compareSwapFormats(const EgeSwapChain& other) const {
+        bool compareSwapFormats(const SwapChain& other) const {
             return other.swapChainDepthFormat == swapChainDepthFormat &&
                    other.swapChainImageFormat == swapChainImageFormat;
         }
@@ -86,11 +84,11 @@ namespace ege {
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
 
-        EgeDevice& device;
+        Device& device;
         VkExtent2D windowExtent;
 
         VkSwapchainKHR swapChain;
-        std::shared_ptr<EgeSwapChain> oldSwapChain;
+        std::shared_ptr<SwapChain> oldSwapChain;
 
         std::vector<VkSemaphore> imageAvailableSemaphores;
         std::vector<VkSemaphore> renderFinishedSemaphores;

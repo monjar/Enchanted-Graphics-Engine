@@ -23,7 +23,7 @@ namespace ege {
         bool isComplete() { return graphicsFamilyHasValue && presentFamilyHasValue; }
     };
 
-    class EgeDevice {
+    class Device {
     public:
 #ifdef NDEBUG
         const bool enableValidationLayers = false;
@@ -31,14 +31,14 @@ namespace ege {
         const bool enableValidationLayers = true;
 #endif
 
-        EgeDevice(EgeWindow& window);
-        ~EgeDevice();
+        Device(Window& window);
+        ~Device();
 
         // Not copyable or movable
-        EgeDevice(const EgeDevice&) = delete;
-        EgeDevice& operator=(const EgeDevice&) = delete;
-        EgeDevice(EgeDevice&&) = delete;
-        EgeDevice& operator=(EgeDevice&&) = delete;
+        Device(const Device&) = delete;
+        Device& operator=(const Device&) = delete;
+        Device(Device&&) = delete;
+        Device& operator=(Device&&) = delete;
 
         VkCommandPool getCommandPool() { return commandPool; }
 
@@ -105,7 +105,7 @@ namespace ege {
         VkInstance instance;
         VkDebugUtilsMessengerEXT debugMessenger;
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
-        EgeWindow& window;
+        Window& window;
         VkCommandPool commandPool;
 
         VkDevice device_;

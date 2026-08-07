@@ -5,7 +5,7 @@
 #include <stdexcept>
 
 int main() {
-    ege::EnchantedEngine engine{};
+    ege::Application engine{};
 
     try {
         engine.run();

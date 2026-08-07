@@ -30,17 +30,17 @@ namespace ege {
         uint32_t subpass = 0;
     };
 
-    class EgePipeline {
+    class Pipeline {
     public:
-        EgePipeline(
-            EgeDevice& device,
+        Pipeline(
+            Device& device,
             const std::string& vertFilePath,
             const std::string& fragFilePath,
             const PipelineConfigInfo& configInfo);
-        ~EgePipeline();
+        ~Pipeline();
 
-        EgePipeline(const EgePipeline&) = delete;
-        EgePipeline& operator=(const EgePipeline&) = delete;
+        Pipeline(const Pipeline&) = delete;
+        Pipeline& operator=(const Pipeline&) = delete;
 
         void bind(VkCommandBuffer commandBuffer);
 
@@ -57,7 +57,7 @@ namespace ege {
         void createShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule);
 
         // Pipline fundementally needs a device to exist, so no risk of dangling (Aggregation)
-        EgeDevice& egeDevice;
+        Device& device;
 
         VkPipeline graphicsPipeline;
 

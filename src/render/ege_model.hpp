@@ -10,7 +10,7 @@
 
 namespace ege {
 
-    class EgeModel {
+    class Model {
     public:
         struct Vertex {
             glm::vec3 position;
@@ -41,25 +41,25 @@ namespace ege {
             static Builder sphere(uint32_t latitudeSegments = 16, uint32_t longitudeSegments = 32);
         };
 
-        EgeModel(EgeDevice& device, const EgeModel::Builder& builder);
-        ~EgeModel();
+        Model(Device& device, const Model::Builder& builder);
+        ~Model();
 
         // Delete copy constructor and operator
-        EgeModel(const EgeModel& other) = delete;
-        EgeModel& operator=(const EgeModel&) = delete;
+        Model(const Model& other) = delete;
+        Model& operator=(const Model&) = delete;
 
-        static std::unique_ptr<EgeModel> createModelFromFile(
-            EgeDevice& device, const std::string& filepath);
+        static std::unique_ptr<Model> createModelFromFile(
+            Device& device, const std::string& filepath);
 
         void bind(VkCommandBuffer commandBuffer);
         void draw(VkCommandBuffer commandBuffer);
 
     private:
-        EgeDevice& egeDevice;
-        std::unique_ptr<EgeBuffer> vertexBuffer;
+        Device& device;
+        std::unique_ptr<Buffer> vertexBuffer;
         uint32_t vertexCount;
         bool hasIndexBuffer = false;
-        std::unique_ptr<EgeBuffer> indexBuffer;
+        std::unique_ptr<Buffer> indexBuffer;
         uint32_t indexCount;
 
         void createVertexBuffers(const std::vector<Vertex>& vertices);

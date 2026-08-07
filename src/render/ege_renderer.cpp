@@ -5,28 +5,28 @@
 
 namespace ege {
 
-    EgeRenderer::EgeRenderer(EgeWindow& window, EgeDevice& device)
-        : egeWindow{window}, egeDevice{device} {
+    Renderer::Renderer(Window& windowRef, Device& deviceRef)
+        : window{windowRef}, device{deviceRef} {
         recreateSwapChain();
         createCommandBuffers();
     }
 
-    EgeRenderer::~EgeRenderer() {
+    Renderer::~Renderer() {
         freeCommandBuffers();
     }
 
-    void EgeRenderer::recreateSwapChain() {
-        auto extent = egeWindow.getExtent();
+    void Renderer::recreateSwapChain() {
+        auto extent = window.getExtent();
         while (extent.width == 0 || extent.height == 0) {
-            extent = egeWindow.getExtent();
+            extent = window.getExtent();
             glfwWaitEvents();
         }
-        vkDeviceWaitIdle(egeDevice.device());
+        vkDeviceWaitIdle(device.device());
         if (egeSwapChain == nullptr) {
-            egeSwapChain = std::make_unique<EgeSwapChain>(egeDevice, extent);
+            egeSwapChain = std::make_unique<SwapChain>(device, extent);
         } else {
-            std::shared_ptr<EgeSwapChain> oldSwapChain = std::move(egeSwapChain);
-            egeSwapChain = std::make_unique<EgeSwapChain>(egeDevice, extent, oldSwapChain);
+            std::shared_ptr<SwapChain> oldSwapChain = std::move(egeSwapChain);
+            egeSwapChain = std::make_unique<SwapChain>(device, extent, oldSwapChain);
 
             if (!oldSwapChain->compareSwapFormats(*egeSwapChain.get())) {
                 throw std::runtime_error("Swap chain image(or depth) format has changed!");
@@ -34,31 +34,31 @@ namespace ege {
         }
     }
 
-    void EgeRenderer::freeCommandBuffers() {
+    void Renderer::freeCommandBuffers() {
         vkFreeCommandBuffers(
-            egeDevice.device(),
-            egeDevice.getCommandPool(),
+            device.device(),
+            device.getCommandPool(),
             static_cast<uint32_t>(commandBuffers.size()),
             commandBuffers.data());
         commandBuffers.clear();
     }
 
-    void EgeRenderer::createCommandBuffers() {
-        commandBuffers.resize(EgeSwapChain::MAX_FRAMES_IN_FLIGHT);
+    void Renderer::createCommandBuffers() {
+        commandBuffers.resize(SwapChain::MAX_FRAMES_IN_FLIGHT);
 
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandPool = egeDevice.getCommandPool();
+        allocInfo.commandPool = device.getCommandPool();
         allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
 
-        if (vkAllocateCommandBuffers(egeDevice.device(), &allocInfo, commandBuffers.data()) !=
+        if (vkAllocateCommandBuffers(device.device(), &allocInfo, commandBuffers.data()) !=
             VK_SUCCESS) {
             throw std::runtime_error("Failed to allocate command buffer!");
         }
     }
 
-    VkCommandBuffer EgeRenderer::beginFrame() {
+    VkCommandBuffer Renderer::beginFrame() {
         assert(!isFrameStarted && "Cant begin frame while it's already started");
 
         auto result = egeSwapChain->acquireNextImage(&currentImageIndex);
@@ -85,7 +85,7 @@ namespace ege {
         return commandBuffer;
     }
 
-    void EgeRenderer::endFrame() {
+    void Renderer::endFrame() {
         assert(isFrameStarted && "Can't call endFrame while frame is not in progress");
         auto commandBuffer = getCurrentCommandBuffer();
         if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
@@ -94,18 +94,18 @@ namespace ege {
 
         auto result = egeSwapChain->submitCommandBuffers(&commandBuffer, &currentImageIndex);
         if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
-            egeWindow.wasWindowResized()) {
-            egeWindow.resetWindowResizedFlag();
+            window.wasWindowResized()) {
+            window.resetWindowResizedFlag();
             recreateSwapChain();
         } else if (result != VK_SUCCESS) {
             throw std::runtime_error("failed to present swap chain image!");
         }
 
         isFrameStarted = false;
-        currentFrameIndex = (currentFrameIndex + 1) % EgeSwapChain::MAX_FRAMES_IN_FLIGHT;
+        currentFrameIndex = (currentFrameIndex + 1) % SwapChain::MAX_FRAMES_IN_FLIGHT;
     }
 
-    void EgeRenderer::beginSwapChainRenderPass(VkCommandBuffer commandBuffer) {
+    void Renderer::beginSwapChainRenderPass(VkCommandBuffer commandBuffer) {
         assert(isFrameStarted && "Cant beginSwap chain while frame is not in progress");
 
         assert(
@@ -140,7 +140,7 @@ namespace ege {
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     }
 
-    void EgeRenderer::endSwapChainRenderPass(VkCommandBuffer commandBuffer) {
+    void Renderer::endSwapChainRenderPass(VkCommandBuffer commandBuffer) {
         assert(isFrameStarted && "Cant end Swap chain while frame is not in progress");
 
         assert(

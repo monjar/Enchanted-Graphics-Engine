@@ -12,19 +12,19 @@
 
 namespace ege {
 
-    EgeSwapChain::EgeSwapChain(EgeDevice& deviceRef, VkExtent2D extent)
+    SwapChain::SwapChain(Device& deviceRef, VkExtent2D extent)
         : device{deviceRef}, windowExtent{extent} {
         init();
     }
 
-    EgeSwapChain::EgeSwapChain(
-        EgeDevice& deviceRef, VkExtent2D extent, std::shared_ptr<EgeSwapChain> previousChain)
+    SwapChain::SwapChain(
+        Device& deviceRef, VkExtent2D extent, std::shared_ptr<SwapChain> previousChain)
         : device{deviceRef}, windowExtent{extent}, oldSwapChain{std::move(previousChain)} {
         init();
         oldSwapChain = nullptr;
     }
 
-    void EgeSwapChain::init() {
+    void SwapChain::init() {
         createSwapChain();
         createImageViews();
         createRenderPass();
@@ -33,7 +33,7 @@ namespace ege {
         createSyncObjects();
     }
 
-    EgeSwapChain::~EgeSwapChain() {
+    SwapChain::~SwapChain() {
         for (auto imageView : swapChainImageViews) {
             vkDestroyImageView(device.device(), imageView, nullptr);
         }
@@ -64,7 +64,7 @@ namespace ege {
         }
     }
 
-    VkResult EgeSwapChain::acquireNextImage(uint32_t* imageIndex) {
+    VkResult SwapChain::acquireNextImage(uint32_t* imageIndex) {
         vkWaitForFences(
             device.device(),
             1,
@@ -83,8 +83,7 @@ namespace ege {
         return result;
     }
 
-    VkResult EgeSwapChain::submitCommandBuffers(
-        const VkCommandBuffer* buffers, uint32_t* imageIndex) {
+    VkResult SwapChain::submitCommandBuffers(const VkCommandBuffer* buffers, uint32_t* imageIndex) {
         if (imagesInFlight[*imageIndex] != VK_NULL_HANDLE) {
             vkWaitForFences(device.device(), 1, &imagesInFlight[*imageIndex], VK_TRUE, UINT64_MAX);
         }
@@ -131,7 +130,7 @@ namespace ege {
         return result;
     }
 
-    void EgeSwapChain::createSwapChain() {
+    void SwapChain::createSwapChain() {
         SwapChainSupportDetails swapChainSupport = device.getSwapChainSupport();
 
         VkSurfaceFormatKHR surfaceFormat = chooseSwapSurfaceFormat(swapChainSupport.formats);
@@ -193,7 +192,7 @@ namespace ege {
         swapChainExtent = extent;
     }
 
-    void EgeSwapChain::createImageViews() {
+    void SwapChain::createImageViews() {
         swapChainImageViews.resize(swapChainImages.size());
         for (size_t i = 0; i < swapChainImages.size(); i++) {
             VkImageViewCreateInfo viewInfo{};
@@ -214,7 +213,7 @@ namespace ege {
         }
     }
 
-    void EgeSwapChain::createRenderPass() {
+    void SwapChain::createRenderPass() {
         VkAttachmentDescription depthAttachment{};
         depthAttachment.format = findDepthFormat();
         depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -276,7 +275,7 @@ namespace ege {
         }
     }
 
-    void EgeSwapChain::createFramebuffers() {
+    void SwapChain::createFramebuffers() {
         swapChainFramebuffers.resize(imageCount());
         for (size_t i = 0; i < imageCount(); i++) {
             std::array<VkImageView, 2> attachments = {swapChainImageViews[i], depthImageViews[i]};
@@ -298,7 +297,7 @@ namespace ege {
         }
     }
 
-    void EgeSwapChain::createDepthResources() {
+    void SwapChain::createDepthResources() {
         VkFormat depthFormat = findDepthFormat();
         swapChainDepthFormat = depthFormat;
         depthImages.resize(imageCount());
@@ -346,7 +345,7 @@ namespace ege {
         }
     }
 
-    void EgeSwapChain::createSyncObjects() {
+    void SwapChain::createSyncObjects() {
         imageAvailableSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
         renderFinishedSemaphores.resize(MAX_FRAMES_IN_FLIGHT);
         inFlightFences.resize(MAX_FRAMES_IN_FLIGHT);
@@ -373,7 +372,7 @@ namespace ege {
         }
     }
 
-    VkSurfaceFormatKHR EgeSwapChain::chooseSwapSurfaceFormat(
+    VkSurfaceFormatKHR SwapChain::chooseSwapSurfaceFormat(
         const std::vector<VkSurfaceFormatKHR>& availableFormats) {
         for (const auto& availableFormat : availableFormats) {
             if (availableFormat.format == VK_FORMAT_B8G8R8A8_SRGB &&
@@ -385,7 +384,7 @@ namespace ege {
         return availableFormats[0];
     }
 
-    VkPresentModeKHR EgeSwapChain::chooseSwapPresentMode(
+    VkPresentModeKHR SwapChain::chooseSwapPresentMode(
         const std::vector<VkPresentModeKHR>& availablePresentModes) {
         for (const auto& availablePresentMode : availablePresentModes) {
             if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
@@ -405,7 +404,7 @@ namespace ege {
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
-    VkExtent2D EgeSwapChain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
+    VkExtent2D SwapChain::chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities) {
         if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max()) {
             return capabilities.currentExtent;
         } else {
@@ -421,7 +420,7 @@ namespace ege {
         }
     }
 
-    VkFormat EgeSwapChain::findDepthFormat() {
+    VkFormat SwapChain::findDepthFormat() {
         return device.findSupportedFormat(
             {VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT},
             VK_IMAGE_TILING_OPTIMAL,

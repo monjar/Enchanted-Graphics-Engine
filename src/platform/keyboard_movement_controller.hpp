@@ -1,7 +1,7 @@
 #pragma once
 
-#include "scene/ege_game_object.hpp"
 #include "platform/ege_window.hpp"
+#include "scene/ege_game_object.hpp"
 
 namespace ege {
     class KeyboardMovementController {
@@ -19,7 +19,7 @@ namespace ege {
             int lookDown = GLFW_KEY_DOWN;
         };
 
-        void moveInPlaneXZ(GLFWwindow* window, float dt, EgeGameObject& gameObject);
+        void moveInPlaneXZ(GLFWwindow* window, float dt, GameObject& gameObject);
 
         KeyMappings keys{};
         float moveSpeed{3.f};

@@ -45,7 +45,7 @@ namespace ege {
     }
 
     // class member functions
-    EgeDevice::EgeDevice(EgeWindow& windowRef) : window{windowRef} {
+    Device::Device(Window& windowRef) : window{windowRef} {
         createInstance();
         setupDebugMessenger();
         createSurface();
@@ -54,7 +54,7 @@ namespace ege {
         createCommandPool();
     }
 
-    EgeDevice::~EgeDevice() {
+    Device::~Device() {
         vkDestroyCommandPool(device_, commandPool, nullptr);
         vkDestroyDevice(device_, nullptr);
 
@@ -66,14 +66,14 @@ namespace ege {
         vkDestroyInstance(instance, nullptr);
     }
 
-    void EgeDevice::createInstance() {
+    void Device::createInstance() {
         if (enableValidationLayers && !checkValidationLayerSupport()) {
             throw std::runtime_error("validation layers requested, but not available!");
         }
 
         VkApplicationInfo appInfo = {};
         appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-        appInfo.pApplicationName = "EnchantedEngine App";
+        appInfo.pApplicationName = "Application App";
         appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
         appInfo.pEngineName = "No Engine";
         appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
@@ -106,7 +106,7 @@ namespace ege {
         hasGflwRequiredInstanceExtensions();
     }
 
-    void EgeDevice::pickPhysicalDevice() {
+    void Device::pickPhysicalDevice() {
         uint32_t deviceCount = 0;
         vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
         if (deviceCount == 0) {
@@ -131,7 +131,7 @@ namespace ege {
         std::cout << "physical device: " << properties.deviceName << std::endl;
     }
 
-    void EgeDevice::createLogicalDevice() {
+    void Device::createLogicalDevice() {
         QueueFamilyIndices indices = findQueueFamilies(physicalDevice);
 
         std::vector<VkDeviceQueueCreateInfo> queueCreateInfos;
@@ -177,7 +177,7 @@ namespace ege {
         vkGetDeviceQueue(device_, indices.presentFamily, 0, &presentQueue_);
     }
 
-    void EgeDevice::createCommandPool() {
+    void Device::createCommandPool() {
         QueueFamilyIndices queueFamilyIndices = findPhysicalQueueFamilies();
 
         VkCommandPoolCreateInfo poolInfo = {};
@@ -191,11 +191,11 @@ namespace ege {
         }
     }
 
-    void EgeDevice::createSurface() {
+    void Device::createSurface() {
         window.createWindowSurface(instance, &surface_);
     }
 
-    bool EgeDevice::isDeviceSuitable(VkPhysicalDevice device) {
+    bool Device::isDeviceSuitable(VkPhysicalDevice device) {
         QueueFamilyIndices indices = findQueueFamilies(device);
 
         bool extensionsSupported = checkDeviceExtensionSupport(device);
@@ -214,8 +214,7 @@ namespace ege {
                supportedFeatures.samplerAnisotropy;
     }
 
-    void EgeDevice::populateDebugMessengerCreateInfo(
-        VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
+    void Device::populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
         createInfo = {};
         createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
         createInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
@@ -227,7 +226,7 @@ namespace ege {
         createInfo.pUserData = nullptr;  // Optional
     }
 
-    void EgeDevice::setupDebugMessenger() {
+    void Device::setupDebugMessenger() {
         if (!enableValidationLayers)
             return;
         VkDebugUtilsMessengerCreateInfoEXT createInfo;
@@ -238,7 +237,7 @@ namespace ege {
         }
     }
 
-    bool EgeDevice::checkValidationLayerSupport() {
+    bool Device::checkValidationLayerSupport() {
         uint32_t layerCount;
         vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
 
@@ -263,7 +262,7 @@ namespace ege {
         return true;
     }
 
-    std::vector<const char*> EgeDevice::getRequiredExtensions() {
+    std::vector<const char*> Device::getRequiredExtensions() {
         uint32_t glfwExtensionCount = 0;
         const char** glfwExtensions;
         glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
@@ -277,7 +276,7 @@ namespace ege {
         return extensions;
     }
 
-    void EgeDevice::hasGflwRequiredInstanceExtensions() {
+    void Device::hasGflwRequiredInstanceExtensions() {
         uint32_t extensionCount = 0;
         vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
         std::vector<VkExtensionProperties> extensions(extensionCount);
@@ -300,7 +299,7 @@ namespace ege {
         }
     }
 
-    bool EgeDevice::checkDeviceExtensionSupport(VkPhysicalDevice device) {
+    bool Device::checkDeviceExtensionSupport(VkPhysicalDevice device) {
         uint32_t extensionCount;
         vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
 
@@ -317,7 +316,7 @@ namespace ege {
         return requiredExtensions.empty();
     }
 
-    QueueFamilyIndices EgeDevice::findQueueFamilies(VkPhysicalDevice device) {
+    QueueFamilyIndices Device::findQueueFamilies(VkPhysicalDevice device) {
         QueueFamilyIndices indices;
 
         uint32_t queueFamilyCount = 0;
@@ -348,7 +347,7 @@ namespace ege {
         return indices;
     }
 
-    SwapChainSupportDetails EgeDevice::querySwapChainSupport(VkPhysicalDevice device) {
+    SwapChainSupportDetails Device::querySwapChainSupport(VkPhysicalDevice device) {
         SwapChainSupportDetails details;
         vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface_, &details.capabilities);
 
@@ -372,7 +371,7 @@ namespace ege {
         return details;
     }
 
-    VkFormat EgeDevice::findSupportedFormat(
+    VkFormat Device::findSupportedFormat(
         const std::vector<VkFormat>& candidates,
         VkImageTiling tiling,
         VkFormatFeatureFlags features) {
@@ -392,8 +391,7 @@ namespace ege {
         throw std::runtime_error("failed to find supported format!");
     }
 
-    uint32_t EgeDevice::findMemoryType(
-        uint32_t typeFilter, VkMemoryPropertyFlags memoryProperties) {
+    uint32_t Device::findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags memoryProperties) {
         VkPhysicalDeviceMemoryProperties memProperties;
         vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProperties);
         for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++) {
@@ -406,7 +404,7 @@ namespace ege {
         throw std::runtime_error("failed to find suitable memory type!");
     }
 
-    void EgeDevice::createBuffer(
+    void Device::createBuffer(
         VkDeviceSize size,
         VkBufferUsageFlags usage,
         VkMemoryPropertyFlags memoryProperties,
@@ -438,7 +436,7 @@ namespace ege {
         vkBindBufferMemory(device_, buffer, bufferMemory, 0);
     }
 
-    VkCommandBuffer EgeDevice::beginSingleTimeCommands() {
+    VkCommandBuffer Device::beginSingleTimeCommands() {
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
@@ -456,7 +454,7 @@ namespace ege {
         return commandBuffer;
     }
 
-    void EgeDevice::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
+    void Device::endSingleTimeCommands(VkCommandBuffer commandBuffer) {
         vkEndCommandBuffer(commandBuffer);
 
         VkSubmitInfo submitInfo{};
@@ -470,7 +468,7 @@ namespace ege {
         vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
     }
 
-    void EgeDevice::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
+    void Device::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
         VkBufferCopy copyRegion{};
@@ -482,7 +480,7 @@ namespace ege {
         endSingleTimeCommands(commandBuffer);
     }
 
-    void EgeDevice::copyBufferToImage(
+    void Device::copyBufferToImage(
         VkBuffer buffer, VkImage image, uint32_t width, uint32_t height, uint32_t layerCount) {
         VkCommandBuffer commandBuffer = beginSingleTimeCommands();
 
@@ -504,7 +502,7 @@ namespace ege {
         endSingleTimeCommands(commandBuffer);
     }
 
-    void EgeDevice::createImageWithInfo(
+    void Device::createImageWithInfo(
         const VkImageCreateInfo& imageInfo,
         VkMemoryPropertyFlags memoryProperties,
         VkImage& image,

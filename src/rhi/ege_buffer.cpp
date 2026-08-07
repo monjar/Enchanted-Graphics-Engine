@@ -22,35 +22,34 @@ namespace ege {
      *
      * @return VkResult of the buffer mapping call
      */
-    VkDeviceSize EgeBuffer::getAlignment(
-        VkDeviceSize instanceSize, VkDeviceSize minOffsetAlignment) {
+    VkDeviceSize Buffer::getAlignment(VkDeviceSize instanceSize, VkDeviceSize minOffsetAlignment) {
         if (minOffsetAlignment > 0) {
             return (instanceSize + minOffsetAlignment - 1) & ~(minOffsetAlignment - 1);
         }
         return instanceSize;
     }
 
-    EgeBuffer::EgeBuffer(
-        EgeDevice& device,
+    Buffer::Buffer(
+        Device& deviceRef,
         VkDeviceSize instanceSize_,
         uint32_t instanceCount_,
         VkBufferUsageFlags usageFlags_,
         VkMemoryPropertyFlags memoryPropertyFlags_,
         VkDeviceSize minOffsetAlignment_)
-        : egeDevice{device},
+        : device{deviceRef},
           instanceSize{instanceSize_},
           instanceCount{instanceCount_},
           usageFlags{usageFlags_},
           memoryPropertyFlags{memoryPropertyFlags_} {
         alignmentSize = getAlignment(instanceSize_, minOffsetAlignment_);
         bufferSize = alignmentSize * instanceCount_;
-        device.createBuffer(bufferSize, usageFlags_, memoryPropertyFlags_, buffer, memory);
+        deviceRef.createBuffer(bufferSize, usageFlags_, memoryPropertyFlags_, buffer, memory);
     }
 
-    EgeBuffer::~EgeBuffer() {
+    Buffer::~Buffer() {
         unmap();
-        vkDestroyBuffer(egeDevice.device(), buffer, nullptr);
-        vkFreeMemory(egeDevice.device(), memory, nullptr);
+        vkDestroyBuffer(device.device(), buffer, nullptr);
+        vkFreeMemory(device.device(), memory, nullptr);
     }
 
     /**
@@ -63,9 +62,9 @@ namespace ege {
      *
      * @return VkResult of the buffer mapping call
      */
-    VkResult EgeBuffer::map(VkDeviceSize size, VkDeviceSize offset) {
+    VkResult Buffer::map(VkDeviceSize size, VkDeviceSize offset) {
         assert(buffer && memory && "Called map on buffer before create");
-        return vkMapMemory(egeDevice.device(), memory, offset, size, 0, &mapped);
+        return vkMapMemory(device.device(), memory, offset, size, 0, &mapped);
     }
 
     /**
@@ -73,9 +72,9 @@ namespace ege {
      *
      * @note Does not return a result as vkUnmapMemory can't fail
      */
-    void EgeBuffer::unmap() {
+    void Buffer::unmap() {
         if (mapped) {
-            vkUnmapMemory(egeDevice.device(), memory);
+            vkUnmapMemory(device.device(), memory);
             mapped = nullptr;
         }
     }
@@ -89,7 +88,7 @@ namespace ege {
      * @param offset (Optional) Byte offset from beginning of mapped region
      *
      */
-    void EgeBuffer::writeToBuffer(void* data, VkDeviceSize size, VkDeviceSize offset) {
+    void Buffer::writeToBuffer(void* data, VkDeviceSize size, VkDeviceSize offset) {
         assert(mapped && "Cannot copy to unmapped buffer");
 
         if (size == VK_WHOLE_SIZE) {
@@ -112,13 +111,13 @@ namespace ege {
      *
      * @return VkResult of the flush call
      */
-    VkResult EgeBuffer::flush(VkDeviceSize size, VkDeviceSize offset) {
+    VkResult Buffer::flush(VkDeviceSize size, VkDeviceSize offset) {
         VkMappedMemoryRange mappedRange = {};
         mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
         mappedRange.memory = memory;
         mappedRange.offset = offset;
         mappedRange.size = size;
-        return vkFlushMappedMemoryRanges(egeDevice.device(), 1, &mappedRange);
+        return vkFlushMappedMemoryRanges(device.device(), 1, &mappedRange);
     }
 
     /**
@@ -132,13 +131,13 @@ namespace ege {
      *
      * @return VkResult of the invalidate call
      */
-    VkResult EgeBuffer::invalidate(VkDeviceSize size, VkDeviceSize offset) {
+    VkResult Buffer::invalidate(VkDeviceSize size, VkDeviceSize offset) {
         VkMappedMemoryRange mappedRange = {};
         mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
         mappedRange.memory = memory;
         mappedRange.offset = offset;
         mappedRange.size = size;
-        return vkInvalidateMappedMemoryRanges(egeDevice.device(), 1, &mappedRange);
+        return vkInvalidateMappedMemoryRanges(device.device(), 1, &mappedRange);
     }
 
     /**
@@ -149,7 +148,7 @@ namespace ege {
      *
      * @return VkDescriptorBufferInfo of specified offset and range
      */
-    VkDescriptorBufferInfo EgeBuffer::descriptorInfo(VkDeviceSize size, VkDeviceSize offset) {
+    VkDescriptorBufferInfo Buffer::descriptorInfo(VkDeviceSize size, VkDeviceSize offset) {
         return VkDescriptorBufferInfo{
             buffer,
             offset,
@@ -165,7 +164,7 @@ namespace ege {
      * @param index Used in offset calculation
      *
      */
-    void EgeBuffer::writeToIndex(void* data, uint32_t index) {
+    void Buffer::writeToIndex(void* data, uint32_t index) {
         writeToBuffer(data, instanceSize, index * alignmentSize);
     }
 
@@ -176,7 +175,7 @@ namespace ege {
      * @param index Used in offset calculation
      *
      */
-    VkResult EgeBuffer::flushIndex(uint32_t index) {
+    VkResult Buffer::flushIndex(uint32_t index) {
         return flush(alignmentSize, index * alignmentSize);
     }
 
@@ -187,7 +186,7 @@ namespace ege {
      *
      * @return VkDescriptorBufferInfo for instance at index
      */
-    VkDescriptorBufferInfo EgeBuffer::descriptorInfoForIndex(uint32_t index) {
+    VkDescriptorBufferInfo Buffer::descriptorInfoForIndex(uint32_t index) {
         return descriptorInfo(alignmentSize, index * alignmentSize);
     }
 
@@ -200,7 +199,7 @@ namespace ege {
      *
      * @return VkResult of the invalidate call
      */
-    VkResult EgeBuffer::invalidateIndex(uint32_t index) {
+    VkResult Buffer::invalidateIndex(uint32_t index) {
         return invalidate(alignmentSize, index * alignmentSize);
     }
 

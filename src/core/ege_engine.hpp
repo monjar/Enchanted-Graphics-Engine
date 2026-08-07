@@ -1,37 +1,37 @@
 #pragma once
 
-#include "rhi/ege_descriptors.hpp"
-#include "scene/ege_game_object.hpp"
+#include "platform/ege_window.hpp"
 #include "render/ege_model.hpp"
 #include "render/ege_renderer.hpp"
-#include "platform/ege_window.hpp"
+#include "rhi/ege_descriptors.hpp"
+#include "scene/ege_game_object.hpp"
 
 #include <memory>
 #include <vector>
 
 namespace ege {
 
-    class EnchantedEngine {
+    class Application {
     public:
         static constexpr int WIDTH = 800, HEIGHT = 600;
 
-        EnchantedEngine();
-        ~EnchantedEngine();
+        Application();
+        ~Application();
 
         // Delete copy constructor and operator1
-        EnchantedEngine(const EnchantedEngine& other) = delete;
-        EnchantedEngine& operator=(const EnchantedEngine&) = delete;
+        Application(const Application& other) = delete;
+        Application& operator=(const Application&) = delete;
 
         void run();
 
     private:
         void loadGameObjects();
 
-        EgeWindow egeWindow{WIDTH, HEIGHT, "Hello World!"};
-        EgeDevice egeDevice{egeWindow};
-        EgeRenderer egeRenderer{egeWindow, egeDevice};
+        Window window{WIDTH, HEIGHT, "Hello World!"};
+        Device device{window};
+        Renderer renderer{window, device};
 
-        std::unique_ptr<EgeDescriptorPool> globalPool{};
-        EgeGameObject::Map gameObjects;
+        std::unique_ptr<DescriptorPool> globalPool{};
+        GameObject::Map gameObjects;
     };
 }  // namespace ege

@@ -9,67 +9,66 @@
 
 namespace ege {
 
-    class EgeDescriptorSetLayout {
+    class DescriptorSetLayout {
     public:
         class Builder {
         public:
-            Builder(EgeDevice& device) : egeDevice{device} {}
+            Builder(Device& deviceRef) : device{deviceRef} {}
 
             Builder& addBinding(
                 uint32_t binding,
                 VkDescriptorType descriptorType,
                 VkShaderStageFlags stageFlags,
                 uint32_t count = 1);
-            std::unique_ptr<EgeDescriptorSetLayout> build() const;
+            std::unique_ptr<DescriptorSetLayout> build() const;
 
         private:
-            EgeDevice& egeDevice;
+            Device& device;
             std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> bindings{};
         };
 
-        EgeDescriptorSetLayout(
-            EgeDevice& egeDevice,
-            std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> bindings);
-        ~EgeDescriptorSetLayout();
-        EgeDescriptorSetLayout(const EgeDescriptorSetLayout&) = delete;
-        EgeDescriptorSetLayout& operator=(const EgeDescriptorSetLayout&) = delete;
+        DescriptorSetLayout(
+            Device& device, std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> bindings);
+        ~DescriptorSetLayout();
+        DescriptorSetLayout(const DescriptorSetLayout&) = delete;
+        DescriptorSetLayout& operator=(const DescriptorSetLayout&) = delete;
 
         VkDescriptorSetLayout getDescriptorSetLayout() const { return descriptorSetLayout; }
 
     private:
-        EgeDevice& egeDevice;
+        Device& device;
         VkDescriptorSetLayout descriptorSetLayout;
         std::unordered_map<uint32_t, VkDescriptorSetLayoutBinding> bindings;
 
-        friend class EgeDescriptorWriter;
+        friend class DescriptorWriter;
     };
 
-    class EgeDescriptorPool {
+    class DescriptorPool {
     public:
         class Builder {
         public:
-            Builder(EgeDevice& device) : egeDevice{device} {}
+            Builder(Device& deviceRef) : device{deviceRef} {}
 
             Builder& addPoolSize(VkDescriptorType descriptorType, uint32_t count);
             Builder& setPoolFlags(VkDescriptorPoolCreateFlags flags);
             Builder& setMaxSets(uint32_t count);
-            std::unique_ptr<EgeDescriptorPool> build() const;
+            std::unique_ptr<DescriptorPool> build() const;
 
         private:
-            EgeDevice& egeDevice;
+            Device& device;
             std::vector<VkDescriptorPoolSize> poolSizes{};
             uint32_t maxSets = 1000;
             VkDescriptorPoolCreateFlags poolFlags = 0;
         };
 
-        EgeDescriptorPool(
-            EgeDevice& egeDevice,
+        DescriptorPool(
+            Device& device,
             uint32_t maxSets,
             VkDescriptorPoolCreateFlags poolFlags,
             const std::vector<VkDescriptorPoolSize>& poolSizes);
-        ~EgeDescriptorPool();
-        EgeDescriptorPool(const EgeDescriptorPool&) = delete;
-        EgeDescriptorPool& operator=(const EgeDescriptorPool&) = delete;
+        ~DescriptorPool();
+        DescriptorPool(const DescriptorPool&) = delete;
+        DescriptorPool& operator=(const DescriptorPool&) = delete;
 
         bool allocateDescriptor(
             const VkDescriptorSetLayout descriptorSetLayout, VkDescriptorSet& descriptor) const;
@@ -79,25 +78,25 @@ namespace ege {
         void resetPool();
 
     private:
-        EgeDevice& egeDevice;
+        Device& device;
         VkDescriptorPool descriptorPool;
 
-        friend class EgeDescriptorWriter;
+        friend class DescriptorWriter;
     };
 
-    class EgeDescriptorWriter {
+    class DescriptorWriter {
     public:
-        EgeDescriptorWriter(EgeDescriptorSetLayout& setLayout, EgeDescriptorPool& pool);
+        DescriptorWriter(DescriptorSetLayout& setLayout, DescriptorPool& pool);
 
-        EgeDescriptorWriter& writeBuffer(uint32_t binding, VkDescriptorBufferInfo* bufferInfo);
-        EgeDescriptorWriter& writeImage(uint32_t binding, VkDescriptorImageInfo* imageInfo);
+        DescriptorWriter& writeBuffer(uint32_t binding, VkDescriptorBufferInfo* bufferInfo);
+        DescriptorWriter& writeImage(uint32_t binding, VkDescriptorImageInfo* imageInfo);
 
         bool build(VkDescriptorSet& set);
         void overwrite(VkDescriptorSet& set);
 
     private:
-        EgeDescriptorSetLayout& setLayout;
-        EgeDescriptorPool& pool;
+        DescriptorSetLayout& setLayout;
+        DescriptorPool& pool;
         std::vector<VkWriteDescriptorSet> writes;
     };
 

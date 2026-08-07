@@ -5,16 +5,16 @@
 
 namespace ege {
 
-    EgeWindow::EgeWindow(int w, int h, std::string name) : width{w}, height{h}, windowName{name} {
+    Window::Window(int w, int h, std::string name) : width{w}, height{h}, windowName{name} {
         initWindow();
     }
 
-    EgeWindow::~EgeWindow() {
+    Window::~Window() {
         glfwDestroyWindow(window);
         glfwTerminate();
     }
 
-    void EgeWindow::initWindow() {
+    void Window::initWindow() {
         glfwInit();
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
         glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
@@ -25,16 +25,16 @@ namespace ege {
         glfwSetFramebufferSizeCallback(window, frameBufferResizeCallBack);
     }
 
-    void EgeWindow::createWindowSurface(VkInstance instance, VkSurfaceKHR* surface) {
+    void Window::createWindowSurface(VkInstance instance, VkSurfaceKHR* surface) {
         if (glfwCreateWindowSurface(instance, window, nullptr, surface) != VK_SUCCESS) {
             throw std::runtime_error("failed to create window surface");
         }
     }
 
-    void EgeWindow::frameBufferResizeCallBack(GLFWwindow* window, int width, int height) {
-        auto egeWindow = reinterpret_cast<EgeWindow*>(glfwGetWindowUserPointer(window));
-        egeWindow->wasFrameBufferResized = true;
-        egeWindow->width = width;
-        egeWindow->height = height;
+    void Window::frameBufferResizeCallBack(GLFWwindow* glfwWindow, int width, int height) {
+        auto self = reinterpret_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
+        self->wasFrameBufferResized = true;
+        self->width = width;
+        self->height = height;
     }
 }  // namespace ege

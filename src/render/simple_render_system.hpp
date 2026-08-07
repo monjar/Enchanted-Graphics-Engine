@@ -2,8 +2,8 @@
 
 #include "render/ege_camera.hpp"
 #include "render/ege_frame_info.hpp"
-#include "scene/ege_game_object.hpp"
 #include "rhi/ege_pipeline.hpp"
+#include "scene/ege_game_object.hpp"
 
 #include <memory>
 #include <vector>
@@ -13,7 +13,7 @@ namespace ege {
     class SimpleRenderSystem {
     public:
         SimpleRenderSystem(
-            EgeDevice& device, VkRenderPass renderPass, VkDescriptorSetLayout globalSetLayout);
+            Device& device, VkRenderPass renderPass, VkDescriptorSetLayout globalSetLayout);
         ~SimpleRenderSystem();
 
         // Delete copy constructor and operator1
@@ -26,9 +26,9 @@ namespace ege {
         void createPipelineLayout(VkDescriptorSetLayout globalSetLayout);
         void createPipeline(VkRenderPass renderPass);
 
-        EgeDevice& egeDevice;
+        Device& device;
 
-        std::unique_ptr<EgePipeline> egePipeline;
+        std::unique_ptr<Pipeline> pipeline;
         VkPipelineLayout pipelineLayout;
     };
 }  // namespace ege

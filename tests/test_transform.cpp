@@ -8,9 +8,9 @@
 
 #include "scene/ege_game_object.hpp"
 
-#include <doctest/doctest.h>
-
 #include <glm/gtc/constants.hpp>
+
+#include <doctest/doctest.h>
 
 #include <random>
 
@@ -18,13 +18,13 @@ using ege::TransformComponent;
 
 namespace {
 
-void checkMatricesClose(const glm::mat3& a, const glm::mat3& b, float tolerance) {
-    for (int column = 0; column < 3; column++) {
-        for (int row = 0; row < 3; row++) {
-            REQUIRE(a[column][row] == doctest::Approx(b[column][row]).epsilon(tolerance));
+    void checkMatricesClose(const glm::mat3& a, const glm::mat3& b, float tolerance) {
+        for (int column = 0; column < 3; column++) {
+            for (int row = 0; row < 3; row++) {
+                REQUIRE(a[column][row] == doctest::Approx(b[column][row]).epsilon(tolerance));
+            }
         }
     }
-}
 
 }  // namespace
 
@@ -101,8 +101,10 @@ TEST_CASE("normal matrix keeps normals perpendicular under non-uniform scale") {
     const glm::vec3 transformedB = glm::mat3(model) * tangentB;
     const glm::vec3 transformedNormal = glm::normalize(normalMatrix * normal);
 
-    CHECK(glm::dot(transformedNormal, glm::normalize(transformedA)) ==
-          doctest::Approx(0.f).epsilon(1e-4).scale(1.f));
-    CHECK(glm::dot(transformedNormal, glm::normalize(transformedB)) ==
-          doctest::Approx(0.f).epsilon(1e-4).scale(1.f));
+    CHECK(
+        glm::dot(transformedNormal, glm::normalize(transformedA)) ==
+        doctest::Approx(0.f).epsilon(1e-4).scale(1.f));
+    CHECK(
+        glm::dot(transformedNormal, glm::normalize(transformedB)) ==
+        doctest::Approx(0.f).epsilon(1e-4).scale(1.f));
 }

@@ -4,19 +4,19 @@
 
 namespace ege {
 
-    class EgeBuffer {
+    class Buffer {
     public:
-        EgeBuffer(
-            EgeDevice& device,
+        Buffer(
+            Device& device,
             VkDeviceSize instanceSize,
             uint32_t instanceCount,
             VkBufferUsageFlags usageFlags,
             VkMemoryPropertyFlags memoryPropertyFlags,
             VkDeviceSize minOffsetAlignment = 1);
-        ~EgeBuffer();
+        ~Buffer();
 
-        EgeBuffer(const EgeBuffer&) = delete;
-        EgeBuffer& operator=(const EgeBuffer&) = delete;
+        Buffer(const Buffer&) = delete;
+        Buffer& operator=(const Buffer&) = delete;
 
         VkResult map(VkDeviceSize size = VK_WHOLE_SIZE, VkDeviceSize offset = 0);
         void unmap();
@@ -52,7 +52,7 @@ namespace ege {
         static VkDeviceSize getAlignment(
             VkDeviceSize instanceSize, VkDeviceSize minOffsetAlignment);
 
-        EgeDevice& egeDevice;
+        Device& device;
         void* mapped = nullptr;
         VkBuffer buffer = VK_NULL_HANDLE;
         VkDeviceMemory memory = VK_NULL_HANDLE;

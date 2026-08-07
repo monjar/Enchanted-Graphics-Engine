@@ -1,22 +1,22 @@
 #pragma once
 
+#include "platform/ege_window.hpp"
 #include "render/ege_model.hpp"
 #include "rhi/ege_swap_chain.hpp"
-#include "platform/ege_window.hpp"
 
 #include <memory>
 #include <vector>
 
 namespace ege {
 
-    class EgeRenderer {
+    class Renderer {
     public:
-        EgeRenderer(EgeWindow& window, EgeDevice& device);
-        ~EgeRenderer();
+        Renderer(Window& window, Device& device);
+        ~Renderer();
 
         // Delete copy constructor and operator1
-        EgeRenderer(const EgeRenderer& other) = delete;
-        EgeRenderer& operator=(const EgeRenderer&) = delete;
+        Renderer(const Renderer& other) = delete;
+        Renderer& operator=(const Renderer&) = delete;
 
         VkRenderPass getSwapChainRenderPass() const { return egeSwapChain->getRenderPass(); }
 
@@ -44,9 +44,9 @@ namespace ege {
         void freeCommandBuffers();
         void recreateSwapChain();
 
-        EgeWindow& egeWindow;
-        EgeDevice& egeDevice;
-        std::unique_ptr<EgeSwapChain> egeSwapChain;
+        Window& window;
+        Device& device;
+        std::unique_ptr<SwapChain> egeSwapChain;
         std::vector<VkCommandBuffer> commandBuffers;
         uint32_t currentImageIndex;
         uint32_t currentFrameIndex{0};

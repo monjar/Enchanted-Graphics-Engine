@@ -15,23 +15,23 @@
 
 namespace ege {
 
-    EgePipeline::EgePipeline(
-        EgeDevice& device,
+    Pipeline::Pipeline(
+        Device& deviceRef,
         const std::string& vertFilePath,
         const std::string& fragFilePath,
         const PipelineConfigInfo& configInfo)
-        : egeDevice{device} {
+        : device{deviceRef} {
         createGraphicsPipeline(vertFilePath, fragFilePath, configInfo);
     }
 
-    EgePipeline::~EgePipeline() {
-        vkDestroyShaderModule(egeDevice.device(), vertShaderModule, nullptr);
-        vkDestroyShaderModule(egeDevice.device(), fragShaderModule, nullptr);
+    Pipeline::~Pipeline() {
+        vkDestroyShaderModule(device.device(), vertShaderModule, nullptr);
+        vkDestroyShaderModule(device.device(), fragShaderModule, nullptr);
 
-        vkDestroyPipeline(egeDevice.device(), graphicsPipeline, nullptr);
+        vkDestroyPipeline(device.device(), graphicsPipeline, nullptr);
     }
 
-    std::vector<char> EgePipeline::readFile(const std::string& filePath) {
+    std::vector<char> Pipeline::readFile(const std::string& filePath) {
         // read file in binary and seek end
         std::string fullFilePath = std::string{EGE_SHADER_ROOT} + "/" + filePath;
         std::ifstream file{fullFilePath, std::ios::ate | std::ios::binary};
@@ -51,7 +51,7 @@ namespace ege {
         return buffer;
     }
 
-    void EgePipeline::createGraphicsPipeline(
+    void Pipeline::createGraphicsPipeline(
         const std::string& vertFilePath,
         const std::string& fragFilePath,
         const PipelineConfigInfo& configInfo) {
@@ -86,8 +86,8 @@ namespace ege {
         shaderStages[1].pNext = nullptr;
         shaderStages[1].pSpecializationInfo = nullptr;
 
-        auto bindingDescriptions = EgeModel::Vertex::getBindingDescriptions();
-        auto attributeDescriptions = EgeModel::Vertex::getAttributeDescriptions();
+        auto bindingDescriptions = Model::Vertex::getBindingDescriptions();
+        auto attributeDescriptions = Model::Vertex::getAttributeDescriptions();
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInputInfo.vertexAttributeDescriptionCount =
@@ -119,31 +119,30 @@ namespace ege {
         pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
         if (vkCreateGraphicsPipelines(
-                egeDevice.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) !=
+                device.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) !=
             VK_SUCCESS) {
             throw std::runtime_error("failed to create graphics pipeline");
         }
     }
 
-    void EgePipeline::createShaderModule(
-        const std::vector<char>& code, VkShaderModule* shaderModule) {
+    void Pipeline::createShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule) {
         VkShaderModuleCreateInfo createInfo{};
         createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
         createInfo.codeSize = code.size();
         // this cast is only valid because we are using vector and not c_style array
         createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
-        if (vkCreateShaderModule(egeDevice.device(), &createInfo, nullptr, shaderModule) !=
+        if (vkCreateShaderModule(device.device(), &createInfo, nullptr, shaderModule) !=
             VK_SUCCESS) {
             throw std::runtime_error("Failed to create shader module.");
         }
     }
 
-    void EgePipeline::bind(VkCommandBuffer commandBuffer) {
+    void Pipeline::bind(VkCommandBuffer commandBuffer) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
     }
 
-    void EgePipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo) {
+    void Pipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo) {
         configInfo.inputAssemblyInfo.sType =
             VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
         configInfo.inputAssemblyInfo.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

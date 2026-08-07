@@ -6,7 +6,7 @@
 namespace ege {
 
     void KeyboardMovementController::moveInPlaneXZ(
-        GLFWwindow* window, float dt, EgeGameObject& gameObject) {
+        GLFWwindow* window, float dt, GameObject& gameObject) {
         glm::vec3 rotate{0};
         if (glfwGetKey(window, keys.lookRight) == GLFW_PRESS)
             rotate.y += 1.f;

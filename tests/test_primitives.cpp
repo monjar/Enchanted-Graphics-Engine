@@ -10,68 +10,68 @@
 
 #include <cmath>
 
-using ege::EgeModel;
+using ege::Model;
 
 namespace {
 
-struct MeshStats {
-    int degenerate = 0;
-    int backwards = 0;
-};
+    struct MeshStats {
+        int degenerate = 0;
+        int backwards = 0;
+    };
 
-// Compares each triangle's geometric normal, from the winding, against the
-// interpolated shading normal. They agree only if the triangle is wound
-// counter-clockwise seen from outside.
-MeshStats analyse(const EgeModel::Builder& builder) {
-    MeshStats stats{};
+    // Compares each triangle's geometric normal, from the winding, against the
+    // interpolated shading normal. They agree only if the triangle is wound
+    // counter-clockwise seen from outside.
+    MeshStats analyse(const Model::Builder& builder) {
+        MeshStats stats{};
 
-    for (size_t i = 0; i + 2 < builder.indices.size(); i += 3) {
-        const glm::vec3& p0 = builder.vertices[builder.indices[i + 0]].position;
-        const glm::vec3& p1 = builder.vertices[builder.indices[i + 1]].position;
-        const glm::vec3& p2 = builder.vertices[builder.indices[i + 2]].position;
+        for (size_t i = 0; i + 2 < builder.indices.size(); i += 3) {
+            const glm::vec3& p0 = builder.vertices[builder.indices[i + 0]].position;
+            const glm::vec3& p1 = builder.vertices[builder.indices[i + 1]].position;
+            const glm::vec3& p2 = builder.vertices[builder.indices[i + 2]].position;
 
-        glm::vec3 geometric = glm::cross(p1 - p0, p2 - p0);
-        const float area = glm::length(geometric);
-        if (area < 1e-9f) {
-            stats.degenerate++;
-            continue;
+            glm::vec3 geometric = glm::cross(p1 - p0, p2 - p0);
+            const float area = glm::length(geometric);
+            if (area < 1e-9f) {
+                stats.degenerate++;
+                continue;
+            }
+            geometric /= area;
+
+            const glm::vec3 shading = glm::normalize(
+                builder.vertices[builder.indices[i + 0]].normal +
+                builder.vertices[builder.indices[i + 1]].normal +
+                builder.vertices[builder.indices[i + 2]].normal);
+
+            if (glm::dot(geometric, shading) <= 0.f) {
+                stats.backwards++;
+            }
         }
-        geometric /= area;
 
-        const glm::vec3 shading = glm::normalize(
-            builder.vertices[builder.indices[i + 0]].normal +
-            builder.vertices[builder.indices[i + 1]].normal +
-            builder.vertices[builder.indices[i + 2]].normal);
+        return stats;
+    }
 
-        if (glm::dot(geometric, shading) <= 0.f) {
-            stats.backwards++;
+    void requireWellFormed(const Model::Builder& builder) {
+        REQUIRE(builder.indices.size() % 3 == 0);
+        REQUIRE_FALSE(builder.vertices.empty());
+
+        for (uint32_t index : builder.indices) {
+            REQUIRE(index < builder.vertices.size());
         }
+
+        for (const auto& vertex : builder.vertices) {
+            CHECK(glm::length(vertex.normal) == doctest::Approx(1.f).epsilon(1e-4));
+        }
+
+        const MeshStats stats = analyse(builder);
+        CHECK(stats.degenerate == 0);
+        CHECK(stats.backwards == 0);
     }
-
-    return stats;
-}
-
-void requireWellFormed(const EgeModel::Builder& builder) {
-    REQUIRE(builder.indices.size() % 3 == 0);
-    REQUIRE_FALSE(builder.vertices.empty());
-
-    for (uint32_t index : builder.indices) {
-        REQUIRE(index < builder.vertices.size());
-    }
-
-    for (const auto& vertex : builder.vertices) {
-        CHECK(glm::length(vertex.normal) == doctest::Approx(1.f).epsilon(1e-4));
-    }
-
-    const MeshStats stats = analyse(builder);
-    CHECK(stats.degenerate == 0);
-    CHECK(stats.backwards == 0);
-}
 
 }  // namespace
 
 TEST_CASE("box is a well-formed unit cube") {
-    const auto box = EgeModel::Builder::box();
+    const auto box = Model::Builder::box();
 
     // Six faces, four vertices each: faces cannot share vertices because each
     // one carries its own normal.
@@ -88,7 +88,7 @@ TEST_CASE("box is a well-formed unit cube") {
 }
 
 TEST_CASE("plane is a single quad facing +Y") {
-    const auto plane = EgeModel::Builder::plane();
+    const auto plane = Model::Builder::plane();
 
     CHECK(plane.vertices.size() == 4);
     CHECK(plane.indices.size() == 6);
@@ -109,7 +109,7 @@ TEST_CASE("sphere is well-formed at a range of tessellations") {
             CAPTURE(latitude);
             CAPTURE(longitude);
 
-            const auto sphere = EgeModel::Builder::sphere(latitude, longitude);
+            const auto sphere = Model::Builder::sphere(latitude, longitude);
             requireWellFormed(sphere);
 
             // Radius 0.5 so the sphere occupies the same unit extent as the box.
@@ -121,7 +121,7 @@ TEST_CASE("sphere is well-formed at a range of tessellations") {
 }
 
 TEST_CASE("sphere texture coordinates span the full range") {
-    const auto sphere = EgeModel::Builder::sphere(8, 16);
+    const auto sphere = Model::Builder::sphere(8, 16);
 
     float minU = 1.f, maxU = 0.f, minV = 1.f, maxV = 0.f;
     for (const auto& vertex : sphere.vertices) {

@@ -10,8 +10,8 @@ namespace ege {
         uint32_t frameIndex;
         float frameTime;
         VkCommandBuffer commandBuffer;
-        EgeCamera& camera;
+        Camera& camera;
         VkDescriptorSet globalDescriptorSet;
-        EgeGameObject::Map& gameObjects;
+        GameObject::Map& gameObjects;
     };
 }  // namespace ege

@@ -3,7 +3,7 @@
 #include <glm/glm.hpp>
 
 namespace ege {
-    class EgeCamera {
+    class Camera {
     public:
         void setOrthographicProjection(
             float left, float right, float top, float bottom, float nearPlane, float farPlane);
