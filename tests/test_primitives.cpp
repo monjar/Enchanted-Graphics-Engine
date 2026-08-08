@@ -4,7 +4,7 @@
 // the sphere both being generated backwards, which backface culling would then
 // have made invisible rather than merely wrong.
 
-#include "render/ege_model.hpp"
+#include "render/Model.hpp"
 
 #include <doctest/doctest.h>
 

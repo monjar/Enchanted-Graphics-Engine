@@ -1,8 +1,8 @@
 #pragma once
 
-#include "platform/ege_window.hpp"
-#include "render/ege_model.hpp"
-#include "rhi/ege_swap_chain.hpp"
+#include "platform/Window.hpp"
+#include "render/Model.hpp"
+#include "rhi/SwapChain.hpp"
 
 #include <memory>
 #include <vector>

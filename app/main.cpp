@@ -1,4 +1,4 @@
-#include "core/ege_engine.hpp"
+#include "core/Application.hpp"
 
 #include <cstdlib>
 #include <iostream>

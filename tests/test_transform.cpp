@@ -6,7 +6,7 @@
 // transform ever gains shear or general parent matrices that stops being true,
 // and this test is what should fail.
 
-#include "scene/ege_game_object.hpp"
+#include "scene/GameObject.hpp"
 
 #include <glm/gtc/constants.hpp>
 

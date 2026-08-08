@@ -1,4 +1,4 @@
-#include "rhi/ege_descriptors.hpp"
+#include "rhi/Descriptors.hpp"
 
 // std
 #include <cassert>

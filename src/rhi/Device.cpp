@@ -1,4 +1,4 @@
-#include "rhi/ege_engine_device.hpp"
+#include "rhi/Device.hpp"
 
 // std headers
 #include <cstring>

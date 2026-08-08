@@ -1,4 +1,4 @@
-#include "rhi/ege_swap_chain.hpp"
+#include "rhi/SwapChain.hpp"
 
 // std
 #include <array>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "render/ege_model.hpp"
+#include "render/Model.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 

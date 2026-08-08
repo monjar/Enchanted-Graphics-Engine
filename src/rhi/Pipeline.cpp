@@ -1,6 +1,6 @@
-#include "rhi/ege_pipeline.hpp"
+#include "rhi/Pipeline.hpp"
 
-#include "render/ege_model.hpp"
+#include "render/Model.hpp"
 
 #include <cassert>
 #include <fstream>

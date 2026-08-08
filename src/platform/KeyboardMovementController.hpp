@@ -1,7 +1,7 @@
 #pragma once
 
-#include "platform/ege_window.hpp"
-#include "scene/ege_game_object.hpp"
+#include "platform/Window.hpp"
+#include "scene/GameObject.hpp"
 
 namespace ege {
     class KeyboardMovementController {

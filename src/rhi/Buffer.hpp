@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rhi/ege_engine_device.hpp"
+#include "rhi/Device.hpp"
 
 namespace ege {
 

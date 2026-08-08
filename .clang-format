@@ -27,7 +27,7 @@ UseTab: Never
 # Own header, then project headers, then third-party, then the standard library.
 IncludeBlocks: Regroup
 IncludeCategories:
-  - Regex: '^"ege_.*\.hpp"$'
+  - Regex: '^"(core|platform|rhi|render|scene)/.*\.hpp"$'
     Priority: 2
   - Regex: '^<(vulkan|GLFW|glm|tiny_obj_loader)'
     Priority: 3

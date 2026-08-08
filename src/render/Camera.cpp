@@ -1,4 +1,4 @@
-#include "render/ege_camera.hpp"
+#include "render/Camera.hpp"
 
 #include <cassert>
 #include <cmath>
