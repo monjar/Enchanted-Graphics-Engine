@@ -103,3 +103,8 @@ The Vulkan buffer abstraction started from Sascha Willems'
 [`VulkanBuffer`](https://github.com/SaschaWillems/Vulkan/blob/master/base/VulkanBuffer.h),
 and the renderer's foundations follow Brendan Galea's
 [Vulkan engine series](https://github.com/blurrypiano/littleVulkanEngine).
+
+## Licence
+
+MIT — see [`LICENSE`](LICENSE). Vendored tinyobjloader is MIT as well; its
+notice is in `external/tinyobjectloader/LICENSE`.
