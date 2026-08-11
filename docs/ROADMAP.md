@@ -1,6 +1,8 @@
 # Enchanted Graphics Engine — Development Roadmap
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
+>
+> **Status: Phase 0 complete.** See [§6](#6-phases) for what that covered and what it turned up.
 
 ## 1. Where the project stands today
 
@@ -21,16 +23,18 @@ The Vulkan foundations that exist are idiomatic and worth keeping:
 
 Everything above that layer — scene representation, materials, textures, asset management, input abstraction, scripting, physics, tooling — does not exist yet.
 
-### 1.1 Known blockers (fix before anything else)
+### 1.1 Known blockers — *resolved in Phase 0*
 
-The repository as checked out **does not run**. Four cheap defects gate every later phase:
+The repository as checked out **did not run**. Four defects gated every later phase:
 
 1. **Shader glob case mismatch.** Sources live in `Shaders/`; `CMakeLists.txt` globs `shaders/`. On case-sensitive filesystems the `Shaders` target compiles nothing.
 2. **SPIR-V path mismatch.** `simple_render_system.cpp` loads `CompiledShaders/*.spv`; CMake writes `.spv` beside the GLSL sources; `CompiledShaders/` is gitignored and absent from the tree.
 3. **`ENGINE_DIR` is never defined.** `ege_model.cpp` and `ege_pipeline.cpp` fall back to `"../"`; nothing in the build defines it.
 4. **Assets missing.** `loadGameObjects()` loads `models/flat_vase.obj`, `models/smooth_vase.obj` and `models/plane.obj`; there is no `models/` directory, so tinyobj throws at startup.
 
-### 1.2 Inherited bugs to clean up
+All four are fixed; the engine renders the demo scene from a clean checkout.
+
+### 1.2 Inherited bugs — *resolved in Phase 0*
 
 - `EgeBuffer::getAlignmentSize()` returns `instanceSize` instead of `alignmentSize` — harmless today, breaks the moment dynamic-offset UBOs appear.
 - `PipelineConfigInfo` has no member initializers. The one call site brace-initializes it and it is still an aggregate under C++17, so the fields do get zeroed today — but the deleted copy constructor makes it a non-aggregate under C++20, where the same code stops compiling.
@@ -181,6 +185,14 @@ Every phase ends with a **runnable engine** and a demonstrable result. Estimates
 - README, `docs/` skeleton, LICENSE.
 
 **Done when:** a clean checkout builds and runs on Linux *and* Windows with no local path configuration, and CI is green.
+
+**Outcome.** Done. Delivered beyond the original list: the engine gained procedural box/plane/sphere primitives so a clean checkout needs no binary assets at all; the 131 warnings the new flag set surfaced were all fixed and promoted to errors; a doctest suite and five-configuration CI landed, including a headless render smoke test under lavapipe with validation layers treated as failures.
+
+Three things worth recording, because two of them contradict what this document originally claimed:
+
+- **`normalMatrix()` was never buggy.** The inverse-scale shortcut is *exact* for the strict T·R·S composition `mat4()` builds — verified against `transpose(inverse(M))` over 20k randomised transforms. The claim is retracted in §1.2 and the precondition is now documented at the function and pinned by a test.
+- **`PipelineConfigInfo` was not UB under C++17.** A deleted copy constructor is user-declared but not user-provided, so the struct stayed an aggregate and `config{}` did zero it. The genuine problem was that it stopped compiling under C++20, which is now a CI configuration.
+- **Fixing the shadowing warnings uncovered a real defect** that had been hidden by it: `DescriptorPool`'s constructor initialised its device reference from itself. It compiled only because the parameter and the member shared a name.
 
 ### Phase 1 — Core layer & reflection (~3–4 weeks)
 
