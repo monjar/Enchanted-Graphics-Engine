@@ -7,6 +7,8 @@
 
 #include "rhi/Buffer.hpp"
 
+#include "core/Assert.hpp"
+
 // std
 #include <cassert>
 #include <cstring>
@@ -62,7 +64,7 @@ namespace ege {
      * @return VkResult of the buffer mapping call
      */
     VkResult Buffer::map(VkDeviceSize size, VkDeviceSize offset) {
-        assert(buffer && memory && "Called map on buffer before create");
+        EGE_ASSERT(buffer != VK_NULL_HANDLE, "called map on a buffer before it was created");
         // VMA maps the whole allocation; the offset and size arguments are kept
         // for interface compatibility with the previous vkMapMemory call, and
         // writeToBuffer applies the offset itself.
@@ -93,7 +95,7 @@ namespace ege {
      *
      */
     void Buffer::writeToBuffer(void* data, VkDeviceSize size, VkDeviceSize offset) {
-        assert(mapped && "Cannot copy to unmapped buffer");
+        EGE_ASSERT(mapped != nullptr, "cannot copy into an unmapped buffer");
 
         if (size == VK_WHOLE_SIZE) {
             memcpy(mapped, data, bufferSize);
