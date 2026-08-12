@@ -1,6 +1,7 @@
 #include "core/Application.hpp"
 
 #include "core/Log.hpp"
+#include "core/Time.hpp"
 #include "platform/CameraController.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
@@ -12,7 +13,6 @@
 #include <glm/gtc/constants.hpp>
 
 #include <array>
-#include <chrono>
 #include <stdexcept>
 
 namespace ege {
@@ -80,19 +80,28 @@ namespace ege {
         CameraController cameraController{};
         CameraController::registerDefaultActions(window.input());
 
-        auto currentTime = std::chrono::high_resolution_clock::now();
+        Time time{};
 
         while (!window.shouldClose()) {
             Window::pollEvents();
 
-            // putting this after polls to make sure pauses don't affect the time
-            auto newTime = std::chrono::high_resolution_clock::now();
-            float frameTime =
-                std::chrono::duration<float, std::chrono::seconds::period>(newTime - currentTime)
-                    .count();
-            currentTime = newTime;
+            // After the poll, so that a pause spent inside it is measured as
+            // part of the frame it belongs to.
+            time.beginFrame();
+            const float frameTime = time.delta();
 
             window.input().newFrame();
+
+            // Fixed-rate simulation. Nothing runs here yet - physics attaches
+            // in Phase 8 - but the loop shape is what makes that possible, and
+            // it is far easier to establish before there is anything depending
+            // on the old variable-rate behaviour.
+            while (time.consumeFixedStep()) {
+                // fixedTick(time.fixedStep());
+            }
+
+            // Rendering and camera control stay on the variable delta: they
+            // should run as often as the display allows.
             cameraController.update(window.input(), frameTime, viewerObject);
             camera.setViewYXZ(viewerObject.transform.translation, viewerObject.transform.rotation);
             float aspectRatio = renderer.getAspectRatio();
