@@ -31,6 +31,11 @@ namespace ege {
     private:
         void loadScene();
 
+        // Imports every .gltf/.glb under assets/models, if the directory
+        // exists. The demo ships none - dropping a file there is how content
+        // gets in until the asset database gives imports a real home.
+        void importGltfModels();
+
         // Round-trips the scene through the serializer at start-up, which keeps
         // save and load exercised by every run rather than only by the tests.
         void verifySceneRoundTrip();

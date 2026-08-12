@@ -30,8 +30,13 @@ derived by the frame graph rather than written by hand.
 Bright highlights bloom through a half-resolution blur chain, composited in
 linear light before the ACES tonemap.
 
-Still to come: cascaded and point-light shadows, anti-aliasing, glTF import,
-the editor, C++ scripting and physics.
+The copper torus is a **glTF import**: any `.gltf`/`.glb` dropped into
+`assets/models/` is parsed, its materials and textures built, and its node
+hierarchy spawned as entities at startup. The demo's torus is itself a
+self-contained text glTF, so the no-binary-assets rule still holds.
+
+Still to come: cascaded and point-light shadows, anti-aliasing, the editor,
+C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -91,9 +96,10 @@ src/
   core/         application root, logging, assertions, time, job system
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
+  assets/       glTF import (cgltf); grows into the asset database in Phase 6
   rhi/          device, swapchain, pipeline, buffer, descriptors, textures, frame graph
   render/       renderer, model, camera, materials, lights, bounds,
-                environment lighting, PBR, skybox and post-process systems
+                environment lighting, PBR, shadows, skybox, bloom and post-process
   scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree
 assets/         runtime assets, resolved via EGE_ASSET_ROOT

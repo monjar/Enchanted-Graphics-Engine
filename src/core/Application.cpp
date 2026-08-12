@@ -1,5 +1,6 @@
 #include "core/Application.hpp"
 
+#include "assets/GltfLoader.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
 #include "platform/CameraController.hpp"
@@ -25,6 +26,7 @@
 
 #include <algorithm>
 #include <array>
+#include <filesystem>
 #include <stdexcept>
 
 namespace ege {
@@ -538,6 +540,8 @@ namespace ege {
             sun.attach<DirectionalLight>(sunLight);
         }
 
+        importGltfModels();
+
         EGE_INFO(
             "Scene loaded: {} entities, {} drawn, {} lights, {} materials",
             world.entityCount(),
@@ -546,6 +550,46 @@ namespace ege {
             materials.size());
 
         verifySceneRoundTrip();
+    }
+
+    void Application::importGltfModels() {
+        namespace fs = std::filesystem;
+
+#ifdef EGE_ASSET_ROOT
+        const fs::path modelDirectory = fs::path{EGE_ASSET_ROOT} / "models";
+#else
+        const fs::path modelDirectory = fs::path{"assets"} / "models";
+#endif
+
+        std::error_code errorCode;
+        if (!fs::is_directory(modelDirectory, errorCode)) {
+            return;
+        }
+
+        for (const fs::directory_entry& entry : fs::directory_iterator{modelDirectory}) {
+            const fs::path& path = entry.path();
+            const std::string extension = path.extension().string();
+            if (extension != ".gltf" && extension != ".glb") {
+                continue;
+            }
+
+            // One bad file should not take down the ones beside it, or the
+            // procedural scene it would have joined.
+            try {
+                const GltfSceneData scene = gltf::parseFile(path.string());
+                const gltf::ImportStats stats = gltf::instantiate(
+                    device, world, scene, *materialPool, *materialSetLayout, path.stem().string());
+                EGE_INFO(
+                    "Imported {}: {} entities, {} meshes, {} materials, {} textures",
+                    path.filename().string(),
+                    stats.entities,
+                    stats.meshes,
+                    stats.materials,
+                    stats.textures);
+            } catch (const std::exception& error) {
+                EGE_ERROR("{}", error.what());
+            }
+        }
     }
 
     void Application::verifySceneRoundTrip() {
