@@ -7,7 +7,8 @@
 #include "render/Model.hpp"
 #include "render/Renderer.hpp"
 #include "rhi/Descriptors.hpp"
-#include "scene/GameObject.hpp"
+#include "scene/Components.hpp"
+#include "scene/World.hpp"
 
 #include <memory>
 #include <vector>
@@ -28,7 +29,7 @@ namespace ege {
         void run();
 
     private:
-        void loadGameObjects();
+        void loadScene();
 
         Window window{WIDTH, HEIGHT, "Hello World!"};
         Device device{window};
@@ -40,8 +41,7 @@ namespace ege {
         std::unique_ptr<DescriptorPool> materialPool{};
         std::unique_ptr<DescriptorSetLayout> materialSetLayout{};
         JobSystem jobs{};
-        GameObject::Map gameObjects;
+        World world;
         std::vector<std::shared_ptr<Material>> materials;
-        std::vector<GpuPointLight> sceneLights;
     };
 }  // namespace ege

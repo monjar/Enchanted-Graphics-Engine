@@ -1,6 +1,6 @@
 #pragma once
 
-#include "scene/GameObject.hpp"
+#include "scene/Components.hpp"
 
 namespace ege {
 
@@ -20,7 +20,7 @@ namespace ege {
         // Registers the default bindings. Call once, before update().
         static void registerDefaultActions(Input& input);
 
-        void update(Input& input, float dt, GameObject& viewer);
+        void update(Input& input, float dt, Transform& viewer);
 
         float moveSpeed = 3.f;
         float lookSpeed = 1.5f;

@@ -25,7 +25,7 @@ namespace ege {
         input.bindAction("Look", MouseButton::Right);
     }
 
-    void CameraController::update(Input& input, float dt, GameObject& viewer) {
+    void CameraController::update(Input& input, float dt, Transform& viewer) {
         // Capture the cursor only while looking, so the window stays usable.
         const bool wantsLook = input.isActionDown("Look");
         if (wantsLook != looking) {
@@ -40,25 +40,24 @@ namespace ege {
         rotate.y += input.axis("LookLeft", "LookRight");
 
         if (glm::dot(rotate, rotate) > std::numeric_limits<float>::epsilon()) {
-            viewer.transform.rotation += lookSpeed * dt * glm::normalize(rotate);
+            viewer.rotation += lookSpeed * dt * glm::normalize(rotate);
         }
 
         if (looking) {
             const glm::vec2 delta = input.mouseDelta();
             // Screen Y grows downward while pitch grows upward, hence the sign.
-            viewer.transform.rotation.x -= delta.y * mouseSensitivity;
-            viewer.transform.rotation.y += delta.x * mouseSensitivity;
+            viewer.rotation.x -= delta.y * mouseSensitivity;
+            viewer.rotation.y += delta.x * mouseSensitivity;
         }
 
-        viewer.transform.rotation.x =
-            glm::clamp(viewer.transform.rotation.x, -pitchLimit, pitchLimit);
+        viewer.rotation.x = glm::clamp(viewer.rotation.x, -pitchLimit, pitchLimit);
         // Keep yaw bounded so it cannot drift into the range where float
         // precision starts to visibly quantise the rotation.
-        viewer.transform.rotation.y = glm::mod(viewer.transform.rotation.y, glm::two_pi<float>());
+        viewer.rotation.y = glm::mod(viewer.rotation.y, glm::two_pi<float>());
 
         // ---- Move ----------------------------------------------------------
 
-        const float yaw = viewer.transform.rotation.y;
+        const float yaw = viewer.rotation.y;
         const glm::vec3 forward{glm::sin(yaw), 0.f, glm::cos(yaw)};
         const glm::vec3 right{forward.z, 0.f, -forward.x};
         // This scene treats -Y as up.
@@ -70,7 +69,7 @@ namespace ege {
         direction += up * input.axis("MoveDown", "MoveUp");
 
         if (glm::dot(direction, direction) > std::numeric_limits<float>::epsilon()) {
-            viewer.transform.translation += moveSpeed * dt * glm::normalize(direction);
+            viewer.translation += moveSpeed * dt * glm::normalize(direction);
         }
     }
 

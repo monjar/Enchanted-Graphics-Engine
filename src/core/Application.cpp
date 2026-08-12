@@ -8,6 +8,7 @@
 #include "render/Camera.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "rhi/Buffer.hpp"
+#include "scene/Components.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -58,7 +59,7 @@ namespace ege {
         materialSetLayout = Material::createLayout(device);
         Material::createDefaults(device);
 
-        loadGameObjects();
+        loadScene();
     }
 
     Application::~Application() {
@@ -100,11 +101,13 @@ namespace ege {
 
         Camera camera{};
 
-        auto viewerObject = GameObject::createGameObject();
-        viewerObject.transform.translation = glm::vec3(0.f, -1.f, -3.f);
+        // The viewer is a plain transform rather than an entity: it is the
+        // editor camera, not part of the scene being edited.
+        Transform viewerTransform{};
+        viewerTransform.translation = glm::vec3(0.f, -1.f, -3.f);
         // Pitched down slightly so the default view frames the scene instead of
         // leaving it along the bottom edge.
-        viewerObject.transform.rotation.x = -.35f;
+        viewerTransform.rotation.x = -.35f;
         CameraController cameraController{};
         CameraController::registerDefaultActions(window.input());
 
@@ -130,8 +133,8 @@ namespace ege {
 
             // Rendering and camera control stay on the variable delta: they
             // should run as often as the display allows.
-            cameraController.update(window.input(), frameTime, viewerObject);
-            camera.setViewYXZ(viewerObject.transform.translation, viewerObject.transform.rotation);
+            cameraController.update(window.input(), frameTime, viewerTransform);
+            camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
             float aspectRatio = renderer.getAspectRatio();
 
             // camera.setOrthographicProjection(-aspectRatio, aspectRatio, -1, 1, -1, 1);
@@ -146,17 +149,28 @@ namespace ege {
                     commandBuffer,
                     camera,
                     globalDescriptorSets[frameIndex],
-                    gameObjects};
+                    world};
 
                 // update
                 GlobalUbo ubo{};
                 ubo.projection = camera.getProjection();
                 ubo.view = camera.getView();
                 ubo.inverseView = glm::inverse(camera.getView());
-                ubo.numLights = static_cast<int>(sceneLights.size());
-                for (size_t light = 0; light < sceneLights.size(); light++) {
-                    ubo.pointLights[light] = sceneLights[light];
-                }
+                // Lights are entities now, gathered per frame rather than
+                // held in a parallel list. The cap is the shader's array size;
+                // clustered shading in Phase 9 is what removes it.
+                int lightIndex = 0;
+                world.each<Transform, PointLight>(
+                    [&](Entity, Transform& transform, PointLight& light) {
+                        if (lightIndex >= maxPointLights) {
+                            return;
+                        }
+                        ubo.pointLights[lightIndex].position =
+                            glm::vec4{transform.translation, 1.f};
+                        ubo.pointLights[lightIndex].color = glm::vec4{light.color, light.intensity};
+                        lightIndex++;
+                    });
+                ubo.numLights = lightIndex;
 
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
@@ -172,8 +186,8 @@ namespace ege {
         vkDeviceWaitIdle(device.device());
     }
 
-    void Application::loadGameObjects() {
-        // Built from procedural primitives rather than OBJ files so that a
+    void Application::loadScene() {
+        // Built from procedural primitives rather than asset files so that a
         // clean checkout runs with no binary assets present. Note this scene
         // treats -Y as up, matching the camera and light placement inherited
         // from the tutorial code.
@@ -186,20 +200,32 @@ namespace ege {
             return material;
         };
 
-        auto addObject = [this](
-                             std::shared_ptr<Model> model,
-                             std::shared_ptr<Material> material,
-                             glm::vec3 translation,
-                             glm::vec3 scale,
-                             glm::vec3 rotation = glm::vec3{0.f}) {
-            auto object = GameObject::createGameObject();
-            object.model = std::move(model);
-            object.material = std::move(material);
-            object.transform.translation = translation;
-            object.transform.scale = scale;
-            object.transform.rotation = rotation;
-            gameObjects.emplace(object.getId(), std::move(object));
+        auto addMesh = [this](
+                           std::string name,
+                           std::shared_ptr<Model> model,
+                           std::shared_ptr<Material> material,
+                           glm::vec3 translation,
+                           glm::vec3 scale,
+                           glm::vec3 rotation = glm::vec3{0.f}) {
+            Entity entity = world.spawn(std::move(name));
+            Transform transform{};
+            transform.translation = translation;
+            transform.scale = scale;
+            transform.rotation = rotation;
+            entity.attach<Transform>(transform);
+            entity.attach<MeshRenderer>(MeshRenderer{std::move(model), std::move(material), true});
+            return entity;
         };
+
+        auto addLight =
+            [this](std::string name, glm::vec3 position, glm::vec3 color, float intensity) {
+                Entity entity = world.spawn(std::move(name));
+                Transform transform{};
+                transform.translation = position;
+                entity.attach<Transform>(transform);
+                entity.attach<PointLight>(PointLight{color, intensity, 25.f});
+                return entity;
+            };
 
         std::shared_ptr<Model> plane = std::make_shared<Model>(device, Model::Builder::plane());
         std::shared_ptr<Model> box = std::make_shared<Model>(device, Model::Builder::box());
@@ -208,50 +234,53 @@ namespace ege {
 
         // Floor, rotated a half turn about X so its +Y normal points along -Y,
         // which is up in this scene and therefore towards the lights.
-        addObject(
+        addMesh(
+            "Floor",
             plane,
             makeMaterial(glm::vec3{0.35f}, 0.f, 0.85f),
             {0.f, .5f, 0.f},
             {8.f, 1.f, 8.f},
             {glm::pi<float>(), 0.f, 0.f});
 
-        addObject(
+        addMesh(
+            "RedBox",
             box,
             makeMaterial(glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
             {-.9f, .25f, 0.f},
             glm::vec3{.5f});
 
-        // A row of spheres sweeping roughness, which is the clearest way to see
-        // whether the GGX distribution and the geometry term are behaving:
-        // the highlight should tighten smoothly from left to right.
+        // A row of metal spheres sweeping roughness, which is the clearest way
+        // to see whether the GGX distribution and the geometry term behave: the
+        // highlight should broaden smoothly from left to right.
         for (int i = 0; i < 5; i++) {
             const float roughness = 0.05f + 0.95f * static_cast<float>(i) / 4.f;
-            addObject(
+            addMesh(
+                "MetalSphere" + std::to_string(i),
                 sphere,
                 makeMaterial(glm::vec3{0.95f, 0.8f, 0.35f}, 1.f, roughness),
                 {-1.2f + 0.6f * static_cast<float>(i), .25f, 1.2f},
                 glm::vec3{.45f});
         }
 
-        addObject(
+        addMesh(
+            "BlueSphere",
             sphere,
             makeMaterial(glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
             glm::vec3{.5f});
 
-        // Three lights rather than the single hardcoded one, so the specular
-        // response is visible from more than one direction. Remember -Y is up,
-        // so a negative Y places a light above the floor.
-        sceneLights.push_back(
-            {glm::vec4{-1.5f, -1.6f, -1.2f, 1.f}, glm::vec4{1.f, 0.95f, 0.85f, 6.f}});
-        sceneLights.push_back({glm::vec4{1.8f, -1.2f, 0.8f, 1.f}, glm::vec4{0.4f, 0.6f, 1.f, 5.f}});
-        sceneLights.push_back({glm::vec4{0.f, -0.9f, 2.2f, 1.f}, glm::vec4{1.f, 0.5f, 0.3f, 3.f}});
+        // Lights are entities too. Remember -Y is up, so a negative Y is above
+        // the floor.
+        addLight("KeyLight", {-1.5f, -1.6f, -1.2f}, {1.f, 0.95f, 0.85f}, 6.f);
+        addLight("FillLight", {1.8f, -1.2f, 0.8f}, {0.4f, 0.6f, 1.f}, 5.f);
+        addLight("RimLight", {0.f, -0.9f, 2.2f}, {1.f, 0.5f, 0.3f}, 3.f);
 
         EGE_INFO(
-            "Scene loaded: {} objects, {} materials, {} lights",
-            gameObjects.size(),
-            materials.size(),
-            sceneLights.size());
+            "Scene loaded: {} entities, {} drawn, {} lights, {} materials",
+            world.entityCount(),
+            world.count<Transform, MeshRenderer>(),
+            world.count<Transform, PointLight>(),
+            materials.size());
     }
 
 }  // namespace ege

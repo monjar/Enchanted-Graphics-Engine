@@ -8,7 +8,7 @@
 
 #include "reflect/BuiltinTypes.hpp"
 #include "reflect/Reflect.hpp"
-#include "scene/GameObject.hpp"
+#include "scene/Components.hpp"
 
 #include <doctest/doctest.h>
 
@@ -157,12 +157,12 @@ TEST_CASE("types are registered once and looked up by name") {
 }
 
 TEST_CASE("the engine's own transform is reflected") {
-    const ege::TypeInfo& type = TypeRegistry::of<ege::TransformComponent>();
+    const ege::TypeInfo& type = TypeRegistry::of<ege::Transform>();
 
-    CHECK(type.name() == "ege::TransformComponent");
+    CHECK(type.name() == "ege::Transform");
     CHECK(type.fields().size() == 3);
 
-    ege::TransformComponent transform{};
+    ege::Transform transform{};
     type.field("translation")->valueIn<glm::vec3>(&transform) = glm::vec3{4.f, 5.f, 6.f};
     CHECK(transform.translation.z == doctest::Approx(6.f));
 

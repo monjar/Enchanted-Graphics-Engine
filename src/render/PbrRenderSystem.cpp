@@ -1,6 +1,7 @@
 #include "render/PbrRenderSystem.hpp"
 
 #include "core/Assert.hpp"
+#include "scene/Components.hpp"
 
 #include <array>
 #include <stdexcept>
@@ -103,53 +104,56 @@ namespace ege {
 
         VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
 
-        for (auto& [id, object] : frameInfo.gameObjects) {
-            if (object.model == nullptr || object.material == nullptr) {
-                continue;
-            }
+        frameInfo.world.each<Transform, MeshRenderer>(
+            Without<Hidden>{}, [&](Entity, Transform& transform, MeshRenderer& renderer) {
+                if (!renderer.visible || renderer.model == nullptr ||
+                    renderer.material == nullptr) {
+                    return;
+                }
 
-            // Materials are bound only when they change. Iteration order is not
-            // sorted yet, so this only helps when neighbours happen to share a
-            // material; sorting into material buckets is a later step.
-            VkDescriptorSet materialSet = object.material->descriptorSet();
-            if (materialSet != boundMaterial) {
-                vkCmdBindDescriptorSets(
+                // Materials are bound only when they change. Iteration order is
+                // pool order, not sorted by material, so this only helps when
+                // neighbours happen to share one; sorting into material buckets
+                // is a later step.
+                VkDescriptorSet materialSet = renderer.material->descriptorSet();
+                if (materialSet != boundMaterial) {
+                    vkCmdBindDescriptorSets(
+                        frameInfo.commandBuffer,
+                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        pipelineLayout,
+                        1,
+                        1,
+                        &materialSet,
+                        0,
+                        nullptr);
+                    boundMaterial = materialSet;
+                }
+
+                const MaterialProperties& properties = renderer.material->properties;
+
+                PushConstants push{};
+                push.modelMatrix = transform.mat4();
+                push.normalMatrix = glm::mat4{transform.normalMatrix()};
+                push.baseColorFactor = properties.baseColorFactor;
+                push.emissiveAndMetallic =
+                    glm::vec4{properties.emissiveFactor, properties.metallicFactor};
+                push.roughnessNormalOcclusion = glm::vec4{
+                    properties.roughnessFactor,
+                    properties.normalScale,
+                    properties.occlusionStrength,
+                    0.f};
+
+                vkCmdPushConstants(
                     frameInfo.commandBuffer,
-                    VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipelineLayout,
-                    1,
-                    1,
-                    &materialSet,
+                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0,
-                    nullptr);
-                boundMaterial = materialSet;
-            }
+                    sizeof(PushConstants),
+                    &push);
 
-            const MaterialProperties& properties = object.material->properties;
-
-            PushConstants push{};
-            push.modelMatrix = object.transform.mat4();
-            push.normalMatrix = glm::mat4{object.transform.normalMatrix()};
-            push.baseColorFactor = properties.baseColorFactor;
-            push.emissiveAndMetallic =
-                glm::vec4{properties.emissiveFactor, properties.metallicFactor};
-            push.roughnessNormalOcclusion = glm::vec4{
-                properties.roughnessFactor,
-                properties.normalScale,
-                properties.occlusionStrength,
-                0.f};
-
-            vkCmdPushConstants(
-                frameInfo.commandBuffer,
-                pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0,
-                sizeof(PushConstants),
-                &push);
-
-            object.model->bind(frameInfo.commandBuffer);
-            object.model->draw(frameInfo.commandBuffer);
-        }
+                renderer.model->bind(frameInfo.commandBuffer);
+                renderer.model->draw(frameInfo.commandBuffer);
+            });
     }
 
 }  // namespace ege
