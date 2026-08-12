@@ -4,11 +4,20 @@ A Vulkan game engine in C++17, built from the renderer up.
 
 ![The demo scene: a box and a sphere lit by a point light on a plane](docs/images/demo-scene.png)
 
-Right now it is a forward renderer — device and swapchain management, a
-graphics pipeline, staged vertex and index buffers, descriptor sets, a
-perspective camera, procedural mesh primitives, and per-pixel point lighting.
-The scene system, PBR pipeline, editor, C++ scripting and physics are planned;
-[`docs/ROADMAP.md`](docs/ROADMAP.md) lays out how it gets there.
+A forward renderer with a metallic-roughness PBR pipeline, an entity-component
+system, runtime reflection, textures with mip generation, a job system and a
+fixed-timestep simulation clock.
+
+The image above is the demo scene: five metal spheres sweeping roughness from
+near-mirror to fully rough, plus two dielectrics, lit by three point lights.
+The smoothest metal is nearly black because a mirror with no environment to
+reflect *is* nearly black — that is what image-based lighting fixes, and it is
+one of the things still outstanding.
+
+Still to come: glTF import, IBL, shadows, an HDR post-processing stack, scene
+serialization, the editor, C++ scripting and physics.
+[`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
+exactly what has landed and what has not.
 
 ## Building
 
@@ -65,9 +74,9 @@ src/
   core/         application root, logging, assertions, time, job system
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
-  rhi/          device, swapchain, pipeline, buffer, descriptors
-  render/       renderer, model, camera, render systems
-  scene/        game objects and transforms
+  rhi/          device, swapchain, pipeline, buffer, descriptors, textures
+  render/       renderer, model, camera, materials, lights, PBR render system
+  scene/        world, entities, component pools, components
 shaders/        GLSL, compiled to SPIR-V into the build tree
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
 tests/          doctest suite
@@ -101,6 +110,8 @@ reformat out of `git blame`.
 | [GLM](https://github.com/g-truc/glm) 1.0.1 | maths | fetched or system |
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | OBJ import | vendored |
 | [spdlog](https://github.com/gabime/spdlog) 1.14.1 | logging | fetched or system |
+| [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) 3.1.0 | GPU memory | fetched |
+| [stb_image](https://github.com/nothings/stb) | image decoding | fetched |
 | [doctest](https://github.com/doctest/doctest) 2.4.11 | tests | fetched |
 
 The Vulkan buffer abstraction started from Sascha Willems'

@@ -2,11 +2,13 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0 and 1 complete.** See [§6](#6-phases) for what each covered and what it turned up.
+> **Status: Phases 0 and 1 complete. Phases 2, 3 and 4 partially complete** — see the outcome notes on each for exactly what landed and what is still outstanding.
 
 ## 1. Where the project stands today
 
-Enchanted is a **Vulkan 1.0 forward renderer** grown out of Brendan Galea's Vulkan tutorial series, stopped at roughly the point where UBOs and descriptor sets were introduced. It draws indexed meshes — procedural primitives or OBJ files — lit by one hardcoded diffuse point light.
+Enchanted is a **Vulkan forward renderer with a metallic-roughness PBR pipeline**, an entity-component system, runtime reflection, VMA-backed GPU memory, textures with mip generation, a job system and a fixed-timestep clock. It began as a port of Brendan Galea's Vulkan tutorial series and has since grown past it.
+
+Still absent, and tracked per phase in §6: glTF import, IBL, shadows, an HDR post stack, a frame graph, scene serialization, the editor, scripting and physics.
 
 The Vulkan foundations are idiomatic and are being kept:
 
@@ -20,8 +22,10 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::Buffer` | Generic mapped/staged Vulkan buffer |
 | `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
 | `ege::Model` | Vertex/index buffers, procedural primitives, tinyobj loading, vertex dedup |
-
-Everything above that layer — scene representation, materials, textures, asset management, input abstraction, scripting, physics, tooling — does not exist yet.
+| `ege::Texture` | Upload, mip generation, samplers, sRGB/linear selection |
+| `ege::Material` | Metallic-roughness properties and a per-material descriptor set |
+| `ege::World` / `ege::Entity` | Sparse-set ECS and the entity facade |
+| `ege::TypeRegistry` | Runtime reflection |
 
 ### 1.1 Known blockers — *resolved in Phase 0*
 
@@ -104,25 +108,22 @@ docs/                                                                    [exists
 
 The distinguishing verbs are **Spawn / Attach / Fetch / Detach / Despawn**, and queries — not per-object component lookups — are the primary gameplay idiom.
 
+As shipped. Method names are camelCase, matching the rest of the codebase rather than the PascalCase of the original sketch; `SetParent` and `View` are not built yet.
+
 ```cpp
 World world;
 
-Entity player = world.Spawn("Player");
-player.Attach<Transform>({ .position = {0, 1, 0} });
-player.Attach<MeshRenderer>(mesh, material);
-player.Attach<Script<PlayerController>>();
+Entity player = world.spawn("Player");
+player.attach<Transform>(Transform{.translation = {0, 1, 0}});
+player.attach<MeshRenderer>(MeshRenderer{mesh, material, true});
 
-Transform& t = player.Fetch<Transform>();       // asserts present
-if (auto* r = player.Find<RigidBody>()) { ... } // nullable
-player.Detach<MeshRenderer>();
-world.Despawn(player);
+Transform& t = player.fetch<Transform>();       // asserts present
+if (auto* r = player.find<RigidBody>()) { ... } // nullable
+player.detach<MeshRenderer>();
+player.despawn();
 
-sword.SetParent(player);                        // hierarchy lives in the ECS
-
-// Queries — the main way systems are written
-world.Each<Transform, PointLight>([](Entity e, Transform& t, PointLight& l) { ... });
-
-for (auto [e, t, rb] : world.View<Transform, RigidBody>()) { ... }
+// Queries - the main way systems are written
+world.each<Transform, PointLight>([](Entity e, Transform& t, PointLight& l) { ... });
 
 world.Each<Transform>(Without<Frozen>{}, [](Entity e, Transform& t) { ... });
 
@@ -238,6 +239,12 @@ Three things worth recording:
 
 **Done when:** a textured quad renders through the frame graph, validation-clean, with GPU memory managed by VMA.
 
+**Outcome — partial.**
+
+*Done:* VMA now backs every buffer and image allocation. This was the urgent part: one `vkAllocateMemory` per buffer hits `maxMemoryAllocationCount` (commonly 4096) at a few thousand meshes while plenty of memory remains free. `rhi/Texture` adds upload, mip generation by successive blits, samplers with device-clamped anisotropy, and per-texture sRGB-versus-linear selection — which finally uses `createImageWithInfo`, `copyBufferToImage` and the `samplerAnisotropy` feature, all of which had been requested or written and never called.
+
+*Not done, and why:* **Vulkan 1.3 with dynamic rendering** is a large rewrite of `SwapChain` and every pipeline, and the whole point is to delete render-pass bookkeeping — worth doing in one deliberate pass, not squeezed in beside feature work. **SPIRV-Reflect** driven pipeline layouts, **bindless descriptors**, the **frame graph** and the **on-disk pipeline cache** are all still outstanding. The frame graph is the one that gates Phase 9: shadows → G-buffer → lighting → post only compose cheaply once passes declare their resources.
+
 ### Phase 3 — ECS world & scene (~4–5 weeks)
 
 - Implement `World`, `Entity`, `ComponentPool`, `View` / `Each`, `With` / `Without` filters and `Schedule` — the API in §4.
@@ -247,6 +254,17 @@ Three things worth recording:
 - **Debug ImGui overlay**: hierarchy tree plus a reflection-driven inspector, in-process. Not the editor yet, but it makes ECS work visible immediately and prototypes Phase 5's panels.
 
 **Done when:** a scene of hundreds of entities with multiple lights loads from a `.egescene` file, is inspectable, and saves back byte-identically.
+
+**Outcome — partial.**
+
+*Done:* the ECS itself — `World`, `EntityId`, `ComponentPool`, the `spawn`/`attach`/`fetch`/`find`/`detach`/`despawn` API, `each()` queries with `With`/`Without` filters — and the migration of the scene, the render system and the lights onto it. `GameObject` is gone. Lights were previously fixed fields in a uniform struct, set once at construction and never updated; they are entities with transforms now.
+
+*Not done:* **scene serialization** (`.egescene` load/save), **hierarchy and parenting**, the explicit **`Schedule`** for system phases, and the **debug ImGui overlay**. Serialization is the next thing to build and is nearly all reflection-driven, so it is mostly plumbing rather than design.
+
+Two design notes worth carrying forward:
+
+- `EntityId` packs a 24-bit index with an 8-bit generation, bumped on despawn, so a handle held across a despawn is *detectably* stale rather than silently addressing whatever recycled the slot. A slot that exhausts its generations is retired rather than reused.
+- `each()` iterates a snapshot of the driving pool so a callback may despawn or attach without invalidating the walk. That copy is a real per-query cost; a deferred command buffer is the eventual answer.
 
 ### Phase 4 — PBR renderer (~6–8 weeks)
 
@@ -260,6 +278,14 @@ Three things worth recording:
 - Editor-only debug rendering: wireframe, normals, light gizmos, bounding volumes.
 
 **Done when:** a Sponza-class glTF scene renders with PBR materials, IBL, shadows and tonemapping at interactive rates.
+
+**Outcome — partial.**
+
+*Done:* the shading model. Cook-Torrance with Trowbridge-Reitz GGX, Smith/Schlick-GGX geometry, Schlick Fresnel, and correct energy conservation between the diffuse and specular lobes with metals carrying no diffuse term. `render/Material` holds metallic-roughness properties plus four texture slots behind a per-material descriptor set, ordered after the per-frame set by update frequency. Normal mapping derives its tangent frame from screen-space derivatives. Up to sixteen point lights, replacing the single hardcoded one. Backface culling, and a Reinhard tonemap with gamma encode as a placeholder for a real HDR target.
+
+*Not done:* **glTF 2.0 import** (still OBJ and procedural primitives only), **IBL** (irradiance and prefiltered specular, the BRDF LUT, skybox), **shadow maps**, the **HDR target with ACES and bloom**, **MSAA/FXAA/TAA**, and **frustum culling, material sorting and instancing**. The absence of IBL is visible in the demo image: the smoothest metal sphere is nearly black because a mirror with nothing to reflect *is* nearly black. That is correct behaviour and exactly what an environment map fixes.
+
+One bug worth recording, found by looking at the output rather than by the build passing: the default metallic-roughness texture was `(1, 1, 0)`, read as "fully rough, non-metal". But metallic samples from blue and is *multiplied* by `metallicFactor`, so a zero there forced every material to be a dielectric regardless of its factor, and the metal spheres shaded as diffuse plastic. Fallback textures have to be the multiplicative identity.
 
 ### Phase 5 — Editor application (~6–8 weeks)
 
