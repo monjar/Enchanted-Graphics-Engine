@@ -2,25 +2,27 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0, 1 and 3 complete. Phases 2 and 4 partially complete. Phases 5 and 6 not started.**
+> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phase 4 partially complete. Phases 5 and 6 not started.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The single largest outstanding item is the **frame graph** (§Phase 2): shadows, IBL, MSAA and the HDR post stack all want to be passes that declare their resources, and each is materially harder to add against the current hardcoded render pass. It is the right next piece of work.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering and an HDR target with an ACES tonemap pass. With the graph in place, the highest-value next items are the ones it was blocking: **IBL** first (the biggest visible improvement), then **shadow maps**, then **bloom and MSAA** — each now an `addPass` call rather than a round of barrier bookkeeping. **glTF import** remains the parallel track that depends on none of this.
 
 ## 1. Where the project stands today
 
-Enchanted is a **Vulkan forward renderer with a metallic-roughness PBR pipeline**, an entity-component system, runtime reflection, VMA-backed GPU memory, textures with mip generation, a job system and a fixed-timestep clock. It began as a port of Brendan Galea's Vulkan tutorial series and has since grown past it.
+Enchanted is a **Vulkan 1.3 forward renderer with a metallic-roughness PBR pipeline and a frame graph**, an entity-component system, runtime reflection, VMA-backed GPU memory, textures with mip generation, a job system and a fixed-timestep clock. The scene renders linear HDR into a graph-managed float target and is tonemapped to the swapchain with the ACES fit. It began as a port of Brendan Galea's Vulkan tutorial series and has since grown past it.
 
-Still absent, and tracked per phase in §6: glTF import, IBL, shadows, an HDR post stack, a frame graph, scene serialization, the editor, scripting and physics.
+Still absent, and tracked per phase in §6: glTF import, IBL, shadows, bloom and anti-aliasing, the editor, scripting and physics.
 
 The Vulkan foundations are idiomatic and are being kept:
 
 | Class | Role |
 |---|---|
 | `ege::Window` | GLFW window + surface |
-| `ege::Device` | Instance, physical/logical device, queues, command pool, buffer/image helpers |
-| `ege::SwapChain` | Swapchain, render pass, depth resources, sync objects |
+| `ege::Device` | Instance, physical/logical device (Vulkan 1.3), queues, command pool, buffer/image helpers, pipeline cache |
+| `ege::SwapChain` | Swapchain images and views, frame pacing sync objects |
 | `ege::Renderer` | Frame lifecycle (`beginFrame`/`endFrame`), command buffers, resize recreation |
-| `ege::Pipeline` | Graphics pipeline + shader modules |
+| `ege::FrameGraph` | Passes declare reads/writes; barriers, layouts, load/store ops and transient images are derived |
+| `ege::Pipeline` | Graphics pipeline + shader modules, created against attachment formats |
+| `ege::PostProcessSystem` | Fullscreen ACES tonemap from the HDR scene target to the backbuffer |
 | `ege::Buffer` | Generic mapped/staged Vulkan buffer |
 | `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
 | `ege::Model` | Vertex/index buffers, procedural primitives, tinyobj loading, vertex dedup |
@@ -241,17 +243,20 @@ Three things worth recording:
 
 **Done when:** a textured quad renders through the frame graph, validation-clean, with GPU memory managed by VMA.
 
-**Outcome — partial.**
+**Outcome — essentially complete.** What remains is deferred with a reason, not pending.
 
 *Done:* VMA now backs every buffer and image allocation. This was the urgent part: one `vkAllocateMemory` per buffer hits `maxMemoryAllocationCount` (commonly 4096) at a few thousand meshes while plenty of memory remains free. `rhi/Texture` adds upload, mip generation by successive blits, samplers with device-clamped anisotropy, and per-texture sRGB-versus-linear selection — which finally uses `createImageWithInfo`, `copyBufferToImage` and the `samplerAnisotropy` feature, all of which had been requested or written and never called.
 
-The **on-disk pipeline cache** also landed: pipelines no longer recompile from SPIR-V on every launch, a corrupt or stale blob is rejected by the driver rather than breaking start-up, and the cache is written explicitly after pipeline creation as well as at shutdown, because a killed process never unwinds.
+The **on-disk pipeline cache** also landed: pipelines no longer recompile from SPIR-V on every launch, a corrupt or stale blob is rejected by the driver rather than breaking start-up, and the cache is written explicitly after pipeline creation as well as at shutdown, because a killed process never unwinds. One embarrassment worth recording: the first version created, loaded and saved the cache but passed `VK_NULL_HANDLE` to `vkCreateGraphicsPipelines`, so no pipeline ever entered it and the file on disk was a 32-byte header. Everything around the feature worked; the feature itself was a fix-up commit later.
 
-*Not done, and why:*
+The **baseline is Vulkan 1.3 with dynamic rendering and synchronization2**. `vkCmdBeginRendering` replaced the render pass and both framebuffer arrays, `SwapChain` shrank to what the presentation engine actually forces on us, pipelines are created against attachment formats, and queue submission moved to `vkQueueSubmit2`. Portability enumeration is enabled when the loader offers it, so MoltenVK stays reachable. Device selection requires 1.3 and says which device it skipped and why.
 
-- **Frame graph** — the most valuable remaining item in the whole roadmap. Shadows, IBL, MSAA and the HDR post stack are all passes with resource dependencies, and adding any of them to the current single hardcoded render pass means writing barrier and attachment management by hand that the graph would then replace. Everything downstream is cheaper after this and more expensive before it.
-- **Vulkan 1.3 with dynamic rendering** — a rewrite of `SwapChain` and every pipeline whose entire purpose is deleting render-pass bookkeeping. Worth one deliberate pass, and naturally done together with the frame graph rather than twice.
-- **SPIRV-Reflect** driven pipeline layouts, and **bindless descriptors**. Neither blocks anything today; bindless becomes worthwhile when material count grows past what per-material descriptor sets handle comfortably.
+The **frame graph** is in. Passes declare reads and writes; execution order, dead-pass culling, barriers, layout transitions, load/store ops, transient image allocation and the `vkCmdBeginRendering` call are all derived. The graph is rebuilt every frame — declaration is cheap and it lets passes come and go — while physical images persist in a description-keyed cache, so steady state allocates nothing. Compilation is deliberately device-free and the plan it produces is inspectable, which is what makes the scheduling unit-testable on a machine with no GPU: culling chains, first-writer-clears/second-writer-loads, render-to-sample transition scopes and never-stored depth are all pinned in `tests/test_framegraph.cpp`. The subtle part worth remembering: a recycled transient's first use each frame discards content via `UNDEFINED`, but must still chain after whatever the *previous* frame left that physical image doing — a cross-frame hazard that no within-frame reasoning catches.
+
+*Deferred:*
+
+- **SPIRV-Reflect** driven pipeline layouts, and **bindless descriptors**. Neither blocks anything today; bindless becomes worthwhile when material count grows past what per-material descriptor sets handle comfortably. The worst of the coupling SPIRV-Reflect would remove is already gone — vertex input moved out of `Pipeline` and into the systems that own vertex data.
+- **Shader hot reload** — wants the `FileWatcher` that Phase 7 builds for script hot reload; doing it twice would be waste.
 
 ### Phase 3 — ECS world & scene (~4–5 weeks)
 
@@ -297,15 +302,19 @@ Two design notes worth carrying forward:
 
 **Outcome — partial.**
 
-*Done:* the shading model. Cook-Torrance with Trowbridge-Reitz GGX, Smith/Schlick-GGX geometry, Schlick Fresnel, and correct energy conservation between the diffuse and specular lobes with metals carrying no diffuse term. `render/Material` holds metallic-roughness properties plus four texture slots behind a per-material descriptor set, ordered after the per-frame set by update frequency. Normal mapping derives its tangent frame from screen-space derivatives. Up to sixteen point lights, replacing the single hardcoded one. Backface culling, and a Reinhard tonemap with gamma encode as a placeholder for a real HDR target.
+*Done:* the shading model. Cook-Torrance with Trowbridge-Reitz GGX, Smith/Schlick-GGX geometry, Schlick Fresnel, and correct energy conservation between the diffuse and specular lobes with metals carrying no diffuse term. `render/Material` holds metallic-roughness properties plus four texture slots behind a per-material descriptor set, ordered after the per-frame set by update frequency. Normal mapping derives its tangent frame from screen-space derivatives. Up to sixteen point lights, replacing the single hardcoded one. Backface culling.
 
 **Frustum culling and material sorting** landed too. Meshes carry local-space bounds; the render system gathers visible objects, rejects those whose transformed bounds fall outside the frustum, sorts survivors by material then mesh, and submits. Sorting matters because descriptor set binds dominate a draw and component-pool order has no reason to group objects sharing a material. Per-frame statistics record candidates, culled, drawn and material binds.
 
+**The HDR half of the post pipeline** landed once the frame graph existed to carry it: the scene renders linear radiance into an `R16G16B16A16_SFLOAT` transient, and a fullscreen pass applies the ACES fit into the sRGB backbuffer. Bloom slots in between the two as another pass when it comes.
+
+Separating shading from display transform exposed a bug that had been shipping since the PBR shader landed: it applied a manual `pow(1/2.2)` gamma encode *and* wrote to an sRGB swapchain image, whose hardware encode applied the curve a second time. Every frame had been double-encoded — visibly washed out — and it read as "lighting needs tuning" rather than "encode applied twice", which is exactly why the display transform should exist in one place. The tonemap pass writes linear values and the sRGB format performs the only encode; the surface chooser now warns if it cannot get an sRGB format, because correctness depends on it.
+
 *Not done:*
 
-- **IBL** — irradiance and prefiltered specular maps, the BRDF LUT, a skybox. Its absence is visible in the demo image: the smoothest metal sphere is nearly black, because a mirror with nothing to reflect *is* nearly black. Correct behaviour, and the single biggest visual improvement still available.
-- **Shadow maps**, the **HDR target with ACES and bloom**, and **MSAA/FXAA/TAA** — all wanting the frame graph first, for the reason given under Phase 2. MSAA in particular means multisampled colour and depth attachments plus a resolve, which is exactly the attachment management the graph should own.
-- **glTF 2.0 import** — still OBJ and procedural primitives only. Independent of the frame graph, so it can be done at any time; it pairs naturally with the Phase 6 asset database, which is what gives imported meshes and textures stable references.
+- **IBL** — irradiance and prefiltered specular maps, the BRDF LUT, a skybox. Its absence is visible in the demo image: the smoothest metal sphere is nearly black, because a mirror with nothing to reflect *is* nearly black. Correct behaviour, and the single biggest visual improvement still available — and now unblocked, since its passes are `addPass` calls against the graph.
+- **Shadow maps**, **bloom**, and **MSAA/FXAA/TAA** — likewise unblocked by the graph; MSAA in particular is multisampled attachments plus a resolve, which is exactly the attachment management the graph owns.
+- **glTF 2.0 import** — still OBJ and procedural primitives only. Independent of the renderer work, so it can be done at any time; it pairs naturally with the Phase 6 asset database, which is what gives imported meshes and textures stable references.
 - **Instancing** — the draw list is sorted and ready for it, but nothing merges consecutive identical draws yet.
 
 One bug worth recording, found by looking at the output rather than by the build passing: the default metallic-roughness texture was `(1, 1, 0)`, read as "fully rough, non-metal". But metallic samples from blue and is *multiplied* by `metallicFactor`, so a zero there forced every material to be a dielectric regardless of its factor, and the metal spheres shaded as diffuse plastic. Fallback textures have to be the multiplicative identity.
@@ -393,15 +402,15 @@ One bug worth recording, found by looking at the output rather than by the build
 | `src/core/Application.*` | → `core/Application.*`; `run()` decomposes into fixed-step update / ECS schedule / frame-graph render |
 | `src/scene/GameObject.*` | **Deleted** in Phase 3, replaced by `scene/World` + `Transform` / `Hierarchy` |
 | `src/render/SimpleRenderSystem.*` | **Deleted** in Phase 4, replaced by frame-graph passes with material sorting |
-| `src/rhi/Device.*` | → `rhi/Device.*`; VMA, Vulkan 1.3 features, portability enumeration |
-| `src/rhi/SwapChain.*` | → `rhi/Swapchain.*`; most render-pass machinery removed by dynamic rendering |
-| `src/rhi/Pipeline.*` | → `rhi/Pipeline.*`; zero-init the config struct, drop the `EgeModel::Vertex` coupling, add SPIRV-Reflect |
+| `src/rhi/Device.*` | → `rhi/Device.*`; VMA, Vulkan 1.3 features and portability enumeration — **all done** |
+| `src/rhi/SwapChain.*` | → `rhi/SwapChain.*`; render-pass and framebuffer machinery **removed by dynamic rendering**; depth became a frame graph transient |
+| `src/rhi/Pipeline.*` | → `rhi/Pipeline.*`; config struct zero-init **done**, `Model::Vertex` coupling **dropped**; SPIRV-Reflect still to come |
 | `src/rhi/Buffer.*` | → `rhi/Buffer.*`; VMA-backed; `getAlignmentSize()` fixed |
 | `src/rhi/Descriptors.*` | → `rhi/Descriptors.*` (also fixing the singular/plural filename mismatch); bindless + per-frame allocator |
 | `src/render/Model.*` | Split into `render/Mesh` (GPU) and `assets/MeshData` (CPU, scriptable) |
 | `src/render/Camera.*` | → `render/Camera`; becomes a component; `near` / `far` params renamed |
 | `src/platform/KeyboardMovementController.*` | **Deleted** in Phase 1, replaced by `platform/Input` + an editor fly-camera |
-| `shaders/simple_shader.{vert,frag}` | → `shaders/`; superseded by the PBR shader set in Phase 4 |
+| `shaders/simple_shader.{vert,frag}` | **Deleted** — superseded by the PBR shader set in Phase 4, removed with the frame graph work |
 | `external/tinyobjectloader/` | Kept as a secondary importer; cgltf becomes primary |
 
 **Reusable as-is:** the fluent descriptor `Builder` pattern, the staging-buffer upload path in `ege_model.cpp`, `hashCombine` in `ege_utils.hpp`, the `beginFrame`/`endFrame` frame-lifecycle contract, and the swapchain-recreation-on-resize logic.
