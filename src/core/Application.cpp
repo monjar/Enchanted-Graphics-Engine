@@ -2,6 +2,7 @@
 
 #include "core/Log.hpp"
 #include "platform/KeyboardMovementController.hpp"
+#include "reflect/BuiltinTypes.hpp"
 #include "render/Camera.hpp"
 #include "render/SimpleRenderSystem.hpp"
 #include "rhi/Buffer.hpp"
@@ -25,6 +26,11 @@ namespace ege {
     Application::Application() {
         Log::init();
         EGE_INFO("Enchanted Engine starting up");
+
+        // Makes the leaf types findable by name before anything has touched
+        // them, which scene loading and the editor's type pickers rely on.
+        registerBuiltinTypes();
+        EGE_DEBUG("Reflection: {} types registered", TypeRegistry::instance().all().size());
         globalPool =
             DescriptorPool::Builder(device)
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "reflect/BuiltinTypes.hpp"
 #include "render/Model.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -46,3 +47,11 @@ namespace ege {
         id_t id;
     };
 }  // namespace ege
+
+// Reflected so the editor inspector can draw a transform, and so scene
+// serialization can round-trip it, without either knowing the field list.
+EGE_REFLECT(ege::TransformComponent)
+EGE_FIELD(translation).tooltip("Position in world space");
+EGE_FIELD(rotation).tooltip("Tait-Bryan angles in radians, applied Y then X then Z");
+EGE_FIELD(scale).tooltip("Non-uniform scale is supported");
+EGE_REFLECT_END()
