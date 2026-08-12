@@ -2,7 +2,7 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phase 0 complete.** See [§6](#6-phases) for what that covered and what it turned up.
+> **Status: Phases 0 and 1 complete.** See [§6](#6-phases) for what each covered and what it turned up.
 
 ## 1. Where the project stands today
 
@@ -211,6 +211,20 @@ Three things worth recording, because two of them contradict what this document 
 - `platform/`: a real `Input` abstraction — keyboard, mouse, gamepad; edge-triggered `Pressed`/`Released` alongside `Held`; mouse delta and scroll; named action mappings. This removes the `GLFWwindow*` / `GLFW_KEY_*` leakage from `keyboard_movement_controller.hpp`. `FileWatcher` and `DynamicLibrary` also land here, for Phase 7.
 
 **Done when:** the existing demo runs on the new core, the camera has proper mouse-look, and unit tests cover reflection round-trips and the job system.
+
+**Outcome.** Done, with three parts deferred and one design change.
+
+Delivered: `core/Log` and `core/Assert` on spdlog; `reflect/` with `TypeRegistry`, `TypeInfo`, `FieldInfo`, chained field attributes and `EGE_REFLECT`; `platform/Input` with edge-triggered state, mouse delta, capture modes and named action bindings, plus `platform/CameraController` giving the engine mouse-look; `core/Time` with the fixed-step accumulator; and `core/JobSystem` with `parallelFor` and cooperative waiting. Test count went from 9 to 44.
+
+**Deferred to the phase that needs them:** `EventBus`, `Guid`/`Handle<T>` and the `VirtualFileSystem` — none has a caller yet, and the `EGE_ASSET_ROOT` mechanism from Phase 0 covers path resolution until the asset database lands in Phase 6. `FileWatcher` and `DynamicLibrary` move to Phase 7, where script hot-reload is the thing that actually defines their interface.
+
+**Design change:** attributes chain off `EGE_FIELD` rather than being trailing macro arguments. A variadic macro invoked with no variadic argument is ill-formed before C++20 and `-Wpedantic` rejects it, so `EGE_FIELD(scale)` would not compile. The chained form reads better and is what the API keeps.
+
+Three things worth recording:
+
+- **Logging cannot require an explicit `init()`.** Subsystems log from their constructors, and members are constructed before the owner's constructor body runs, so `Device` logs before anything in `Application`'s body could initialise a logger. The first version segfaulted immediately for this reason. The accessors now initialise on first use.
+- **A fixed-size thread pool deadlocks on nested blocking submits.** Twenty outer jobs on four workers, each blocking on `future::get()` for children no worker was free to run. Since that is the normal shape of asset loading, `JobSystem::waitFor` runs queued work on the calling thread while waiting.
+- **`1.f/60.f` is not exactly representable and rounds up**, so half a second holds 29 fixed steps rather than 30. A test asserted 30 and was wrong; the exact-count test now uses 1/64.
 
 ### Phase 2 — RHI modernization (~4–5 weeks)
 

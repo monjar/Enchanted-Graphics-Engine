@@ -32,6 +32,7 @@ Ubuntu it is in `glslang-tools`.
 | `default` | Release |
 | `debug`   | Debug, Vulkan validation layers active |
 | `asan`    | Debug plus AddressSanitizer and UndefinedBehaviorSanitizer |
+| `tsan`    | Debug plus ThreadSanitizer, for the job system |
 | `cxx20`   | Release built as C++20 |
 
 Each writes to `build/<preset>/`, so configurations coexist.
@@ -54,13 +55,15 @@ validation layers enabled and fails on any validation message.
 | `W` `A` `S` `D` | Move |
 | `Q` / `E` | Down / up |
 | Arrow keys | Look |
+| Hold right mouse | Mouse-look (captures the cursor) |
 
 ## Layout
 
 ```
 app/            entry point
 src/
-  core/         application root, shared utilities
+  core/         application root, logging, assertions, time, job system
+  reflect/      runtime type information
   platform/     window and input; everything touching GLFW
   rhi/          device, swapchain, pipeline, buffer, descriptors
   render/       renderer, model, camera, render systems
@@ -97,6 +100,7 @@ reformat out of `git blame`.
 | [GLFW](https://www.glfw.org/) 3.4 | windowing and input | fetched or system |
 | [GLM](https://github.com/g-truc/glm) 1.0.1 | maths | fetched or system |
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | OBJ import | vendored |
+| [spdlog](https://github.com/gabime/spdlog) 1.14.1 | logging | fetched or system |
 | [doctest](https://github.com/doctest/doctest) 2.4.11 | tests | fetched |
 
 The Vulkan buffer abstraction started from Sascha Willems'

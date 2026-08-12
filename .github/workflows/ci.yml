@@ -38,6 +38,9 @@ jobs:
           - name: Linux / ASan + UBSan
             os: ubuntu-24.04
             preset: asan
+          - name: Linux / ThreadSanitizer
+            os: ubuntu-24.04
+            preset: tsan
           - name: Linux / C++20
             os: ubuntu-24.04
             preset: cxx20
@@ -78,7 +81,7 @@ jobs:
       # fails on any validation message. This is what catches Vulkan misuse that
       # happens to work on one driver but is not actually legal.
       - name: Headless render smoke test
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.preset != 'tsan'
         env:
           VK_ICD_FILENAMES: /usr/share/vulkan/icd.d/lvp_icd.json
           VK_LOADER_LAYERS_ENABLE: VK_LAYER_KHRONOS_validation
