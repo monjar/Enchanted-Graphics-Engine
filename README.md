@@ -12,20 +12,23 @@ fixed-timestep simulation clock.
 
 The image above is the demo scene: five metal spheres sweeping roughness from
 near-mirror to fully rough, plus two dielectrics, lit by three point lights
-under a procedurally generated evening sky. The smoothest metal reflects that
-sky — in earlier builds it was nearly black, because a mirror with no
-environment to reflect *is* nearly black, and giving it one is exactly what
-image-based lighting does. The environment, its irradiance and prefiltered
-specular convolutions and the BRDF lookup table are all computed on the GPU
-at startup, so a clean checkout still ships no binary assets.
+and a low sun under a procedurally generated evening sky. The smoothest metal
+reflects that sky — in earlier builds it was nearly black, because a mirror
+with no environment to reflect *is* nearly black, and giving it one is
+exactly what image-based lighting does. The sun casts real shadows through a
+depth-only frame graph pass, and its direction, the disk in the sky and the
+shadows all agree because they share one definition. The environment, its
+irradiance and prefiltered specular convolutions and the BRDF lookup table
+are all computed on the GPU at startup, so a clean checkout still ships no
+binary assets.
 
 Scenes save and load as reflection-driven JSON, entities can be parented, and
 draws are frustum-culled and sorted by material. Render passes declare what
 they read and write; barriers, image layouts and transient render targets are
 derived by the frame graph rather than written by hand.
 
-Still to come: shadows, bloom and anti-aliasing, glTF import, the editor,
-C++ scripting and physics.
+Still to come: cascaded and point-light shadows, bloom and anti-aliasing,
+glTF import, the editor, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 

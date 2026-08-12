@@ -4,7 +4,7 @@
 >
 > **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phase 4 partially complete. Phases 5 and 6 not started.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, an HDR target with an ACES tonemap pass, and now **image-based lighting** from a procedurally generated sky. The highest-value next items are **shadow maps**, then **bloom and MSAA** — each an `addPass` call against the graph rather than a round of barrier bookkeeping. **glTF import** remains the parallel track that depends on none of this.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, an HDR target with an ACES tonemap pass, **image-based lighting** from a procedurally generated sky, and a **sun with PCF-filtered shadows** rendered through the graph. The highest-value next items are **bloom and MSAA** (each an `addPass` call), cascades for the sun, and **glTF import** — the parallel track that depends on none of this and unlocks real content.
 
 ## 1. Where the project stands today
 
@@ -24,6 +24,7 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::Pipeline` | Graphics pipeline + shader modules, created against attachment formats |
 | `ege::EnvironmentLighting` | Procedural sky cubemap, irradiance, prefiltered specular and BRDF LUT, generated at startup |
 | `ege::SkyboxSystem` | Draws the environment behind the scene at the far plane |
+| `ege::ShadowMapSystem` | Depth-only sun shadow pass; the map itself is a frame graph transient |
 | `ege::PostProcessSystem` | Fullscreen ACES tonemap from the HDR scene target to the backbuffer |
 | `ege::Buffer` | Generic mapped/staged Vulkan buffer |
 | `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
@@ -314,9 +315,12 @@ Separating shading from display transform exposed a bug that had been shipping s
 
 **IBL landed**, from a procedurally generated environment. A sky with a sun is rendered into a mipmapped cubemap at startup, cosine-convolved into a 16-pixel irradiance map, GGX-prefiltered into a specular mip chain (one roughness per level), and paired with the split-sum BRDF LUT; the PBR ambient term is now the real split-sum evaluation and the sky draws behind the scene at the far plane. The whole precompute is GPU fullscreen passes and finishes in about a second even on CI's CPU rasterizer. The environment is procedural for the same reason the meshes are — a clean checkout ships no binary assets — and **HDR equirect import** joins the Phase 6 asset work, where environment maps become assets like any other. The demo's payoff is the one this document promised: the near-mirror sphere now reflects a sky instead of rendering nearly black.
 
+**Directional sun shadows landed** as the frame graph's first depth-only pass: a `DirectionalLight` component, a fixed-size D32 transient rendered from the sun's orthographic view, and a 3×3 PCF test through a comparison sampler whose border compares as lit. The pass declares a depth write, the scene pass declares a sampled read, and every barrier between them is derived — the first feature to land as exactly the `addPass` call the graph was built to make cheap. Acne is handled by polygon-offset bias at raster time, not by fudging the lighting shader. Known simplification, promoted from groundwork to roadmap item: the sun frustum is a fixed box sized to the demo floor; cascaded shadow maps fitted to the view frustum replace it when scenes outgrow one box.
+
 *Not done:*
 
-- **Shadow maps**, **bloom**, and **MSAA/FXAA/TAA** — unblocked by the graph; MSAA in particular is multisampled attachments plus a resolve, which is exactly the attachment management the graph owns.
+- **Cascaded** shadow maps for the sun, **cube shadow maps for point lights**, and spot shadows.
+- **Bloom** and **MSAA/FXAA/TAA** — unblocked by the graph; MSAA in particular is multisampled attachments plus a resolve, which is exactly the attachment management the graph owns.
 - **glTF 2.0 import** — still OBJ and procedural primitives only. Independent of the renderer work, so it can be done at any time; it pairs naturally with the Phase 6 asset database, which is what gives imported meshes and textures stable references.
 - **Instancing** — the draw list is sorted and ready for it, but nothing merges consecutive identical draws yet.
 
