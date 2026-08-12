@@ -1,0 +1,39 @@
+# Based on Google style, adjusted to match the conventions already dominant in
+# this codebase: 4-space indentation, 100 column limit, and reference/pointer
+# tokens bound to the type (EgeDevice& device, not EgeDevice &device).
+---
+Language: Cpp
+BasedOnStyle: Google
+
+AccessModifierOffset: -4
+AlignAfterOpenBracket: AlwaysBreak
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AlwaysBreakTemplateDeclarations: Yes
+BinPackArguments: false
+BinPackParameters: false
+ColumnLimit: 100
+DerivePointerAlignment: false
+IndentWidth: 4
+NamespaceIndentation: All
+PointerAlignment: Left
+ReferenceAlignment: Left
+SeparateDefinitionBlocks: Always
+SpaceAfterTemplateKeyword: false
+TabWidth: 4
+UseTab: Never
+
+# Own header, then project headers, then third-party, then the standard library.
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^"(core|platform|rhi|render|scene)/.*\.hpp"$'
+    Priority: 2
+  - Regex: '^<(vulkan|GLFW|glm|tiny_obj_loader)'
+    Priority: 3
+  - Regex: '^<.*\.h>$'
+    Priority: 4
+  - Regex: '^<.*>$'
+    Priority: 5
+  - Regex: '.*'
+    Priority: 2

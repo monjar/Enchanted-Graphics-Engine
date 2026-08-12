@@ -3,7 +3,7 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 .vscode/
-.env.cmake
+# .env.cmake is no longer used; dependencies are resolved by cmake/Dependencies.cmake
 
 build/**
 build
@@ -365,3 +365,8 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# Compiled SPIR-V is generated into the build tree
+*.spv
+
+# CMake presets write here
+build/
