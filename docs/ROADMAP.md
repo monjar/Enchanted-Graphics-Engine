@@ -4,7 +4,7 @@
 >
 > **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phase 4 partially complete. Phases 5 and 6 not started.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, an HDR target with an ACES tonemap pass, **image-based lighting** from a procedurally generated sky, and a **sun with PCF-filtered shadows** rendered through the graph. The highest-value next items are **bloom and MSAA** (each an `addPass` call), cascades for the sun, and **glTF import** — the parallel track that depends on none of this and unlocks real content.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, and a **sun with PCF-filtered shadows** rendered through the graph. The highest-value next items are **glTF import** — the track that unlocks real content — then **MSAA**, shadow cascades, and the Phase 5 editor, which the renderer is now visually good enough to justify.
 
 ## 1. Where the project stands today
 
@@ -309,7 +309,7 @@ Two design notes worth carrying forward:
 
 **Frustum culling and material sorting** landed too. Meshes carry local-space bounds; the render system gathers visible objects, rejects those whose transformed bounds fall outside the frustum, sorts survivors by material then mesh, and submits. Sorting matters because descriptor set binds dominate a draw and component-pool order has no reason to group objects sharing a material. Per-frame statistics record candidates, culled, drawn and material binds.
 
-**The HDR half of the post pipeline** landed once the frame graph existed to carry it: the scene renders linear radiance into an `R16G16B16A16_SFLOAT` transient, and a fullscreen pass applies the ACES fit into the sRGB backbuffer. Bloom slots in between the two as another pass when it comes.
+**The HDR pipeline is complete as Phase 4 wrote it**: the scene renders linear radiance into an `R16G16B16A16_SFLOAT` transient, **bloom** extracts and blurs what exceeds 1.0 through a half-resolution bright-pass and a separable Gaussian (three `addPass` calls, two small shaders), and a fullscreen pass composites it in linear light and applies the ACES fit into the sRGB backbuffer.
 
 Separating shading from display transform exposed a bug that had been shipping since the PBR shader landed: it applied a manual `pow(1/2.2)` gamma encode *and* wrote to an sRGB swapchain image, whose hardware encode applied the curve a second time. Every frame had been double-encoded — visibly washed out — and it read as "lighting needs tuning" rather than "encode applied twice", which is exactly why the display transform should exist in one place. The tonemap pass writes linear values and the sRGB format performs the only encode; the surface chooser now warns if it cannot get an sRGB format, because correctness depends on it.
 
@@ -320,7 +320,7 @@ Separating shading from display transform exposed a bug that had been shipping s
 *Not done:*
 
 - **Cascaded** shadow maps for the sun, **cube shadow maps for point lights**, and spot shadows.
-- **Bloom** and **MSAA/FXAA/TAA** — unblocked by the graph; MSAA in particular is multisampled attachments plus a resolve, which is exactly the attachment management the graph owns.
+- **MSAA/FXAA/TAA** — unblocked by the graph; MSAA in particular is multisampled attachments plus a resolve, which is exactly the attachment management the graph owns.
 - **glTF 2.0 import** — still OBJ and procedural primitives only. Independent of the renderer work, so it can be done at any time; it pairs naturally with the Phase 6 asset database, which is what gives imported meshes and textures stable references.
 - **Instancing** — the draw list is sorted and ready for it, but nothing merges consecutive identical draws yet.
 

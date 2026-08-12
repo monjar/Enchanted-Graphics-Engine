@@ -27,8 +27,11 @@ draws are frustum-culled and sorted by material. Render passes declare what
 they read and write; barriers, image layouts and transient render targets are
 derived by the frame graph rather than written by hand.
 
-Still to come: cascaded and point-light shadows, bloom and anti-aliasing,
-glTF import, the editor, C++ scripting and physics.
+Bright highlights bloom through a half-resolution blur chain, composited in
+linear light before the ACES tonemap.
+
+Still to come: cascaded and point-light shadows, anti-aliasing, glTF import,
+the editor, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
