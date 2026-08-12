@@ -30,16 +30,16 @@ namespace {
 }  // namespace
 
 EGE_REFLECT(Nested)
-    EGE_FIELD(scalar);
-    EGE_FIELD(vector);
+EGE_FIELD(scalar);
+EGE_FIELD(vector);
 EGE_REFLECT_END()
 
 EGE_REFLECT(Sample)
-    EGE_FIELD(flag);
-    EGE_FIELD(count).readOnly();
-    EGE_FIELD(weight).range(0.f, 1.f).tooltip("Normalised weight");
-    EGE_FIELD(position).asColor();
-    EGE_FIELD(nested);
+EGE_FIELD(flag);
+EGE_FIELD(count).readOnly();
+EGE_FIELD(weight).range(0.f, 1.f).tooltip("Normalised weight");
+EGE_FIELD(position).asColor();
+EGE_FIELD(nested);
 EGE_REFLECT_END()
 
 using ege::TypeRegistry;

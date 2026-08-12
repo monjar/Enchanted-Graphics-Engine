@@ -1,7 +1,8 @@
 #include "core/Application.hpp"
 
 #include "core/Log.hpp"
-#include "platform/KeyboardMovementController.hpp"
+#include "platform/CameraController.hpp"
+#include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "render/Camera.hpp"
 #include "render/SimpleRenderSystem.hpp"
@@ -76,12 +77,13 @@ namespace ege {
         // Pitched down slightly so the default view frames the scene instead of
         // leaving it along the bottom edge.
         viewerObject.transform.rotation.x = -.35f;
-        KeyboardMovementController cameraController{};
+        CameraController cameraController{};
+        CameraController::registerDefaultActions(window.input());
 
         auto currentTime = std::chrono::high_resolution_clock::now();
 
         while (!window.shouldClose()) {
-            glfwPollEvents();
+            Window::pollEvents();
 
             // putting this after polls to make sure pauses don't affect the time
             auto newTime = std::chrono::high_resolution_clock::now();
@@ -90,7 +92,8 @@ namespace ege {
                     .count();
             currentTime = newTime;
 
-            cameraController.moveInPlaneXZ(window.getGLFWwindow(), frameTime, viewerObject);
+            window.input().newFrame();
+            cameraController.update(window.input(), frameTime, viewerObject);
             camera.setViewYXZ(viewerObject.transform.translation, viewerObject.transform.rotation);
             float aspectRatio = renderer.getAspectRatio();
 
