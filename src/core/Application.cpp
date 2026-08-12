@@ -7,6 +7,7 @@
 #include "reflect/BuiltinTypes.hpp"
 #include "reflect/Serialization.hpp"
 #include "render/Camera.hpp"
+#include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PostProcessSystem.hpp"
 #include "rhi/Buffer.hpp"
@@ -77,6 +78,10 @@ namespace ege {
     }
 
     void Application::run() {
+        // Generated before anything renders: the lighting environment is as
+        // much a prerequisite of the frame as the meshes are.
+        EnvironmentLighting environmentLighting{device};
+
         std::vector<std::unique_ptr<Buffer>> uboBuffers(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < uboBuffers.size(); i++) {
             uboBuffers[i] = std::make_unique<Buffer>(
