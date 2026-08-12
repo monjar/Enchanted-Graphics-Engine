@@ -10,6 +10,7 @@
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PostProcessSystem.hpp"
+#include "render/ShadowMapSystem.hpp"
 #include "render/SkyboxSystem.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/FrameGraph.hpp"
@@ -38,6 +39,11 @@ namespace ege {
             glm::mat4 inverseView{1.f};
             // The skybox unprojects pixels back into rays with this.
             glm::mat4 inverseProjection{1.f};
+            // The sun: the shadow pass renders through this matrix and the
+            // lighting pass projects fragments back through it for the test.
+            glm::mat4 sunViewProjection{1.f};
+            glm::vec4 sunDirection{0.f, 1.f, 0.f, 0.f};
+            glm::vec4 sunColor{1.f, 1.f, 1.f, 0.f};  // w is intensity, 0 = off
             // A tint and scale on the image-based ambient, which is already
             // physical - so the neutral value is 1, not a small fudge factor.
             glm::vec4 ambientLightColor{1.f, 1.f, 1.f, 1.f};  // w is intensity
@@ -65,7 +71,7 @@ namespace ege {
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 4)
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 5)
                 .build();
 
         // Four image samplers per material, and room for a reasonable number
@@ -114,6 +120,11 @@ namespace ege {
                     3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .addBinding(
                     4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // The sun's shadow map. Unlike the lighting maps this one is
+                // a frame graph transient, so the binding is rewritten every
+                // frame with whatever physical image the graph provides.
+                .addBinding(
+                    5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
@@ -153,6 +164,8 @@ namespace ege {
             hdrFormat,
             renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout()};
+
+        ShadowMapSystem shadowSystem{device, renderer.getSwapChainDepthFormat()};
 
         PostProcessSystem postProcess{
             device, renderer.getSwapChainColorFormat(), SwapChain::MAX_FRAMES_IN_FLIGHT};
@@ -226,6 +239,28 @@ namespace ege {
                 ubo.view = camera.getView();
                 ubo.inverseView = glm::inverse(camera.getView());
                 ubo.inverseProjection = glm::inverse(camera.getProjection());
+
+                // The sun is the first DirectionalLight found; none means the
+                // shader's sun term stays off via zero intensity.
+                bool hasSun = false;
+                world.each<DirectionalLight>([&](Entity, DirectionalLight& sun) {
+                    if (hasSun) {
+                        return;
+                    }
+                    hasSun = true;
+                    const glm::vec3 direction = glm::normalize(sun.direction);
+                    ubo.sunDirection = glm::vec4{direction, 0.f};
+                    ubo.sunColor = glm::vec4{sun.color, sun.intensity};
+
+                    // An orthographic frustum sized to the demo floor, looking
+                    // along the light. Fitting it to the view frustum - and
+                    // splitting it into cascades - is what replaces this once
+                    // scenes outgrow a single fixed box.
+                    Camera sunCamera{};
+                    sunCamera.setViewTarget(-direction * 20.f, glm::vec3{0.f});
+                    sunCamera.setOrthographicProjection(-12.f, 12.f, -12.f, 12.f, 1.f, 40.f);
+                    ubo.sunViewProjection = sunCamera.getProjection() * sunCamera.getView();
+                });
                 // Lights are entities now, gathered per frame rather than
                 // held in a parallel list. The cap is the shader's array size;
                 // clustered shading in Phase 9 is what removes it.
@@ -260,6 +295,14 @@ namespace ege {
                 sceneDepthDesc.clearValue.depthStencil = {1.0f, 0};
                 FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", sceneDepthDesc);
 
+                // Fixed-size, not swapchain-relative: shadow quality has
+                // nothing to do with window size.
+                TransientImageDesc shadowMapDesc{};
+                shadowMapDesc.format = renderer.getSwapChainDepthFormat();
+                shadowMapDesc.extent = {ShadowMapSystem::resolution, ShadowMapSystem::resolution};
+                shadowMapDesc.clearValue.depthStencil = {1.0f, 0};
+                FrameGraphResource shadowMap = graph.createTransient("shadowMap", shadowMapDesc);
+
                 FrameGraphResource backbuffer = graph.importImage(
                     "backbuffer",
                     renderer.currentSwapChainImage(),
@@ -272,13 +315,36 @@ namespace ege {
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
+                const glm::mat4 sunViewProjection = ubo.sunViewProjection;
+
+                graph.addPass(
+                    "shadow",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.write(shadowMap, ResourceAccess::depthWrite);
+                    },
+                    [&, sunViewProjection](VkCommandBuffer cmd, const FrameGraphResources&) {
+                        shadowSystem.render(cmd, world, sunViewProjection);
+                    });
+
                 graph.addPass(
                     "scene",
                     [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(shadowMap, ResourceAccess::sampled);
                         pass.write(sceneColor, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
                     },
-                    [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        // The shadow map is a graph transient, so which
+                        // physical image backs it is only known here; the
+                        // per-frame set makes rebinding it safe.
+                        VkDescriptorImageInfo shadowInfo{};
+                        shadowInfo.sampler = shadowSystem.comparisonSampler();
+                        shadowInfo.imageView = resolved.view(shadowMap);
+                        shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        DescriptorWriter(*globalSetLayout, *globalPool)
+                            .writeImage(5, &shadowInfo)
+                            .overwrite(globalDescriptorSets[frameIndex]);
+
                         frameInfo.commandBuffer = cmd;
                         pbrRenderSystem.render(frameInfo);
                         // After the geometry: the depth test rejects every
@@ -403,6 +469,20 @@ namespace ege {
         addLight("KeyLight", {-1.5f, -1.6f, -1.2f}, {1.f, 0.95f, 0.85f}, 6.f);
         addLight("FillLight", {1.8f, -1.2f, 0.8f}, {0.4f, 0.6f, 1.f}, 5.f);
         addLight("RimLight", {0.f, -0.9f, 2.2f}, {1.f, 0.5f, 0.3f}, 3.f);
+
+        // The sun. Its direction is the negation of the sky shader's sun
+        // position, so the disk in the environment, the direct light and the
+        // shadows all agree on where the sun is.
+        {
+            Entity sun = world.spawn("Sun");
+            DirectionalLight sunLight{};
+            sunLight.direction = glm::normalize(glm::vec3{0.6f, 0.64f, 0.48f});
+            sunLight.color = glm::vec3{1.f, 0.93f, 0.82f};
+            // Low sun, matching the evening sky - bright enough to cast
+            // legible shadows without flattening the point lights.
+            sunLight.intensity = 1.4f;
+            sun.attach<DirectionalLight>(sunLight);
+        }
 
         EGE_INFO(
             "Scene loaded: {} entities, {} drawn, {} lights, {} materials",

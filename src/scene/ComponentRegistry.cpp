@@ -21,6 +21,7 @@ namespace ege {
         registry.add<Transform>();
         registry.add<MeshRenderer>();
         registry.add<PointLight>();
+        registry.add<DirectionalLight>();
         registry.add<Hidden>();
 
         EGE_DEBUG("Component registry: {} component types", registry.all().size());

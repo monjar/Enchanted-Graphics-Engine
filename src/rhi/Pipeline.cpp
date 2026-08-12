@@ -57,8 +57,9 @@ namespace ege {
             configInfo.pipelineLayout != VK_NULL_HANDLE &&
             "Cannot create graphics pipeline: No pipelineLayout provided in configInfo");
         assert(
-            !configInfo.colorAttachmentFormats.empty() &&
-            "Cannot create graphics pipeline: no color attachment formats provided");
+            (!configInfo.colorAttachmentFormats.empty() ||
+             configInfo.depthAttachmentFormat != VK_FORMAT_UNDEFINED) &&
+            "Cannot create graphics pipeline: no attachment formats provided");
 
         auto vertShaderCode = readFile(vertFilePath);
         auto fragShaderCode = readFile(fragFilePath);
