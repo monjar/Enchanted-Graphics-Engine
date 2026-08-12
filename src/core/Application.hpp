@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/JobSystem.hpp"
 #include "platform/Window.hpp"
 #include "render/Model.hpp"
 #include "render/Renderer.hpp"
@@ -32,6 +33,7 @@ namespace ege {
         Renderer renderer{window, device};
 
         std::unique_ptr<DescriptorPool> globalPool{};
+        JobSystem jobs{};
         GameObject::Map gameObjects;
     };
 }  // namespace ege

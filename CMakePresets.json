@@ -1,6 +1,10 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "base",
@@ -15,14 +19,18 @@
       "inherits": "base",
       "displayName": "Default (Release)",
       "description": "Optimised build. What you want unless you are debugging.",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     },
     {
       "name": "debug",
       "inherits": "base",
       "displayName": "Debug",
       "description": "Unoptimised, with Vulkan validation layers active at runtime.",
-      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
     },
     {
       "name": "asan",
@@ -45,13 +53,47 @@
       "inherits": "default",
       "displayName": "Release, C++20",
       "description": "Checks the tree stays clean under the newer standard.",
-      "cacheVariables": { "CMAKE_CXX_STANDARD": "20" }
+      "cacheVariables": {
+        "CMAKE_CXX_STANDARD": "20"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "displayName": "Debug + ThreadSanitizer",
+      "description": "Debug build instrumented with ThreadSanitizer, for the job system.",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      },
+      "condition": {
+        "type": "notEquals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
     }
   ],
   "buildPresets": [
-    { "name": "default", "configurePreset": "default" },
-    { "name": "debug", "configurePreset": "debug" },
-    { "name": "asan", "configurePreset": "asan" },
-    { "name": "cxx20", "configurePreset": "cxx20" }
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "asan",
+      "configurePreset": "asan"
+    },
+    {
+      "name": "cxx20",
+      "configurePreset": "cxx20"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
+    }
   ]
 }
