@@ -43,9 +43,11 @@ void main() {
 
     vec3 radiance;
     if (up >= 0.0) {
-        // Sky: horizon haze fading into a deeper zenith blue.
-        const vec3 horizon = vec3(0.85, 0.90, 1.05);
-        const vec3 zenith = vec3(0.18, 0.32, 0.62);
+        // Sky: horizon haze fading into a deeper zenith blue. Kept dim
+        // enough that the warm point lights still carry the scene - this is
+        // an evening sky, not noon.
+        const vec3 horizon = vec3(0.45, 0.48, 0.58);
+        const vec3 zenith = vec3(0.10, 0.17, 0.33);
         radiance = mix(horizon, zenith, pow(up, 0.6));
 
         float cosSun = dot(dir, sunDir);
@@ -56,8 +58,8 @@ void main() {
     } else {
         // Ground: dark and slightly warm, brighter towards the horizon where
         // it catches more sky.
-        const vec3 groundNear = vec3(0.35, 0.31, 0.27);
-        const vec3 groundDeep = vec3(0.11, 0.10, 0.09);
+        const vec3 groundNear = vec3(0.22, 0.19, 0.17);
+        const vec3 groundDeep = vec3(0.07, 0.06, 0.055);
         radiance = mix(groundNear, groundDeep, pow(-up, 0.5)) * 0.6;
     }
 

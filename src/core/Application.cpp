@@ -38,7 +38,9 @@ namespace ege {
             glm::mat4 inverseView{1.f};
             // The skybox unprojects pixels back into rays with this.
             glm::mat4 inverseProjection{1.f};
-            glm::vec4 ambientLightColor{1.f, 1.f, 1.f, .03f};  // w is intensity
+            // A tint and scale on the image-based ambient, which is already
+            // physical - so the neutral value is 1, not a small fudge factor.
+            glm::vec4 ambientLightColor{1.f, 1.f, 1.f, 1.f};  // w is intensity
             GpuPointLight pointLights[maxPointLights]{};
             alignas(16) int numLights = 0;
         };

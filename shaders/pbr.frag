@@ -22,6 +22,10 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     int numLights;
 } ubo;
 
+layout(set = 0, binding = 1) uniform samplerCube irradianceMap;
+layout(set = 0, binding = 2) uniform samplerCube prefilteredMap;
+layout(set = 0, binding = 3) uniform sampler2D brdfLut;
+
 layout(set = 1, binding = 0) uniform sampler2D baseColorMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessMap;
@@ -65,6 +69,14 @@ float geometrySmith(vec3 N, vec3 V, vec3 L, float roughness) {
 // approaches a mirror at 90 degrees, which is what makes this matter.
 vec3 fresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// The Fresnel term for ambient light has no single half-vector; damping the
+// grazing response by roughness (Fdez-Aguera) keeps rough surfaces from
+// picking up a bright rim they should have scattered away.
+vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
+    return F0 +
+           (max(vec3(1.0 - roughness), F0) - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
 // Tangent frame derived from screen-space derivatives, so a normal map works
@@ -134,7 +146,26 @@ void main() {
         Lo += (kD * albedo / PI + specular) * radiance * NdotL;
     }
 
-    vec3 ambient = ubo.ambientLightColor.rgb * ubo.ambientLightColor.w * albedo * occlusion;
+    // Image-based ambient: the split-sum approximation. Diffuse comes from
+    // the irradiance map; specular from the prefiltered environment at
+    // roughness-scaled mip, shaped by the BRDF LUT's F0 scale and bias.
+    // ambientLightColor survives as a tint and overall scale on it.
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 F = fresnelSchlickRoughness(NdotV, F0, roughness);
+    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
+
+    vec3 irradiance = texture(irradianceMap, N).rgb;
+    vec3 diffuseAmbient = kD * irradiance * albedo;
+
+    vec3 R = reflect(-V, N);
+    float prefilteredMips = float(textureQueryLevels(prefilteredMap) - 1);
+    vec3 prefiltered = textureLod(prefilteredMap, R, roughness * prefilteredMips).rgb;
+    vec2 brdf = texture(brdfLut, vec2(NdotV, roughness)).rg;
+    vec3 specularAmbient = prefiltered * (F0 * brdf.x + brdf.y);
+
+    vec3 ambient = (diffuseAmbient + specularAmbient) * ubo.ambientLightColor.rgb *
+                   ubo.ambientLightColor.w * occlusion;
+
     vec3 emissive = texture(emissiveMap, fragUv).rgb * push.emissiveAndMetallic.rgb;
 
     // Linear HDR radiance, written to a float target. Tonemapping and the

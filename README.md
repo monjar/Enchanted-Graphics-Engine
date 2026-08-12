@@ -5,22 +5,26 @@ A Vulkan game engine in C++17, built from the renderer up.
 ![The demo scene: metal spheres sweeping roughness, two dielectrics and a plane, lit by three point lights](docs/images/demo-scene.png)
 
 A Vulkan 1.3 forward renderer — dynamic rendering, a frame graph, a
-metallic-roughness PBR pipeline shading into a linear HDR target with an ACES
-tonemap pass — plus an entity-component system, runtime reflection, textures
-with mip generation, a job system and a fixed-timestep simulation clock.
+metallic-roughness PBR pipeline with image-based lighting, shading into a
+linear HDR target with an ACES tonemap pass — plus an entity-component
+system, runtime reflection, textures with mip generation, a job system and a
+fixed-timestep simulation clock.
 
 The image above is the demo scene: five metal spheres sweeping roughness from
-near-mirror to fully rough, plus two dielectrics, lit by three point lights.
-The smoothest metal is nearly black because a mirror with no environment to
-reflect *is* nearly black — that is what image-based lighting fixes, and it is
-one of the things still outstanding.
+near-mirror to fully rough, plus two dielectrics, lit by three point lights
+under a procedurally generated evening sky. The smoothest metal reflects that
+sky — in earlier builds it was nearly black, because a mirror with no
+environment to reflect *is* nearly black, and giving it one is exactly what
+image-based lighting does. The environment, its irradiance and prefiltered
+specular convolutions and the BRDF lookup table are all computed on the GPU
+at startup, so a clean checkout still ships no binary assets.
 
 Scenes save and load as reflection-driven JSON, entities can be parented, and
 draws are frustum-culled and sorted by material. Render passes declare what
 they read and write; barriers, image layouts and transient render targets are
 derived by the frame graph rather than written by hand.
 
-Still to come: IBL, shadows, bloom and anti-aliasing, glTF import, the editor,
+Still to come: shadows, bloom and anti-aliasing, glTF import, the editor,
 C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
@@ -82,7 +86,8 @@ src/
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
   rhi/          device, swapchain, pipeline, buffer, descriptors, textures, frame graph
-  render/       renderer, model, camera, materials, lights, bounds, PBR and post-process systems
+  render/       renderer, model, camera, materials, lights, bounds,
+                environment lighting, PBR, skybox and post-process systems
   scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
