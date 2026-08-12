@@ -6,20 +6,20 @@
 
 ## 1. Where the project stands today
 
-Enchanted is currently a **Vulkan 1.0 forward renderer of ~1,900 lines** in a single flat `src/` directory — grown out of Brendan Galea's Vulkan tutorial series, stopped at roughly the point where UBOs and descriptor sets were introduced. It draws OBJ meshes lit by one hardcoded diffuse point light.
+Enchanted is a **Vulkan 1.0 forward renderer** grown out of Brendan Galea's Vulkan tutorial series, stopped at roughly the point where UBOs and descriptor sets were introduced. It draws indexed meshes — procedural primitives or OBJ files — lit by one hardcoded diffuse point light.
 
-The Vulkan foundations that exist are idiomatic and worth keeping:
+The Vulkan foundations are idiomatic and are being kept:
 
 | Class | Role |
 |---|---|
-| `EgeWindow` | GLFW window + surface |
-| `EgeDevice` | Instance, physical/logical device, queues, command pool, buffer/image helpers |
-| `EgeSwapChain` | Swapchain, render pass, depth resources, sync objects |
-| `EgeRenderer` | Frame lifecycle (`beginFrame`/`endFrame`), command buffers, resize recreation |
-| `EgePipeline` | Graphics pipeline + shader modules |
-| `EgeBuffer` | Generic mapped/staged Vulkan buffer |
-| `EgeDescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
-| `EgeModel` | Vertex/index buffers, tinyobj loading, vertex dedup |
+| `ege::Window` | GLFW window + surface |
+| `ege::Device` | Instance, physical/logical device, queues, command pool, buffer/image helpers |
+| `ege::SwapChain` | Swapchain, render pass, depth resources, sync objects |
+| `ege::Renderer` | Frame lifecycle (`beginFrame`/`endFrame`), command buffers, resize recreation |
+| `ege::Pipeline` | Graphics pipeline + shader modules |
+| `ege::Buffer` | Generic mapped/staged Vulkan buffer |
+| `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
+| `ege::Model` | Vertex/index buffers, procedural primitives, tinyobj loading, vertex dedup |
 
 Everything above that layer — scene representation, materials, textures, asset management, input abstraction, scripting, physics, tooling — does not exist yet.
 
@@ -60,41 +60,43 @@ All four are fixed; the engine renders the demo scene from a clean checkout.
 
 ## 3. Target architecture
 
-Three CMake targets, replacing today's single glob'd executable:
+Three CMake targets. The first two exist; the editor and player arrive in Phases 5 and 10.
 
 ```
-Enchanted            (static lib)  — the engine
-EnchantedEditor      (exe)         — tooling, links Enchanted
-EnchantedPlayer      (exe)         — shipping runtime, loads a packed project
+Enchanted            (static lib)  — the engine                      [exists]
+EnchantedEngine      (exe)         — the demo application            [exists]
+EnchantedEditor      (exe)         — tooling, links Enchanted        [Phase 5]
+EnchantedPlayer      (exe)         — shipping runtime, packed project [Phase 10]
 ```
 
-Directory layout, replacing the flat `src/`:
+Target directory layout. The modules marked *exists* landed in Phase 0; the rest are added by the phase that needs them:
 
 ```
-cmake/                    Dependencies.cmake, CompilerWarnings.cmake, Shaders.cmake
-engine/
-  include/enchanted/      public headers (what editor and scripts see)
-  src/
-    core/                 Log, Assert, Time, JobSystem, EventBus, Guid, Handle, VFS, Profiler
-    reflect/              TypeRegistry, FieldInfo, Any, EGE_REFLECT macros
-    platform/             Window, Input, FileWatcher, DynamicLibrary
-    rhi/                  Device, Swapchain, CommandList, Pipeline, Buffer, Texture, Descriptors, FrameGraph
-    render/               Renderer, Material, Mesh, Camera, Lights, Shadows, IBL, PostFX
-    scene/                World, Entity, ComponentPool, Query, Components, Hierarchy, Serializer, Prefab
-    assets/               AssetDatabase, AssetHandle, importers, loaders
-    physics/              PhysicsWorld + Jolt backend, colliders, character controller
-    script/               Behavior, ScriptModule, hot-reload, BehaviorRegistry
-    audio/ ui/ anim/      (later phases)
-editor/                   EnchantedEditor sources + panels
-runtime/                  EnchantedPlayer
-sandbox/                  example project + example C++ scripts (dogfood target)
-shaders/                  lowercase, glob fixed
-assets/                   engine built-ins: error texture, default material, primitives, BRDF LUT
-tests/                    doctest suites
-docs/
+cmake/          Dependencies, CompilerWarnings, Shaders modules          [exists]
+app/            entry point                                             [exists]
+src/
+  core/         Application; + Log, Time, JobSystem, VFS, Profiler       [exists]
+  reflect/      TypeRegistry, FieldInfo, EGE_REFLECT macros              [Phase 1]
+  platform/     Window, KeyboardMovementController; + Input, FileWatcher [exists]
+  rhi/          Device, SwapChain, Pipeline, Buffer, Descriptors;
+                + Texture, FrameGraph                                    [exists]
+  render/       Renderer, Model, Camera, SimpleRenderSystem;
+                + Material, Lights, Shadows, IBL, PostFX                 [exists]
+  scene/        GameObject; replaced by World, Entity, ComponentPool     [exists]
+  assets/       AssetDatabase, importers, loaders                        [Phase 6]
+  physics/      PhysicsWorld + Jolt backend, colliders                   [Phase 8]
+  script/       Behavior, ScriptModule, hot-reload                       [Phase 7]
+  audio/ ui/ anim/                                                       [Phase 10]
+editor/         EnchantedEditor sources + panels                         [Phase 5]
+runtime/        EnchantedPlayer                                          [Phase 10]
+sandbox/        example project + example C++ scripts                    [Phase 7]
+shaders/        GLSL, compiled into the build tree                       [exists]
+assets/         runtime assets, resolved via EGE_ASSET_ROOT              [exists]
+tests/          doctest suite                                            [exists]
+docs/                                                                    [exists]
 ```
 
-**Naming cleanup during the restructure:** the `Ege` prefix is redundant inside `namespace ege`, so `EgeDevice` becomes `ege::rhi::Device`, `EgeModel` becomes `ege::Mesh`, and `EnchantedEngine` becomes `ege::Application`. Files become `PascalCase.hpp/.cpp` to match type names. Done once, in Phase 0, while the codebase is still small.
+**Naming cleanup — done in Phase 0.** The `Ege` prefix was redundant inside `namespace ege`, so `EgeDevice` is now `ege::Device`, and `EnchantedEngine` is `ege::Application`. Files are `PascalCase.hpp/.cpp`, named after the type they declare. `Model` keeps its name rather than becoming `Mesh`; the CPU/GPU split into `render/Mesh` and `assets/MeshData` happens in Phase 4 where it is actually needed.
 
 ---
 
@@ -317,23 +319,26 @@ Three things worth recording, because two of them contradict what this document 
 
 ---
 
-## 7. Fate of the current files
+## 7. Fate of the original files
+
+> Phase 0 already performed the moves and renames in this table; the column
+> records where each original file went and what still has to happen to it.
 
 | File | Fate |
 |---|---|
 | `CMakeLists.txt` | Rewritten in Phase 0 — multi-target, FetchContent deps, shader step fixed |
-| `src/ege_engine.{hpp,cpp}` | → `core/Application.*`; `run()` decomposes into fixed-step update / ECS schedule / frame-graph render |
-| `src/ege_game_object.{hpp,cpp}` | **Deleted** in Phase 3, replaced by `scene/World` + `Transform` / `Hierarchy` |
-| `src/simple_render_system.{hpp,cpp}` | **Deleted** in Phase 4, replaced by frame-graph passes with material sorting |
-| `src/ege_engine_device.{hpp,cpp}` | → `rhi/Device.*`; VMA, Vulkan 1.3 features, portability enumeration |
-| `src/ege_swap_chain.{hpp,cpp}` | → `rhi/Swapchain.*`; most render-pass machinery removed by dynamic rendering |
-| `src/ege_pipeline.{hpp,cpp}` | → `rhi/Pipeline.*`; zero-init the config struct, drop the `EgeModel::Vertex` coupling, add SPIRV-Reflect |
-| `src/ege_buffer.{hpp,cpp}` | → `rhi/Buffer.*`; VMA-backed; `getAlignmentSize()` fixed |
-| `src/ege_descriptors.hpp` / `ege_descriptor.cpp` | → `rhi/Descriptors.*` (also fixing the singular/plural filename mismatch); bindless + per-frame allocator |
-| `src/ege_model.{hpp,cpp}` | Split into `render/Mesh` (GPU) and `assets/MeshData` (CPU, scriptable) |
-| `src/ege_camera.{hpp,cpp}` | → `render/Camera`; becomes a component; `near` / `far` params renamed |
-| `src/keyboard_movement_controller.*` | **Deleted** in Phase 1, replaced by `platform/Input` + an editor fly-camera |
-| `Shaders/simple_shader.{vert,frag}` | → `shaders/`; superseded by the PBR shader set in Phase 4 |
+| `src/core/Application.*` | → `core/Application.*`; `run()` decomposes into fixed-step update / ECS schedule / frame-graph render |
+| `src/scene/GameObject.*` | **Deleted** in Phase 3, replaced by `scene/World` + `Transform` / `Hierarchy` |
+| `src/render/SimpleRenderSystem.*` | **Deleted** in Phase 4, replaced by frame-graph passes with material sorting |
+| `src/rhi/Device.*` | → `rhi/Device.*`; VMA, Vulkan 1.3 features, portability enumeration |
+| `src/rhi/SwapChain.*` | → `rhi/Swapchain.*`; most render-pass machinery removed by dynamic rendering |
+| `src/rhi/Pipeline.*` | → `rhi/Pipeline.*`; zero-init the config struct, drop the `EgeModel::Vertex` coupling, add SPIRV-Reflect |
+| `src/rhi/Buffer.*` | → `rhi/Buffer.*`; VMA-backed; `getAlignmentSize()` fixed |
+| `src/rhi/Descriptors.*` | → `rhi/Descriptors.*` (also fixing the singular/plural filename mismatch); bindless + per-frame allocator |
+| `src/render/Model.*` | Split into `render/Mesh` (GPU) and `assets/MeshData` (CPU, scriptable) |
+| `src/render/Camera.*` | → `render/Camera`; becomes a component; `near` / `far` params renamed |
+| `src/platform/KeyboardMovementController.*` | **Deleted** in Phase 1, replaced by `platform/Input` + an editor fly-camera |
+| `shaders/simple_shader.{vert,frag}` | → `shaders/`; superseded by the PBR shader set in Phase 4 |
 | `external/tinyobjectloader/` | Kept as a secondary importer; cgltf becomes primary |
 
 **Reusable as-is:** the fluent descriptor `Builder` pattern, the staging-buffer upload path in `ege_model.cpp`, `hashCombine` in `ege_utils.hpp`, the `beginFrame`/`endFrame` frame-lifecycle contract, and the swapchain-recreation-on-resize logic.
