@@ -4,7 +4,7 @@
 >
 > **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phase 4 partially complete. Phases 5 and 6 not started.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import** with materials, textures and hierarchy. The renderer now has every Phase 4 pillar except anti-aliasing and shadow refinements; the highest-value next item is the **Phase 5 editor**, with the **Phase 6 asset database** close behind — imported content now exists and wants stable references and an inspector.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import** with materials, textures and hierarchy. **Phase 5 has begun**: the in-process editor overlay — hierarchy tree, reflection-driven inspector, stats — is live behind F1. Next: growing the overlay's panels (add/remove components, asset-backed fields), the offscreen viewport that turns it into the standalone editor, and the **Phase 6 asset database** that gives imported content stable references.
 
 ## 1. Where the project stands today
 
@@ -25,7 +25,9 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::EnvironmentLighting` | Procedural sky cubemap, irradiance, prefiltered specular and BRDF LUT, generated at startup |
 | `ege::SkyboxSystem` | Draws the environment behind the scene at the far plane |
 | `ege::ShadowMapSystem` | Depth-only sun shadow pass; the map itself is a frame graph transient |
+| `ege::BloomSystem` | Half-resolution bright-pass and separable blur, composited before the tonemap |
 | `ege::PostProcessSystem` | Fullscreen ACES tonemap from the HDR scene target to the backbuffer |
+| `ege::EditorOverlay` | In-process ImGui overlay: hierarchy, reflection-driven inspector, stats |
 | `ege::Buffer` | Generic mapped/staged Vulkan buffer |
 | `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
 | `ege::Model` | Vertex/index buffers, procedural primitives, tinyobj loading, vertex dedup |
@@ -342,6 +344,8 @@ One bug worth recording, found by looking at the output rather than by the build
 - Undo/redo command stack over reflection-based property edits.
 
 **Done when:** a scene can be built, arranged, saved, played and stopped entirely inside the editor without touching code.
+
+**Outcome — begun.** The in-process overlay landed first, as this phase's own sequencing note advises (thin and early beats complete and late): Dear ImGui (docking) drawn as the frame's last declared pass onto the backbuffer, with the **hierarchy tree** (parenting, selection), the **reflection-driven inspector** — fields, sliders, colour pickers and tooltips generated from `EGE_REFLECT` declarations with no per-type UI code — and a **stats panel** over the renderer's per-frame counters. F1 toggles it; the camera controller stands down while a panel owns the input. This is the Phase 3 "debug overlay" deferral repaid, and it is deliberately in-process: the panels exercise the ECS and reflection APIs now and move into the standalone `EnchantedEditor` application when it exists, rather than being rewritten. Still ahead here: the offscreen **viewport** (the piece that makes the standalone application worth building), component add/remove, asset-backed fields, gizmos, console, undo/redo, and Play/Stop.
 
 ### Phase 6 — Asset pipeline (~4 weeks)
 

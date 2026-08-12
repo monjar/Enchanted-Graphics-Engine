@@ -35,8 +35,15 @@ The copper torus is a **glTF import**: any `.gltf`/`.glb` dropped into
 hierarchy spawned as entities at startup. The demo's torus is itself a
 self-contained text glTF, so the no-binary-assets rule still holds.
 
-Still to come: cascaded and point-light shadows, anti-aliasing, the editor,
-C++ scripting and physics.
+![The editor overlay: hierarchy tree, reflection-driven inspector and stats panel over the scene](docs/images/editor-overlay.png)
+
+Press **F1** for the editor overlay — a hierarchy tree, a stats panel, and an
+inspector generated entirely from the engine's reflection system: a component
+gets editable fields, sliders and colour pickers by declaring them with
+`EGE_REFLECT`, with no inspector code written per type.
+
+Still to come: cascaded and point-light shadows, anti-aliasing, the
+standalone editor application, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -97,6 +104,7 @@ src/
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
   assets/       glTF import (cgltf); grows into the asset database in Phase 6
+  editor/       the in-process overlay; grows into EnchantedEditor in Phase 5
   rhi/          device, swapchain, pipeline, buffer, descriptors, textures, frame graph
   render/       renderer, model, camera, materials, lights, bounds,
                 environment lighting, PBR, shadows, skybox, bloom and post-process
