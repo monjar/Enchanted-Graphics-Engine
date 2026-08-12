@@ -1,16 +1,19 @@
 #include "core/Application.hpp"
+#include "core/Log.hpp"
 
 #include <cstdlib>
-#include <iostream>
-#include <stdexcept>
+#include <exception>
 
 int main() {
-    ege::Application engine{};
-
+    // Construction is inside the try: Application's constructor creates the
+    // descriptor pool and loads the scene, both of which can throw, and
+    // previously did so outside any handler.
     try {
-        engine.run();
+        ege::Application application{};
+        application.run();
     } catch (const std::exception& e) {
-        std::cerr << e.what() << '\n';
+        EGE_CRITICAL("Fatal: {}", e.what());
+        ege::Log::flush();
         return EXIT_FAILURE;
     }
 

@@ -1,7 +1,11 @@
+#define VMA_IMPLEMENTATION
 #include "rhi/Device.hpp"
+
+#include "core/Log.hpp"
 
 // std headers
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <unordered_set>
@@ -14,7 +18,7 @@ namespace ege {
         VkDebugUtilsMessageTypeFlagsEXT /*messageType*/,
         const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
         void* /*pUserData*/) {
-        std::cerr << "validation layer: " << pCallbackData->pMessage << std::endl;
+        EGE_ERROR("validation layer: {}", pCallbackData->pMessage);
 
         return VK_FALSE;
     }
@@ -51,11 +55,16 @@ namespace ege {
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
+        createAllocator();
+        createPipelineCache();
         createCommandPool();
     }
 
     Device::~Device() {
         vkDestroyCommandPool(device_, commandPool, nullptr);
+        savePipelineCache();
+        vkDestroyPipelineCache(device_, cache, nullptr);
+        vmaDestroyAllocator(vmaAllocator);
         vkDestroyDevice(device_, nullptr);
 
         if (enableValidationLayers) {
@@ -112,7 +121,7 @@ namespace ege {
         if (deviceCount == 0) {
             throw std::runtime_error("failed to find GPUs with Vulkan support!");
         }
-        std::cout << "Device count: " << deviceCount << std::endl;
+        EGE_INFO("Physical devices found: {}", deviceCount);
         std::vector<VkPhysicalDevice> devices(deviceCount);
         vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
 
@@ -128,7 +137,7 @@ namespace ege {
         }
 
         vkGetPhysicalDeviceProperties(physicalDevice, &properties);
-        std::cout << "physical device: " << properties.deviceName << std::endl;
+        EGE_INFO("Using physical device: {}", properties.deviceName);
     }
 
     void Device::createLogicalDevice() {
@@ -282,17 +291,17 @@ namespace ege {
         std::vector<VkExtensionProperties> extensions(extensionCount);
         vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
 
-        std::cout << "available extensions:" << std::endl;
+        EGE_TRACE("Available instance extensions:");
         std::unordered_set<std::string> available;
         for (const auto& extension : extensions) {
-            std::cout << "\t" << extension.extensionName << std::endl;
+            EGE_TRACE("  {}", extension.extensionName);
             available.insert(extension.extensionName);
         }
 
-        std::cout << "required extensions:" << std::endl;
+        EGE_TRACE("Required instance extensions:");
         auto requiredExtensions = getRequiredExtensions();
         for (const auto& required : requiredExtensions) {
-            std::cout << "\t" << required << std::endl;
+            EGE_TRACE("  {}", required);
             if (available.find(required) == available.end()) {
                 throw std::runtime_error("Missing required glfw extension");
             }
@@ -404,36 +413,119 @@ namespace ege {
         throw std::runtime_error("failed to find suitable memory type!");
     }
 
+    void Device::createAllocator() {
+        VmaAllocatorCreateInfo allocatorInfo{};
+        allocatorInfo.physicalDevice = physicalDevice;
+        allocatorInfo.device = device_;
+        allocatorInfo.instance = instance;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0;
+
+        if (vmaCreateAllocator(&allocatorInfo, &vmaAllocator) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create the memory allocator");
+        }
+
+        VkPhysicalDeviceMemoryProperties memoryProperties{};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+        EGE_INFO(
+            "Memory allocator ready: {} heap(s), {} type(s), device allocation limit {}",
+            memoryProperties.memoryHeapCount,
+            memoryProperties.memoryTypeCount,
+            properties.limits.maxMemoryAllocationCount);
+    }
+
+    namespace {
+
+        // Beside the executable rather than in the source tree: it is a
+        // per-driver, per-device artifact, not something to share or commit.
+        const char* pipelineCachePath() {
+            return "pipeline_cache.bin";
+        }
+
+    }  // namespace
+
+    void Device::createPipelineCache() {
+        std::vector<char> initialData;
+
+        if (std::ifstream file{pipelineCachePath(), std::ios::binary | std::ios::ate}) {
+            const auto size = static_cast<std::streamsize>(file.tellg());
+            if (size > 0) {
+                initialData.resize(static_cast<std::size_t>(size));
+                file.seekg(0);
+                file.read(initialData.data(), size);
+            }
+        }
+
+        VkPipelineCacheCreateInfo cacheInfo{};
+        cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        cacheInfo.initialDataSize = initialData.size();
+        cacheInfo.pInitialData = initialData.empty() ? nullptr : initialData.data();
+
+        // The driver validates the blob's header against itself and silently
+        // ignores one written by a different device or driver version, so a
+        // stale file costs a recompile rather than corrupting anything. That is
+        // why no version checking is needed here.
+        if (vkCreatePipelineCache(device_, &cacheInfo, nullptr, &cache) != VK_SUCCESS) {
+            // Not fatal: without a cache every pipeline simply compiles from
+            // scratch, which is the behaviour before this existed.
+            EGE_WARN("failed to create the pipeline cache; pipelines will compile uncached");
+            cache = VK_NULL_HANDLE;
+            return;
+        }
+
+        if (initialData.empty()) {
+            EGE_INFO("Pipeline cache created empty");
+        } else {
+            EGE_INFO("Pipeline cache loaded, {} bytes", initialData.size());
+        }
+    }
+
+    void Device::savePipelineCache() const {
+        if (cache == VK_NULL_HANDLE) {
+            return;
+        }
+
+        std::size_t size = 0;
+        if (vkGetPipelineCacheData(device_, cache, &size, nullptr) != VK_SUCCESS || size == 0) {
+            return;
+        }
+
+        std::vector<char> data(size);
+        if (vkGetPipelineCacheData(device_, cache, &size, data.data()) != VK_SUCCESS) {
+            return;
+        }
+
+        if (std::ofstream file{pipelineCachePath(), std::ios::binary}) {
+            file.write(data.data(), static_cast<std::streamsize>(size));
+        }
+    }
+
     void Device::createBuffer(
         VkDeviceSize size,
         VkBufferUsageFlags usage,
         VkMemoryPropertyFlags memoryProperties,
         VkBuffer& buffer,
-        VkDeviceMemory& bufferMemory) {
+        VmaAllocation& allocation) {
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = size;
         bufferInfo.usage = usage;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        if (vkCreateBuffer(device_, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+        // requiredFlags rather than a usage hint, so the existing call sites -
+        // which ask for HOST_VISIBLE or DEVICE_LOCAL explicitly - keep their
+        // exact meaning.
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+        allocInfo.requiredFlags = memoryProperties;
+
+        if (vmaCreateBuffer(vmaAllocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr) !=
+            VK_SUCCESS) {
             throw std::runtime_error("failed to create vertex buffer!");
         }
+    }
 
-        VkMemoryRequirements memRequirements;
-        vkGetBufferMemoryRequirements(device_, buffer, &memRequirements);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex =
-            findMemoryType(memRequirements.memoryTypeBits, memoryProperties);
-
-        if (vkAllocateMemory(device_, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate vertex buffer memory!");
-        }
-
-        vkBindBufferMemory(device_, buffer, bufferMemory, 0);
+    void Device::destroyBuffer(VkBuffer buffer, VmaAllocation allocation) {
+        vmaDestroyBuffer(vmaAllocator, buffer, allocation);
     }
 
     VkCommandBuffer Device::beginSingleTimeCommands() {
@@ -506,27 +598,19 @@ namespace ege {
         const VkImageCreateInfo& imageInfo,
         VkMemoryPropertyFlags memoryProperties,
         VkImage& image,
-        VkDeviceMemory& imageMemory) {
-        if (vkCreateImage(device_, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+        VmaAllocation& allocation) {
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+        allocInfo.requiredFlags = memoryProperties;
+
+        if (vmaCreateImage(vmaAllocator, &imageInfo, &allocInfo, &image, &allocation, nullptr) !=
+            VK_SUCCESS) {
             throw std::runtime_error("failed to create image!");
         }
+    }
 
-        VkMemoryRequirements memRequirements;
-        vkGetImageMemoryRequirements(device_, image, &memRequirements);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex =
-            findMemoryType(memRequirements.memoryTypeBits, memoryProperties);
-
-        if (vkAllocateMemory(device_, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate image memory!");
-        }
-
-        if (vkBindImageMemory(device_, image, imageMemory, 0) != VK_SUCCESS) {
-            throw std::runtime_error("failed to bind image memory!");
-        }
+    void Device::destroyImage(VkImage image, VmaAllocation allocation) {
+        vmaDestroyImage(vmaAllocator, image, allocation);
     }
 
 }  // namespace ege

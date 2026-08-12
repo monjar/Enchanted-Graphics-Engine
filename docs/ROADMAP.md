@@ -2,11 +2,15 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phase 0 complete.** See [§6](#6-phases) for what that covered and what it turned up.
+> **Status: Phases 0, 1 and 3 complete. Phases 2 and 4 partially complete. Phases 5 and 6 not started.**
+>
+> Each phase below carries an outcome note listing exactly what landed and what did not. The single largest outstanding item is the **frame graph** (§Phase 2): shadows, IBL, MSAA and the HDR post stack all want to be passes that declare their resources, and each is materially harder to add against the current hardcoded render pass. It is the right next piece of work.
 
 ## 1. Where the project stands today
 
-Enchanted is a **Vulkan 1.0 forward renderer** grown out of Brendan Galea's Vulkan tutorial series, stopped at roughly the point where UBOs and descriptor sets were introduced. It draws indexed meshes — procedural primitives or OBJ files — lit by one hardcoded diffuse point light.
+Enchanted is a **Vulkan forward renderer with a metallic-roughness PBR pipeline**, an entity-component system, runtime reflection, VMA-backed GPU memory, textures with mip generation, a job system and a fixed-timestep clock. It began as a port of Brendan Galea's Vulkan tutorial series and has since grown past it.
+
+Still absent, and tracked per phase in §6: glTF import, IBL, shadows, an HDR post stack, a frame graph, scene serialization, the editor, scripting and physics.
 
 The Vulkan foundations are idiomatic and are being kept:
 
@@ -20,8 +24,10 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::Buffer` | Generic mapped/staged Vulkan buffer |
 | `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
 | `ege::Model` | Vertex/index buffers, procedural primitives, tinyobj loading, vertex dedup |
-
-Everything above that layer — scene representation, materials, textures, asset management, input abstraction, scripting, physics, tooling — does not exist yet.
+| `ege::Texture` | Upload, mip generation, samplers, sRGB/linear selection |
+| `ege::Material` | Metallic-roughness properties and a per-material descriptor set |
+| `ege::World` / `ege::Entity` | Sparse-set ECS and the entity facade |
+| `ege::TypeRegistry` | Runtime reflection |
 
 ### 1.1 Known blockers — *resolved in Phase 0*
 
@@ -104,25 +110,22 @@ docs/                                                                    [exists
 
 The distinguishing verbs are **Spawn / Attach / Fetch / Detach / Despawn**, and queries — not per-object component lookups — are the primary gameplay idiom.
 
+As shipped. Method names are camelCase, matching the rest of the codebase rather than the PascalCase of the original sketch; `SetParent` and `View` are not built yet.
+
 ```cpp
 World world;
 
-Entity player = world.Spawn("Player");
-player.Attach<Transform>({ .position = {0, 1, 0} });
-player.Attach<MeshRenderer>(mesh, material);
-player.Attach<Script<PlayerController>>();
+Entity player = world.spawn("Player");
+player.attach<Transform>(Transform{.translation = {0, 1, 0}});
+player.attach<MeshRenderer>(MeshRenderer{mesh, material, true});
 
-Transform& t = player.Fetch<Transform>();       // asserts present
-if (auto* r = player.Find<RigidBody>()) { ... } // nullable
-player.Detach<MeshRenderer>();
-world.Despawn(player);
+Transform& t = player.fetch<Transform>();       // asserts present
+if (auto* r = player.find<RigidBody>()) { ... } // nullable
+player.detach<MeshRenderer>();
+player.despawn();
 
-sword.SetParent(player);                        // hierarchy lives in the ECS
-
-// Queries — the main way systems are written
-world.Each<Transform, PointLight>([](Entity e, Transform& t, PointLight& l) { ... });
-
-for (auto [e, t, rb] : world.View<Transform, RigidBody>()) { ... }
+// Queries - the main way systems are written
+world.each<Transform, PointLight>([](Entity e, Transform& t, PointLight& l) { ... });
 
 world.Each<Transform>(Without<Frozen>{}, [](Entity e, Transform& t) { ... });
 
@@ -212,6 +215,20 @@ Three things worth recording, because two of them contradict what this document 
 
 **Done when:** the existing demo runs on the new core, the camera has proper mouse-look, and unit tests cover reflection round-trips and the job system.
 
+**Outcome.** Done, with three parts deferred and one design change.
+
+Delivered: `core/Log` and `core/Assert` on spdlog; `reflect/` with `TypeRegistry`, `TypeInfo`, `FieldInfo`, chained field attributes and `EGE_REFLECT`; `platform/Input` with edge-triggered state, mouse delta, capture modes and named action bindings, plus `platform/CameraController` giving the engine mouse-look; `core/Time` with the fixed-step accumulator; and `core/JobSystem` with `parallelFor` and cooperative waiting. Test count went from 9 to 44.
+
+**Deferred to the phase that needs them:** `EventBus`, `Guid`/`Handle<T>` and the `VirtualFileSystem` — none has a caller yet, and the `EGE_ASSET_ROOT` mechanism from Phase 0 covers path resolution until the asset database lands in Phase 6. `FileWatcher` and `DynamicLibrary` move to Phase 7, where script hot-reload is the thing that actually defines their interface.
+
+**Design change:** attributes chain off `EGE_FIELD` rather than being trailing macro arguments. A variadic macro invoked with no variadic argument is ill-formed before C++20 and `-Wpedantic` rejects it, so `EGE_FIELD(scale)` would not compile. The chained form reads better and is what the API keeps.
+
+Three things worth recording:
+
+- **Logging cannot require an explicit `init()`.** Subsystems log from their constructors, and members are constructed before the owner's constructor body runs, so `Device` logs before anything in `Application`'s body could initialise a logger. The first version segfaulted immediately for this reason. The accessors now initialise on first use.
+- **A fixed-size thread pool deadlocks on nested blocking submits.** Twenty outer jobs on four workers, each blocking on `future::get()` for children no worker was free to run. Since that is the normal shape of asset loading, `JobSystem::waitFor` runs queued work on the calling thread while waiting.
+- **`1.f/60.f` is not exactly representable and rounds up**, so half a second holds 29 fixed steps rather than 30. A test asserted 30 and was wrong; the exact-count test now uses 1/64.
+
 ### Phase 2 — RHI modernization (~4–5 weeks)
 
 - **VulkanMemoryAllocator** — today every buffer gets its own `vkAllocateMemory`, which hits `maxMemoryAllocationCount` at scale.
@@ -224,6 +241,18 @@ Three things worth recording, because two of them contradict what this document 
 
 **Done when:** a textured quad renders through the frame graph, validation-clean, with GPU memory managed by VMA.
 
+**Outcome — partial.**
+
+*Done:* VMA now backs every buffer and image allocation. This was the urgent part: one `vkAllocateMemory` per buffer hits `maxMemoryAllocationCount` (commonly 4096) at a few thousand meshes while plenty of memory remains free. `rhi/Texture` adds upload, mip generation by successive blits, samplers with device-clamped anisotropy, and per-texture sRGB-versus-linear selection — which finally uses `createImageWithInfo`, `copyBufferToImage` and the `samplerAnisotropy` feature, all of which had been requested or written and never called.
+
+The **on-disk pipeline cache** also landed: pipelines no longer recompile from SPIR-V on every launch, a corrupt or stale blob is rejected by the driver rather than breaking start-up, and the cache is written explicitly after pipeline creation as well as at shutdown, because a killed process never unwinds.
+
+*Not done, and why:*
+
+- **Frame graph** — the most valuable remaining item in the whole roadmap. Shadows, IBL, MSAA and the HDR post stack are all passes with resource dependencies, and adding any of them to the current single hardcoded render pass means writing barrier and attachment management by hand that the graph would then replace. Everything downstream is cheaper after this and more expensive before it.
+- **Vulkan 1.3 with dynamic rendering** — a rewrite of `SwapChain` and every pipeline whose entire purpose is deleting render-pass bookkeeping. Worth one deliberate pass, and naturally done together with the frame graph rather than twice.
+- **SPIRV-Reflect** driven pipeline layouts, and **bindless descriptors**. Neither blocks anything today; bindless becomes worthwhile when material count grows past what per-material descriptor sets handle comfortably.
+
 ### Phase 3 — ECS world & scene (~4–5 weeks)
 
 - Implement `World`, `Entity`, `ComponentPool`, `View` / `Each`, `With` / `Without` filters and `Schedule` — the API in §4.
@@ -233,6 +262,25 @@ Three things worth recording, because two of them contradict what this document 
 - **Debug ImGui overlay**: hierarchy tree plus a reflection-driven inspector, in-process. Not the editor yet, but it makes ECS work visible immediately and prototypes Phase 5's panels.
 
 **Done when:** a scene of hundreds of entities with multiple lights loads from a `.egescene` file, is inspectable, and saves back byte-identically.
+
+**Outcome — complete**, apart from two items deferred to the phase that gives them a caller.
+
+*Done:* the ECS — `World`, `EntityId`, `ComponentPool`, the `spawn`/`attach`/`fetch`/`find`/`detach`/`despawn` API, `each()` with `With`/`Without` filters — and the migration of the scene, renderer and lights onto it. `GameObject` is gone. **Scene serialization** saves and loads `.egescene` JSON entirely through reflection: nothing in the serializer knows what a `Transform` is, and a new component becomes serializable by being reflected and registered. **Hierarchy** adds parenting with cycle refusal and cached world matrices.
+
+*Deferred:* the explicit **`Schedule`** for system phases and the **debug ImGui overlay**. The schedule has no second system to order against the renderer yet, and the overlay is subsumed by the editor in Phase 5 — building a throwaway version first would be wasted.
+
+Three design notes worth carrying forward:
+
+- `EntityId` packs a 24-bit index with an 8-bit generation, bumped on despawn, so a handle held across a despawn is *detectably* stale rather than silently addressing whatever recycled the slot. A slot that exhausts its generations is retired rather than reused.
+- `each()` iterates a snapshot of the driving pool so a callback may despawn or attach without invalidating the walk. That copy is a real per-query cost; a deferred command buffer is the eventual answer.
+- Hierarchy makes the Phase 0 normal-matrix finding bite: a non-uniform parent scale combined with a child rotation introduces shear, which is exactly the case the inverse-scale shortcut excludes. Parented entities use the general `transpose(inverse(M))`; unparented ones keep the cheap path.
+
+`MeshRenderer`'s model and material are deliberately **not** serialized. They are runtime handles, and turning them into stable references is what the asset database in Phase 6 is for — so a reloaded scene currently restores transforms, names, lights and hierarchy but not geometry.
+
+Two design notes worth carrying forward:
+
+- `EntityId` packs a 24-bit index with an 8-bit generation, bumped on despawn, so a handle held across a despawn is *detectably* stale rather than silently addressing whatever recycled the slot. A slot that exhausts its generations is retired rather than reused.
+- `each()` iterates a snapshot of the driving pool so a callback may despawn or attach without invalidating the walk. That copy is a real per-query cost; a deferred command buffer is the eventual answer.
 
 ### Phase 4 — PBR renderer (~6–8 weeks)
 
@@ -246,6 +294,21 @@ Three things worth recording, because two of them contradict what this document 
 - Editor-only debug rendering: wireframe, normals, light gizmos, bounding volumes.
 
 **Done when:** a Sponza-class glTF scene renders with PBR materials, IBL, shadows and tonemapping at interactive rates.
+
+**Outcome — partial.**
+
+*Done:* the shading model. Cook-Torrance with Trowbridge-Reitz GGX, Smith/Schlick-GGX geometry, Schlick Fresnel, and correct energy conservation between the diffuse and specular lobes with metals carrying no diffuse term. `render/Material` holds metallic-roughness properties plus four texture slots behind a per-material descriptor set, ordered after the per-frame set by update frequency. Normal mapping derives its tangent frame from screen-space derivatives. Up to sixteen point lights, replacing the single hardcoded one. Backface culling, and a Reinhard tonemap with gamma encode as a placeholder for a real HDR target.
+
+**Frustum culling and material sorting** landed too. Meshes carry local-space bounds; the render system gathers visible objects, rejects those whose transformed bounds fall outside the frustum, sorts survivors by material then mesh, and submits. Sorting matters because descriptor set binds dominate a draw and component-pool order has no reason to group objects sharing a material. Per-frame statistics record candidates, culled, drawn and material binds.
+
+*Not done:*
+
+- **IBL** — irradiance and prefiltered specular maps, the BRDF LUT, a skybox. Its absence is visible in the demo image: the smoothest metal sphere is nearly black, because a mirror with nothing to reflect *is* nearly black. Correct behaviour, and the single biggest visual improvement still available.
+- **Shadow maps**, the **HDR target with ACES and bloom**, and **MSAA/FXAA/TAA** — all wanting the frame graph first, for the reason given under Phase 2. MSAA in particular means multisampled colour and depth attachments plus a resolve, which is exactly the attachment management the graph should own.
+- **glTF 2.0 import** — still OBJ and procedural primitives only. Independent of the frame graph, so it can be done at any time; it pairs naturally with the Phase 6 asset database, which is what gives imported meshes and textures stable references.
+- **Instancing** — the draw list is sorted and ready for it, but nothing merges consecutive identical draws yet.
+
+One bug worth recording, found by looking at the output rather than by the build passing: the default metallic-roughness texture was `(1, 1, 0)`, read as "fully rough, non-metal". But metallic samples from blue and is *multiplied* by `metallicFactor`, so a zero there forced every material to be a dielectric regardless of its factor, and the metal spheres shaded as diffuse plastic. Fallback textures have to be the multiplicative identity.
 
 ### Phase 5 — Editor application (~6–8 weeks)
 

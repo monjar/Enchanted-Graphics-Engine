@@ -6,7 +6,7 @@
 // transform ever gains shear or general parent matrices that stops being true,
 // and this test is what should fail.
 
-#include "scene/GameObject.hpp"
+#include "scene/Components.hpp"
 
 #include <glm/gtc/constants.hpp>
 
@@ -14,7 +14,7 @@
 
 #include <random>
 
-using ege::TransformComponent;
+using ege::Transform;
 
 namespace {
 
@@ -29,7 +29,7 @@ namespace {
 }  // namespace
 
 TEST_CASE("identity transform produces the identity matrix") {
-    TransformComponent transform{};
+    Transform transform{};
 
     const glm::mat4 matrix = transform.mat4();
     for (int column = 0; column < 4; column++) {
@@ -41,7 +41,7 @@ TEST_CASE("identity transform produces the identity matrix") {
 }
 
 TEST_CASE("translation lands in the fourth column") {
-    TransformComponent transform{};
+    Transform transform{};
     transform.translation = {1.f, -2.f, 3.5f};
 
     const glm::mat4 matrix = transform.mat4();
@@ -52,7 +52,7 @@ TEST_CASE("translation lands in the fourth column") {
 }
 
 TEST_CASE("transform maps points as translate(rotate(scale(p)))") {
-    TransformComponent transform{};
+    Transform transform{};
     transform.translation = {2.f, 0.f, 0.f};
     transform.scale = {2.f, 2.f, 2.f};
     transform.rotation = {0.f, glm::half_pi<float>(), 0.f};
@@ -70,7 +70,7 @@ TEST_CASE("normal matrix equals transpose(inverse(M)) for T*R*S transforms") {
     std::uniform_real_distribution<float> scale{0.05f, 8.f};
 
     for (int trial = 0; trial < 2000; trial++) {
-        TransformComponent transform{};
+        Transform transform{};
         transform.translation = {angle(rng), angle(rng), angle(rng)};
         transform.rotation = {angle(rng), angle(rng), angle(rng)};
         transform.scale = {scale(rng), scale(rng), scale(rng)};
@@ -86,7 +86,7 @@ TEST_CASE("normal matrix equals transpose(inverse(M)) for T*R*S transforms") {
 TEST_CASE("normal matrix keeps normals perpendicular under non-uniform scale") {
     // The case a plain rotation matrix gets wrong: squash one axis hard and a
     // surface normal must still come out perpendicular to the surface.
-    TransformComponent transform{};
+    Transform transform{};
     transform.scale = {1.f, 0.1f, 1.f};
 
     const glm::mat4 model = transform.mat4();

@@ -1,6 +1,7 @@
 #include "platform/Window.hpp"
 
-#include <iostream>
+#include "platform/Input.hpp"
+
 #include <stdexcept>
 
 namespace ege {
@@ -23,6 +24,9 @@ namespace ege {
 
         glfwSetWindowUserPointer(window, this);
         glfwSetFramebufferSizeCallback(window, frameBufferResizeCallBack);
+        glfwSetScrollCallback(window, scrollCallBack);
+
+        inputState = std::make_unique<Input>(*this);
     }
 
     void Window::createWindowSurface(VkInstance instance, VkSurfaceKHR* surface) {
@@ -36,5 +40,14 @@ namespace ege {
         self->wasFrameBufferResized = true;
         self->width = width;
         self->height = height;
+    }
+
+    void Window::scrollCallBack(GLFWwindow* glfwWindow, double x, double y) {
+        // The user pointer belongs to the Window, so scroll is routed through
+        // it rather than Input claiming the pointer and breaking resize.
+        auto self = reinterpret_cast<Window*>(glfwGetWindowUserPointer(glfwWindow));
+        if (self != nullptr && self->inputState) {
+            self->inputState->onScroll(x, y);
+        }
     }
 }  // namespace ege

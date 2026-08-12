@@ -113,3 +113,87 @@ add_library(ege_tinyobj INTERFACE)
 target_include_directories(ege_tinyobj SYSTEM INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}/external/tinyobjectloader)
 add_library(ege::tinyobj ALIAS ege_tinyobj)
+
+# ---------------------------------------------------------------------------
+# spdlog - logging
+# ---------------------------------------------------------------------------
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+
+CPMAddPackage(
+  NAME spdlog
+  GITHUB_REPOSITORY gabime/spdlog
+  GIT_TAG v1.14.1
+  VERSION 1.14.1
+  FIND_PACKAGE_ARGUMENTS "NAMES spdlog"
+  EXCLUDE_FROM_ALL YES
+)
+
+add_library(ege_spdlog INTERFACE)
+if(TARGET spdlog::spdlog)
+  ege_make_includes_system(spdlog::spdlog)
+  target_link_libraries(ege_spdlog INTERFACE spdlog::spdlog)
+elseif(TARGET spdlog)
+  ege_make_includes_system(spdlog)
+  target_link_libraries(ege_spdlog INTERFACE spdlog)
+else()
+  message(FATAL_ERROR "spdlog resolved but exported no usable target")
+endif()
+add_library(ege::spdlog ALIAS ege_spdlog)
+
+# ---------------------------------------------------------------------------
+# VulkanMemoryAllocator - GPU memory suballocation
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME VulkanMemoryAllocator
+  GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+  GIT_TAG v3.1.0
+  VERSION 3.1.0
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_vma INTERFACE)
+target_include_directories(ege_vma SYSTEM INTERFACE
+  ${VulkanMemoryAllocator_SOURCE_DIR}/include)
+add_library(ege::vma ALIAS ege_vma)
+
+# ---------------------------------------------------------------------------
+# stb - image loading. Header only, implementation compiled in one TU.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME stb
+  GITHUB_REPOSITORY nothings/stb
+  GIT_TAG f0569113c93ad095470c54bf34a17b36646bbbb5
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_stb INTERFACE)
+target_include_directories(ege_stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
+add_library(ege::stb ALIAS ege_stb)
+
+# ---------------------------------------------------------------------------
+# nlohmann/json - scene and asset serialization
+# ---------------------------------------------------------------------------
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(JSON_Install OFF CACHE INTERNAL "")
+
+CPMAddPackage(
+  NAME nlohmann_json
+  GITHUB_REPOSITORY nlohmann/json
+  GIT_TAG v3.11.3
+  VERSION 3.11.3
+  FIND_PACKAGE_ARGUMENTS "NAMES nlohmann_json"
+  EXCLUDE_FROM_ALL YES
+)
+
+add_library(ege_json INTERFACE)
+if(TARGET nlohmann_json::nlohmann_json)
+  ege_make_includes_system(nlohmann_json::nlohmann_json)
+  target_link_libraries(ege_json INTERFACE nlohmann_json::nlohmann_json)
+else()
+  message(FATAL_ERROR "nlohmann_json resolved but exported no usable target")
+endif()
+add_library(ege::json ALIAS ege_json)

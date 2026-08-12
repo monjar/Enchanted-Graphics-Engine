@@ -2,6 +2,8 @@
 
 #include "platform/Window.hpp"
 
+#include <vk_mem_alloc.h>
+
 // std lib headers
 #include <string>
 #include <vector>
@@ -63,13 +65,41 @@ namespace ege {
             VkImageTiling tiling,
             VkFormatFeatureFlags features);
 
+        // The allocator every GPU allocation goes through.
+        VmaAllocator allocator() const { return vmaAllocator; }
+
+        // Needed to query format capabilities, such as whether a format
+        // supports the linear filtering that mip generation blits require.
+        VkPhysicalDevice physicalDeviceHandle() const { return physicalDevice; }
+
+        // Shared pipeline cache, persisted to disk between runs.
+        //
+        // Compiling a pipeline means the driver compiling SPIR-V to its own ISA,
+        // which is the slowest part of start-up and is repaid on every launch
+        // without this. The cache is a hint: a stale or rejected one costs a
+        // recompile, never a wrong result.
+        VkPipelineCache pipelineCache() const { return cache; }
+
+        // Writes the cache to disk. Called from the destructor, but also worth
+        // calling explicitly once pipelines have been created: a process that
+        // is killed rather than closed never runs the destructor, and an engine
+        // is killed fairly often during development.
+        void savePipelineCache() const;
+
         // Buffer Helper Functions
+        //
+        // Allocation is suballocated from VMA's pools rather than taken from
+        // vkAllocateMemory directly. Drivers cap the number of live device
+        // allocations - maxMemoryAllocationCount is commonly 4096 - and one
+        // allocation per buffer reaches that at a few thousand meshes.
         void createBuffer(
             VkDeviceSize size,
             VkBufferUsageFlags usage,
             VkMemoryPropertyFlags memoryProperties,
             VkBuffer& buffer,
-            VkDeviceMemory& bufferMemory);
+            VmaAllocation& allocation);
+
+        void destroyBuffer(VkBuffer buffer, VmaAllocation allocation);
         VkCommandBuffer beginSingleTimeCommands();
         void endSingleTimeCommands(VkCommandBuffer commandBuffer);
         void copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size);
@@ -80,7 +110,9 @@ namespace ege {
             const VkImageCreateInfo& imageInfo,
             VkMemoryPropertyFlags memoryProperties,
             VkImage& image,
-            VkDeviceMemory& imageMemory);
+            VmaAllocation& allocation);
+
+        void destroyImage(VkImage image, VmaAllocation allocation);
 
         VkPhysicalDeviceProperties properties;
 
@@ -90,6 +122,8 @@ namespace ege {
         void createSurface();
         void pickPhysicalDevice();
         void createLogicalDevice();
+        void createAllocator();
+        void createPipelineCache();
         void createCommandPool();
 
         // helper functions
@@ -109,6 +143,8 @@ namespace ege {
         VkCommandPool commandPool;
 
         VkDevice device_;
+        VmaAllocator vmaAllocator = VK_NULL_HANDLE;
+        VkPipelineCache cache = VK_NULL_HANDLE;
         VkSurfaceKHR surface_;
         VkQueue graphicsQueue_;
         VkQueue presentQueue_;

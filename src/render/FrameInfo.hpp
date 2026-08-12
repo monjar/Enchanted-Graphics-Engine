@@ -1,7 +1,7 @@
 #pragma once
 
 #include "render/Camera.hpp"
-#include "scene/GameObject.hpp"
+#include "scene/World.hpp"
 // lib
 #include <vulkan/vulkan.h>
 
@@ -12,6 +12,6 @@ namespace ege {
         VkCommandBuffer commandBuffer;
         Camera& camera;
         VkDescriptorSet globalDescriptorSet;
-        GameObject::Map& gameObjects;
+        World& world;
     };
 }  // namespace ege

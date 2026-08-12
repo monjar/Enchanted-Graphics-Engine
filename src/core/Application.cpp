@@ -1,36 +1,78 @@
 #include "core/Application.hpp"
 
-#include "platform/KeyboardMovementController.hpp"
+#include "core/Log.hpp"
+#include "core/Time.hpp"
+#include "platform/CameraController.hpp"
+#include "platform/Input.hpp"
+#include "reflect/BuiltinTypes.hpp"
+#include "reflect/Serialization.hpp"
 #include "render/Camera.hpp"
-#include "render/SimpleRenderSystem.hpp"
+#include "render/PbrRenderSystem.hpp"
 #include "rhi/Buffer.hpp"
+#include "scene/ComponentRegistry.hpp"
+#include "scene/Components.hpp"
+#include "scene/Hierarchy.hpp"
+#include "scene/SceneSerializer.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
 #include <array>
-#include <chrono>
 #include <stdexcept>
 
 namespace ege {
 
-    struct GlobalUbo {
-        glm::mat4 projectionView{1.f};
-        glm::vec4 ambientLightColor{1.f, 1.f, 1.f, .02f};  // w is intensity
-        glm::vec3 lightPosition{-1.f};
-        alignas(16) glm::vec4 lightColor{0.f, 0.f, 1.f, 1.f};  // w is light intensity
-    };
+    namespace {
+
+        // Projection and view are separate rather than premultiplied, and the
+        // inverse view is included, because the PBR shader needs the camera
+        // position for the view vector - which is the inverse view's
+        // translation column.
+        struct GlobalUbo {
+            glm::mat4 projection{1.f};
+            glm::mat4 view{1.f};
+            glm::mat4 inverseView{1.f};
+            glm::vec4 ambientLightColor{1.f, 1.f, 1.f, .03f};  // w is intensity
+            GpuPointLight pointLights[maxPointLights]{};
+            alignas(16) int numLights = 0;
+        };
+
+    }  // namespace
 
     Application::Application() {
+        Log::init();
+        EGE_INFO("Enchanted Engine starting up");
+
+        // Makes the leaf types findable by name before anything has touched
+        // them, which scene loading and the editor's type pickers rely on.
+        registerBuiltinTypes();
+        registerBuiltinSerializers();
+        registerBuiltinComponents();
+        EGE_DEBUG("Reflection: {} types registered", TypeRegistry::instance().all().size());
         globalPool =
             DescriptorPool::Builder(device)
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .build();
-        loadGameObjects();
+
+        // Four image samplers per material, and room for a reasonable number
+        // of materials before the pool has to grow.
+        constexpr uint32_t maxMaterials = 128;
+        materialPool = DescriptorPool::Builder(device)
+                           .setMaxSets(maxMaterials)
+                           .addPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxMaterials * 4)
+                           .build();
+        materialSetLayout = Material::createLayout(device);
+        Material::createDefaults(device);
+
+        loadScene();
     }
 
-    Application::~Application() {}
+    Application::~Application() {
+        // Shared fallback textures outlive every material, so they have to be
+        // released before the device goes away.
+        Material::destroyDefaults();
+    }
 
     void Application::run() {
         std::vector<std::unique_ptr<Buffer>> uboBuffers(SwapChain::MAX_FRAMES_IN_FLIGHT);
@@ -57,32 +99,57 @@ namespace ege {
                 .build(globalDescriptorSets[i]);
         }
 
-        SimpleRenderSystem simpleRenderSystem{
-            device, renderer.getSwapChainRenderPass(), globalSetLayout->getDescriptorSetLayout()};
+        PbrRenderSystem pbrRenderSystem{
+            device,
+            renderer.getSwapChainRenderPass(),
+            globalSetLayout->getDescriptorSetLayout(),
+            materialSetLayout->getDescriptorSetLayout()};
 
         Camera camera{};
 
-        auto viewerObject = GameObject::createGameObject();
-        viewerObject.transform.translation = glm::vec3(0.f, -1.f, -3.f);
+        // The viewer is a plain transform rather than an entity: it is the
+        // editor camera, not part of the scene being edited.
+        Transform viewerTransform{};
+        viewerTransform.translation = glm::vec3(0.f, -1.f, -3.f);
         // Pitched down slightly so the default view frames the scene instead of
         // leaving it along the bottom edge.
-        viewerObject.transform.rotation.x = -.35f;
-        KeyboardMovementController cameraController{};
+        viewerTransform.rotation.x = -.35f;
+        CameraController cameraController{};
+        CameraController::registerDefaultActions(window.input());
 
-        auto currentTime = std::chrono::high_resolution_clock::now();
+        // Pipelines exist by this point, so the cache has something worth
+        // keeping. Saved here rather than only at shutdown because a killed
+        // process never unwinds.
+        device.savePipelineCache();
+
+        Time time{};
 
         while (!window.shouldClose()) {
-            glfwPollEvents();
+            Window::pollEvents();
 
-            // putting this after polls to make sure pauses don't affect the time
-            auto newTime = std::chrono::high_resolution_clock::now();
-            float frameTime =
-                std::chrono::duration<float, std::chrono::seconds::period>(newTime - currentTime)
-                    .count();
-            currentTime = newTime;
+            // After the poll, so that a pause spent inside it is measured as
+            // part of the frame it belongs to.
+            time.beginFrame();
+            const float frameTime = time.delta();
 
-            cameraController.moveInPlaneXZ(window.getGLFWwindow(), frameTime, viewerObject);
-            camera.setViewYXZ(viewerObject.transform.translation, viewerObject.transform.rotation);
+            window.input().newFrame();
+
+            // Fixed-rate simulation. Nothing runs here yet - physics attaches
+            // in Phase 8 - but the loop shape is what makes that possible, and
+            // it is far easier to establish before there is anything depending
+            // on the old variable-rate behaviour.
+            while (time.consumeFixedStep()) {
+                // fixedTick(time.fixedStep());
+            }
+
+            // Rendering and camera control stay on the variable delta: they
+            // should run as often as the display allows.
+            cameraController.update(window.input(), frameTime, viewerTransform);
+
+            // Composes world matrices for every parented entity once per frame,
+            // rather than each consumer recomputing the same parent chain.
+            hierarchy::resolveTransforms(world);
+            camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
             float aspectRatio = renderer.getAspectRatio();
 
             // camera.setOrthographicProjection(-aspectRatio, aspectRatio, -1, 1, -1, 1);
@@ -97,18 +164,35 @@ namespace ege {
                     commandBuffer,
                     camera,
                     globalDescriptorSets[frameIndex],
-                    gameObjects};
+                    world};
 
                 // update
                 GlobalUbo ubo{};
-                ubo.projectionView = camera.getProjection() * camera.getView();
+                ubo.projection = camera.getProjection();
+                ubo.view = camera.getView();
+                ubo.inverseView = glm::inverse(camera.getView());
+                // Lights are entities now, gathered per frame rather than
+                // held in a parallel list. The cap is the shader's array size;
+                // clustered shading in Phase 9 is what removes it.
+                int lightIndex = 0;
+                world.each<Transform, PointLight>(
+                    [&](Entity, Transform& transform, PointLight& light) {
+                        if (lightIndex >= maxPointLights) {
+                            return;
+                        }
+                        ubo.pointLights[lightIndex].position =
+                            glm::vec4{transform.translation, 1.f};
+                        ubo.pointLights[lightIndex].color = glm::vec4{light.color, light.intensity};
+                        lightIndex++;
+                    });
+                ubo.numLights = lightIndex;
 
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
                 // render
                 renderer.beginSwapChainRenderPass(commandBuffer);
-                simpleRenderSystem.renderGameObjects(frameInfo);
+                pbrRenderSystem.render(frameInfo);
                 renderer.endSwapChainRenderPass(commandBuffer);
                 renderer.endFrame();
             }
@@ -117,36 +201,146 @@ namespace ege {
         vkDeviceWaitIdle(device.device());
     }
 
-    void Application::loadGameObjects() {
-        // Built from procedural primitives rather than OBJ files so that a clean
-        // checkout runs with no binary assets present. Note this scene treats -Y
-        // as up, matching the camera and light placement inherited from the
-        // tutorial code.
-        auto addObject = [this](
-                             std::shared_ptr<Model> model,
-                             glm::vec3 translation,
-                             glm::vec3 scale,
-                             glm::vec3 rotation = glm::vec3{0.f}) {
-            auto object = GameObject::createGameObject();
-            object.model = std::move(model);
-            object.transform.translation = translation;
-            object.transform.scale = scale;
-            object.transform.rotation = rotation;
-            gameObjects.emplace(object.getId(), std::move(object));
+    void Application::loadScene() {
+        // Built from procedural primitives rather than asset files so that a
+        // clean checkout runs with no binary assets present. Note this scene
+        // treats -Y as up, matching the camera and light placement inherited
+        // from the tutorial code.
+        auto makeMaterial = [this](glm::vec3 albedo, float metallic, float roughness) {
+            auto material = std::make_shared<Material>(device, *materialPool, *materialSetLayout);
+            material->properties.baseColorFactor = glm::vec4{albedo, 1.f};
+            material->properties.metallicFactor = metallic;
+            material->properties.roughnessFactor = roughness;
+            materials.push_back(material);
+            return material;
         };
+
+        auto addMesh = [this](
+                           std::string name,
+                           std::shared_ptr<Model> model,
+                           std::shared_ptr<Material> material,
+                           glm::vec3 translation,
+                           glm::vec3 scale,
+                           glm::vec3 rotation = glm::vec3{0.f}) {
+            Entity entity = world.spawn(std::move(name));
+            Transform transform{};
+            transform.translation = translation;
+            transform.scale = scale;
+            transform.rotation = rotation;
+            entity.attach<Transform>(transform);
+            entity.attach<MeshRenderer>(MeshRenderer{std::move(model), std::move(material), true});
+            return entity;
+        };
+
+        auto addLight =
+            [this](std::string name, glm::vec3 position, glm::vec3 color, float intensity) {
+                Entity entity = world.spawn(std::move(name));
+                Transform transform{};
+                transform.translation = position;
+                entity.attach<Transform>(transform);
+                entity.attach<PointLight>(PointLight{color, intensity, 25.f});
+                return entity;
+            };
 
         std::shared_ptr<Model> plane = std::make_shared<Model>(device, Model::Builder::plane());
         std::shared_ptr<Model> box = std::make_shared<Model>(device, Model::Builder::box());
-        std::shared_ptr<Model> sphere = std::make_shared<Model>(device, Model::Builder::sphere());
+        std::shared_ptr<Model> sphere =
+            std::make_shared<Model>(device, Model::Builder::sphere(32, 64));
 
         // Floor, rotated a half turn about X so its +Y normal points along -Y,
-        // which is up in this scene and therefore towards the light.
-        addObject(plane, {0.f, .5f, 0.f}, {6.f, 1.f, 6.f}, {glm::pi<float>(), 0.f, 0.f});
+        // which is up in this scene and therefore towards the lights.
+        addMesh(
+            "Floor",
+            plane,
+            makeMaterial(glm::vec3{0.35f}, 0.f, 0.85f),
+            {0.f, .5f, 0.f},
+            {8.f, 1.f, 8.f},
+            {glm::pi<float>(), 0.f, 0.f});
 
-        // Both primitives are unit-sized, so at half scale they sit on the floor
-        // when raised by a quarter unit.
-        addObject(box, {-.6f, .25f, 0.f}, glm::vec3{.5f});
-        addObject(sphere, {.6f, .25f, 0.f}, glm::vec3{.5f});
+        addMesh(
+            "RedBox",
+            box,
+            makeMaterial(glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
+            {-.9f, .25f, 0.f},
+            glm::vec3{.5f});
+
+        // A row of metal spheres sweeping roughness, which is the clearest way
+        // to see whether the GGX distribution and the geometry term behave: the
+        // highlight should broaden smoothly from left to right.
+        //
+        // Parented under a pivot so the hierarchy is exercised by the running
+        // engine rather than only by the tests: the spheres' positions below are
+        // relative to it, and moving the pivot moves the whole row.
+        Entity sphereRow = world.spawn("SphereRow");
+        Transform rowTransform{};
+        rowTransform.translation = {0.f, .25f, 1.2f};
+        sphereRow.attach<Transform>(rowTransform);
+
+        for (int i = 0; i < 5; i++) {
+            const float roughness = 0.05f + 0.95f * static_cast<float>(i) / 4.f;
+            Entity ball = addMesh(
+                "MetalSphere" + std::to_string(i),
+                sphere,
+                makeMaterial(glm::vec3{0.95f, 0.8f, 0.35f}, 1.f, roughness),
+                {-1.2f + 0.6f * static_cast<float>(i), 0.f, 0.f},
+                glm::vec3{.45f});
+            hierarchy::setParent(world, ball.id(), sphereRow.id());
+        }
+
+        addMesh(
+            "BlueSphere",
+            sphere,
+            makeMaterial(glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
+            {.9f, .25f, 0.f},
+            glm::vec3{.5f});
+
+        // Lights are entities too. Remember -Y is up, so a negative Y is above
+        // the floor.
+        addLight("KeyLight", {-1.5f, -1.6f, -1.2f}, {1.f, 0.95f, 0.85f}, 6.f);
+        addLight("FillLight", {1.8f, -1.2f, 0.8f}, {0.4f, 0.6f, 1.f}, 5.f);
+        addLight("RimLight", {0.f, -0.9f, 2.2f}, {1.f, 0.5f, 0.3f}, 3.f);
+
+        EGE_INFO(
+            "Scene loaded: {} entities, {} drawn, {} lights, {} materials",
+            world.entityCount(),
+            world.count<Transform, MeshRenderer>(),
+            world.count<Transform, PointLight>(),
+            materials.size());
+
+        verifySceneRoundTrip();
+    }
+
+    void Application::verifySceneRoundTrip() {
+        // Writes the scene, reads it back into a scratch world, writes that,
+        // and compares. Cheap, and it means every run exercises the path rather
+        // than leaving it to the tests - which matters because serialization
+        // breaks quietly when a component gains a field nothing converts.
+        //
+        // Note that MeshRenderer's model and material are not serialized: they
+        // are runtime handles, and turning them into asset references is what
+        // the asset database in Phase 6 is for. The reloaded scene therefore
+        // has geometry-less renderers, which is why this runs against a scratch
+        // world rather than replacing the live one.
+        try {
+            const std::string written = SceneSerializer::toString(world);
+
+            World scratch;
+            SceneSerializer::fromString(scratch, written);
+            const std::string rewritten = SceneSerializer::toString(scratch);
+
+            if (written == rewritten) {
+                EGE_INFO(
+                    "Scene round-trip verified: {} bytes, {} entities restored",
+                    written.size(),
+                    scratch.entityCount());
+            } else {
+                EGE_WARN("scene round-trip is not stable; save and load disagree");
+            }
+
+            SceneSerializer::save(world, "demo_scene.egescene");
+        } catch (const std::exception& e) {
+            EGE_ERROR("scene round-trip failed: {}", e.what());
+        }
     }
 
 }  // namespace ege

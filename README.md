@@ -4,11 +4,23 @@ A Vulkan game engine in C++17, built from the renderer up.
 
 ![The demo scene: a box and a sphere lit by a point light on a plane](docs/images/demo-scene.png)
 
-Right now it is a forward renderer — device and swapchain management, a
-graphics pipeline, staged vertex and index buffers, descriptor sets, a
-perspective camera, procedural mesh primitives, and per-pixel point lighting.
-The scene system, PBR pipeline, editor, C++ scripting and physics are planned;
-[`docs/ROADMAP.md`](docs/ROADMAP.md) lays out how it gets there.
+A forward renderer with a metallic-roughness PBR pipeline, an entity-component
+system, runtime reflection, textures with mip generation, a job system and a
+fixed-timestep simulation clock.
+
+The image above is the demo scene: five metal spheres sweeping roughness from
+near-mirror to fully rough, plus two dielectrics, lit by three point lights.
+The smoothest metal is nearly black because a mirror with no environment to
+reflect *is* nearly black — that is what image-based lighting fixes, and it is
+one of the things still outstanding.
+
+Scenes save and load as reflection-driven JSON, entities can be parented, and
+draws are frustum-culled and sorted by material.
+
+Still to come: a frame graph, IBL, shadows, an HDR post-processing stack, glTF
+import, the editor, C++ scripting and physics.
+[`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
+exactly what has landed and what has not.
 
 ## Building
 
@@ -32,6 +44,7 @@ Ubuntu it is in `glslang-tools`.
 | `default` | Release |
 | `debug`   | Debug, Vulkan validation layers active |
 | `asan`    | Debug plus AddressSanitizer and UndefinedBehaviorSanitizer |
+| `tsan`    | Debug plus ThreadSanitizer, for the job system |
 | `cxx20`   | Release built as C++20 |
 
 Each writes to `build/<preset>/`, so configurations coexist.
@@ -54,17 +67,19 @@ validation layers enabled and fails on any validation message.
 | `W` `A` `S` `D` | Move |
 | `Q` / `E` | Down / up |
 | Arrow keys | Look |
+| Hold right mouse | Mouse-look (captures the cursor) |
 
 ## Layout
 
 ```
 app/            entry point
 src/
-  core/         application root, shared utilities
+  core/         application root, logging, assertions, time, job system
+  reflect/      runtime type information
   platform/     window and input; everything touching GLFW
-  rhi/          device, swapchain, pipeline, buffer, descriptors
-  render/       renderer, model, camera, render systems
-  scene/        game objects and transforms
+  rhi/          device, swapchain, pipeline, buffer, descriptors, textures
+  render/       renderer, model, camera, materials, lights, bounds, PBR render system
+  scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
 tests/          doctest suite
@@ -97,6 +112,10 @@ reformat out of `git blame`.
 | [GLFW](https://www.glfw.org/) 3.4 | windowing and input | fetched or system |
 | [GLM](https://github.com/g-truc/glm) 1.0.1 | maths | fetched or system |
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | OBJ import | vendored |
+| [spdlog](https://github.com/gabime/spdlog) 1.14.1 | logging | fetched or system |
+| [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) 3.1.0 | GPU memory | fetched |
+| [stb_image](https://github.com/nothings/stb) | image decoding | fetched |
+| [nlohmann/json](https://github.com/nlohmann/json) 3.11.3 | scene serialization | fetched or system |
 | [doctest](https://github.com/doctest/doctest) 2.4.11 | tests | fetched |
 
 The Vulkan buffer abstraction started from Sascha Willems'

@@ -55,7 +55,7 @@ namespace ege {
         Device& device;
         void* mapped = nullptr;
         VkBuffer buffer = VK_NULL_HANDLE;
-        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
 
         VkDeviceSize instanceSize;
         uint32_t instanceCount;

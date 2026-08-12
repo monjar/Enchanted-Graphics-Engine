@@ -1,5 +1,7 @@
 #include "rhi/SwapChain.hpp"
 
+#include "core/Log.hpp"
+
 // std
 #include <array>
 #include <cstdlib>
@@ -46,8 +48,7 @@ namespace ege {
 
         for (size_t i = 0; i < depthImages.size(); i++) {
             vkDestroyImageView(device.device(), depthImageViews[i], nullptr);
-            vkDestroyImage(device.device(), depthImages[i], nullptr);
-            vkFreeMemory(device.device(), depthImageMemorys[i], nullptr);
+            device.destroyImage(depthImages[i], depthImageAllocations[i]);
         }
 
         for (auto framebuffer : swapChainFramebuffers) {
@@ -301,7 +302,7 @@ namespace ege {
         VkFormat depthFormat = findDepthFormat();
         swapChainDepthFormat = depthFormat;
         depthImages.resize(imageCount());
-        depthImageMemorys.resize(imageCount());
+        depthImageAllocations.resize(imageCount());
         depthImageViews.resize(imageCount());
 
         for (size_t i = 0; i < depthImages.size(); i++) {
@@ -325,7 +326,7 @@ namespace ege {
                 imageInfo,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 depthImages[i],
-                depthImageMemorys[i]);
+                depthImageAllocations[i]);
 
             VkImageViewCreateInfo viewInfo{};
             viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -388,19 +389,19 @@ namespace ege {
         const std::vector<VkPresentModeKHR>& availablePresentModes) {
         for (const auto& availablePresentMode : availablePresentModes) {
             if (availablePresentMode == VK_PRESENT_MODE_MAILBOX_KHR) {
-                std::cout << "Present mode: Mailbox" << std::endl;
+                EGE_INFO("Present mode: Mailbox");
                 return availablePresentMode;
             }
         }
 
         // for (const auto &availablePresentMode : availablePresentModes) {
         //   if (availablePresentMode == VK_PRESENT_MODE_IMMEDIATE_KHR) {
-        //     std::cout << "Present mode: Immediate" << std::endl;
+        //     EGE_INFO("Present mode: Immediate");
         //     return availablePresentMode;
         //   }
         // }
 
-        std::cout << "Present mode: V-Sync" << std::endl;
+        EGE_INFO("Present mode: V-Sync");
         return VK_PRESENT_MODE_FIFO_KHR;
     }
 
