@@ -1,6 +1,7 @@
 #pragma once
 
 #include "reflect/BuiltinTypes.hpp"
+#include "render/Material.hpp"
 #include "render/Model.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -38,6 +39,7 @@ namespace ege {
         id_t getId() const { return id; }
 
         std::shared_ptr<Model> model{};
+        std::shared_ptr<Material> material{};
         glm::vec3 color{};
         TransformComponent transform{};
 

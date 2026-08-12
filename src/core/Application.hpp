@@ -2,6 +2,8 @@
 
 #include "core/JobSystem.hpp"
 #include "platform/Window.hpp"
+#include "render/Light.hpp"
+#include "render/Material.hpp"
 #include "render/Model.hpp"
 #include "render/Renderer.hpp"
 #include "rhi/Descriptors.hpp"
@@ -33,7 +35,13 @@ namespace ege {
         Renderer renderer{window, device};
 
         std::unique_ptr<DescriptorPool> globalPool{};
+        // Materials allocate combined image samplers, which the global pool
+        // does not provide, and there are far more of them than frames.
+        std::unique_ptr<DescriptorPool> materialPool{};
+        std::unique_ptr<DescriptorSetLayout> materialSetLayout{};
         JobSystem jobs{};
         GameObject::Map gameObjects;
+        std::vector<std::shared_ptr<Material>> materials;
+        std::vector<GpuPointLight> sceneLights;
     };
 }  // namespace ege

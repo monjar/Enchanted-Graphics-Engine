@@ -68,6 +68,10 @@ namespace ege {
         // The allocator every GPU allocation goes through.
         VmaAllocator allocator() const { return vmaAllocator; }
 
+        // Needed to query format capabilities, such as whether a format
+        // supports the linear filtering that mip generation blits require.
+        VkPhysicalDevice physicalDeviceHandle() const { return physicalDevice; }
+
         // Buffer Helper Functions
         //
         // Allocation is suballocated from VMA's pools rather than taken from
