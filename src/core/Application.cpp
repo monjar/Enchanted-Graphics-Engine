@@ -101,7 +101,8 @@ namespace ege {
 
         PbrRenderSystem pbrRenderSystem{
             device,
-            renderer.getSwapChainRenderPass(),
+            renderer.getSwapChainColorFormat(),
+            renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout(),
             materialSetLayout->getDescriptorSetLayout()};
 
@@ -191,9 +192,9 @@ namespace ege {
                 uboBuffers[frameIndex]->flush();
 
                 // render
-                renderer.beginSwapChainRenderPass(commandBuffer);
+                renderer.beginSwapChainRendering(commandBuffer);
                 pbrRenderSystem.render(frameInfo);
-                renderer.endSwapChainRenderPass(commandBuffer);
+                renderer.endSwapChainRendering(commandBuffer);
                 renderer.endFrame();
             }
         }

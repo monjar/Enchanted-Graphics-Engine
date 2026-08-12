@@ -80,19 +80,37 @@ namespace ege {
             throw std::runtime_error("validation layers requested, but not available!");
         }
 
+        // The loader must support 1.3 before a 1.3 instance may be created.
+        // vkEnumerateInstanceVersion exists from 1.1, and a loader old enough
+        // to lack it could not run this engine anyway.
+        uint32_t loaderVersion = VK_API_VERSION_1_0;
+        vkEnumerateInstanceVersion(&loaderVersion);
+        if (loaderVersion < VK_API_VERSION_1_3) {
+            throw std::runtime_error("the Vulkan loader does not support Vulkan 1.3");
+        }
+
         VkApplicationInfo appInfo = {};
         appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-        appInfo.pApplicationName = "Application App";
+        appInfo.pApplicationName = "Enchanted";
         appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-        appInfo.pEngineName = "No Engine";
+        appInfo.pEngineName = "Enchanted";
         appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-        appInfo.apiVersion = VK_API_VERSION_1_0;
+        appInfo.apiVersion = VK_API_VERSION_1_3;
 
         VkInstanceCreateInfo createInfo = {};
         createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         createInfo.pApplicationInfo = &appInfo;
 
         auto extensions = getRequiredExtensions();
+
+        // MoltenVK is a non-conformant implementation and is hidden by the
+        // loader unless portability enumeration is asked for. Only asked for
+        // when available, because asking on a loader without it is an error.
+        if (isInstanceExtensionAvailable(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME)) {
+            extensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+            createInfo.flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+        }
+
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
 
@@ -156,18 +174,38 @@ namespace ege {
             queueCreateInfos.push_back(queueCreateInfo);
         }
 
-        VkPhysicalDeviceFeatures deviceFeatures = {};
-        deviceFeatures.samplerAnisotropy = VK_TRUE;
+        // Dynamic rendering replaces render passes and framebuffers wholesale;
+        // synchronization2 is the barrier interface the frame graph emits.
+        // Both are core in 1.3, so this is a feature enable rather than an
+        // extension dance.
+        VkPhysicalDeviceVulkan13Features features13{};
+        features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        features13.dynamicRendering = VK_TRUE;
+        features13.synchronization2 = VK_TRUE;
+
+        VkPhysicalDeviceFeatures2 deviceFeatures{};
+        deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        deviceFeatures.features.samplerAnisotropy = VK_TRUE;
+        deviceFeatures.pNext = &features13;
+
+        std::vector<const char*> enabledExtensions = deviceExtensions;
+
+        // A portability (MoltenVK) device requires the subset extension to be
+        // enabled whenever the device advertises it.
+        if (isDeviceExtensionAvailable(physicalDevice, "VK_KHR_portability_subset")) {
+            enabledExtensions.push_back("VK_KHR_portability_subset");
+        }
 
         VkDeviceCreateInfo createInfo = {};
         createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        createInfo.pNext = &deviceFeatures;
 
         createInfo.queueCreateInfoCount = static_cast<uint32_t>(queueCreateInfos.size());
         createInfo.pQueueCreateInfos = queueCreateInfos.data();
 
-        createInfo.pEnabledFeatures = &deviceFeatures;
-        createInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
-        createInfo.ppEnabledExtensionNames = deviceExtensions.data();
+        createInfo.pEnabledFeatures = nullptr;
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+        createInfo.ppEnabledExtensionNames = enabledExtensions.data();
 
         // might not really be necessary anymore because device specific validation layers
         // have been deprecated
@@ -205,6 +243,17 @@ namespace ege {
     }
 
     bool Device::isDeviceSuitable(VkPhysicalDevice device) {
+        VkPhysicalDeviceProperties deviceProperties;
+        vkGetPhysicalDeviceProperties(device, &deviceProperties);
+        if (deviceProperties.apiVersion < VK_API_VERSION_1_3) {
+            EGE_WARN(
+                "Skipping {}: driver only supports Vulkan {}.{}",
+                deviceProperties.deviceName,
+                VK_API_VERSION_MAJOR(deviceProperties.apiVersion),
+                VK_API_VERSION_MINOR(deviceProperties.apiVersion));
+            return false;
+        }
+
         QueueFamilyIndices indices = findQueueFamilies(device);
 
         bool extensionsSupported = checkDeviceExtensionSupport(device);
@@ -216,11 +265,16 @@ namespace ege {
                 !swapChainSupport.formats.empty() && !swapChainSupport.presentModes.empty();
         }
 
-        VkPhysicalDeviceFeatures supportedFeatures;
-        vkGetPhysicalDeviceFeatures(device, &supportedFeatures);
+        VkPhysicalDeviceVulkan13Features supported13{};
+        supported13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+        VkPhysicalDeviceFeatures2 supportedFeatures{};
+        supportedFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        supportedFeatures.pNext = &supported13;
+        vkGetPhysicalDeviceFeatures2(device, &supportedFeatures);
 
         return indices.isComplete() && extensionsSupported && swapChainAdequate &&
-               supportedFeatures.samplerAnisotropy;
+               supportedFeatures.features.samplerAnisotropy && supported13.dynamicRendering &&
+               supported13.synchronization2;
     }
 
     void Device::populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
@@ -325,6 +379,34 @@ namespace ege {
         return requiredExtensions.empty();
     }
 
+    bool Device::isInstanceExtensionAvailable(const char* name) {
+        uint32_t extensionCount = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
+        std::vector<VkExtensionProperties> extensions(extensionCount);
+        vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+
+        for (const auto& extension : extensions) {
+            if (strcmp(extension.extensionName, name) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool Device::isDeviceExtensionAvailable(VkPhysicalDevice device, const char* name) {
+        uint32_t extensionCount = 0;
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, nullptr);
+        std::vector<VkExtensionProperties> extensions(extensionCount);
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &extensionCount, extensions.data());
+
+        for (const auto& extension : extensions) {
+            if (strcmp(extension.extensionName, name) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     QueueFamilyIndices Device::findQueueFamilies(VkPhysicalDevice device) {
         QueueFamilyIndices indices;
 
@@ -418,7 +500,7 @@ namespace ege {
         allocatorInfo.physicalDevice = physicalDevice;
         allocatorInfo.device = device_;
         allocatorInfo.instance = instance;
-        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_3;
 
         if (vmaCreateAllocator(&allocatorInfo, &vmaAllocator) != VK_SUCCESS) {
             throw std::runtime_error("failed to create the memory allocator");

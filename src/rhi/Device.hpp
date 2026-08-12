@@ -129,6 +129,8 @@ namespace ege {
         // helper functions
         bool isDeviceSuitable(VkPhysicalDevice device);
         std::vector<const char*> getRequiredExtensions();
+        static bool isInstanceExtensionAvailable(const char* name);
+        static bool isDeviceExtensionAvailable(VkPhysicalDevice device, const char* name);
         bool checkValidationLayerSupport();
         QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
         void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);

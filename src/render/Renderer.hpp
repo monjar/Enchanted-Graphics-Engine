@@ -18,7 +18,9 @@ namespace ege {
         Renderer(const Renderer& other) = delete;
         Renderer& operator=(const Renderer&) = delete;
 
-        VkRenderPass getSwapChainRenderPass() const { return egeSwapChain->getRenderPass(); }
+        VkFormat getSwapChainColorFormat() const { return egeSwapChain->getSwapChainImageFormat(); }
+
+        VkFormat getSwapChainDepthFormat() const { return egeSwapChain->getSwapChainDepthFormat(); }
 
         float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
 
@@ -36,8 +38,8 @@ namespace ege {
 
         VkCommandBuffer beginFrame();
         void endFrame();
-        void beginSwapChainRenderPass(VkCommandBuffer commandBuffer);
-        void endSwapChainRenderPass(VkCommandBuffer commandBuffer);
+        void beginSwapChainRendering(VkCommandBuffer commandBuffer);
+        void endSwapChainRendering(VkCommandBuffer commandBuffer);
 
     private:
         void createCommandBuffers();

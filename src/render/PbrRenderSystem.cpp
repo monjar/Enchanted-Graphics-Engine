@@ -31,12 +31,13 @@ namespace ege {
 
     PbrRenderSystem::PbrRenderSystem(
         Device& deviceRef,
-        VkRenderPass renderPass,
+        VkFormat colorFormat,
+        VkFormat depthFormat,
         VkDescriptorSetLayout globalSetLayout,
         VkDescriptorSetLayout materialSetLayout)
         : device{deviceRef} {
         createPipelineLayout(globalSetLayout, materialSetLayout);
-        createPipeline(renderPass);
+        createPipeline(colorFormat, depthFormat);
     }
 
     PbrRenderSystem::~PbrRenderSystem() {
@@ -79,12 +80,13 @@ namespace ege {
         }
     }
 
-    void PbrRenderSystem::createPipeline(VkRenderPass renderPass) {
+    void PbrRenderSystem::createPipeline(VkFormat colorFormat, VkFormat depthFormat) {
         EGE_ASSERT(pipelineLayout != VK_NULL_HANDLE, "pipeline layout must exist first");
 
         PipelineConfigInfo pipelineConfig{};
         Pipeline::defaultPipelineConfigInfo(pipelineConfig);
-        pipelineConfig.renderPass = renderPass;
+        pipelineConfig.colorAttachmentFormats = {colorFormat};
+        pipelineConfig.depthAttachmentFormat = depthFormat;
         pipelineConfig.pipelineLayout = pipelineLayout;
 
         pipeline =

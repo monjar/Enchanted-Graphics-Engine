@@ -59,8 +59,8 @@ namespace ege {
             configInfo.pipelineLayout != VK_NULL_HANDLE &&
             "Cannot create graphics pipeline: No pipelineLayout provided in configInfo");
         assert(
-            configInfo.renderPass != VK_NULL_HANDLE &&
-            "Cannot create graphics pipeline: No renderPass provided in configInfo");
+            !configInfo.colorAttachmentFormats.empty() &&
+            "Cannot create graphics pipeline: no color attachment formats provided");
 
         auto vertShaderCode = readFile(vertFilePath);
         auto fragShaderCode = readFile(fragFilePath);
@@ -98,8 +98,19 @@ namespace ege {
         vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
         vertexInputInfo.pVertexBindingDescriptions = bindingDescriptions.data();
 
+        // The dynamic-rendering replacement for a render pass reference: the
+        // pipeline is compatible with any rendering instance whose attachments
+        // match these formats.
+        VkPipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        renderingInfo.colorAttachmentCount =
+            static_cast<uint32_t>(configInfo.colorAttachmentFormats.size());
+        renderingInfo.pColorAttachmentFormats = configInfo.colorAttachmentFormats.data();
+        renderingInfo.depthAttachmentFormat = configInfo.depthAttachmentFormat;
+
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.pNext = &renderingInfo;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -112,8 +123,7 @@ namespace ege {
         pipelineInfo.pDynamicState = &configInfo.dynamicStateInfo;
 
         pipelineInfo.layout = configInfo.pipelineLayout;
-        pipelineInfo.renderPass = configInfo.renderPass;
-        pipelineInfo.subpass = configInfo.subpass;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
 
         pipelineInfo.basePipelineIndex = -1;
         pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;

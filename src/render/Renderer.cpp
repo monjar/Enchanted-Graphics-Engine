@@ -105,28 +105,84 @@ namespace ege {
         currentFrameIndex = (currentFrameIndex + 1) % SwapChain::MAX_FRAMES_IN_FLIGHT;
     }
 
-    void Renderer::beginSwapChainRenderPass(VkCommandBuffer commandBuffer) {
-        assert(isFrameStarted && "Cant beginSwap chain while frame is not in progress");
+    void Renderer::beginSwapChainRendering(VkCommandBuffer commandBuffer) {
+        assert(isFrameStarted && "Cant begin rendering while frame is not in progress");
 
         assert(
             commandBuffer == getCurrentCommandBuffer() &&
-            "Can't begin render pass on cmd buffer from a different frame.");
+            "Can't begin rendering on cmd buffer from a different frame.");
 
-        VkRenderPassBeginInfo renderPassInfo{};
-        renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        renderPassInfo.renderPass = egeSwapChain->getRenderPass();
-        renderPassInfo.framebuffer = egeSwapChain->getFrameBuffer(currentImageIndex);
+        // What the render pass used to do implicitly, spelled out: move the
+        // acquired image into color-attachment layout and the depth buffer into
+        // depth-attachment layout. Both start from UNDEFINED because neither
+        // carries content across frames; the source stages still matter, since
+        // the swapchain transition must chain after the acquire semaphore and
+        // the depth transition after the previous frame's depth writes.
+        std::array<VkImageMemoryBarrier2, 2> barriers{};
 
-        renderPassInfo.renderArea.offset = {0, 0};
-        renderPassInfo.renderArea.extent = egeSwapChain->getSwapChainExtent();
+        barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barriers[0].srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barriers[0].srcAccessMask = VK_ACCESS_2_NONE;
+        barriers[0].dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        barriers[0].dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barriers[0].newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        barriers[0].image = egeSwapChain->getImage(currentImageIndex);
+        barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-        std::array<VkClearValue, 2> clearValues{};
-        clearValues[0].color = {0.01f, 0.01f, 0.01f, 1.0f};
-        clearValues[1].depthStencil = {1.0f, 0};
-        renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-        renderPassInfo.pClearValues = clearValues.data();
+        barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        barriers[1].srcStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        barriers[1].srcAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        barriers[1].dstStageMask = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                   VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        barriers[1].dstAccessMask = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        barriers[1].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        barriers[1].image = egeSwapChain->getDepthImage(currentImageIndex);
+        // A transition of a combined depth/stencil format must cover both
+        // aspects, even though nothing here uses the stencil half.
+        VkImageAspectFlags depthAspect = VK_IMAGE_ASPECT_DEPTH_BIT;
+        const VkFormat depthFormat = egeSwapChain->getSwapChainDepthFormat();
+        if (depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+            depthFormat == VK_FORMAT_D24_UNORM_S8_UINT ||
+            depthFormat == VK_FORMAT_D16_UNORM_S8_UINT) {
+            depthAspect |= VK_IMAGE_ASPECT_STENCIL_BIT;
+        }
+        barriers[1].subresourceRange = {depthAspect, 0, 1, 0, 1};
 
-        vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+        VkDependencyInfo dependencyInfo{};
+        dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependencyInfo.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+        dependencyInfo.pImageMemoryBarriers = barriers.data();
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+
+        VkRenderingAttachmentInfo colorAttachment{};
+        colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        colorAttachment.imageView = egeSwapChain->getImageView(currentImageIndex);
+        colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        colorAttachment.clearValue.color = {{0.01f, 0.01f, 0.01f, 1.0f}};
+
+        VkRenderingAttachmentInfo depthAttachment{};
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = egeSwapChain->getDepthImageView(currentImageIndex);
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        depthAttachment.clearValue.depthStencil = {1.0f, 0};
+
+        VkRenderingInfo renderingInfo{};
+        renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+        renderingInfo.renderArea = {{0, 0}, egeSwapChain->getSwapChainExtent()};
+        renderingInfo.layerCount = 1;
+        renderingInfo.colorAttachmentCount = 1;
+        renderingInfo.pColorAttachments = &colorAttachment;
+        renderingInfo.pDepthAttachment = &depthAttachment;
+
+        vkCmdBeginRendering(commandBuffer, &renderingInfo);
 
         VkViewport viewport{};
         viewport.x = 0.0f;
@@ -140,14 +196,34 @@ namespace ege {
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
     }
 
-    void Renderer::endSwapChainRenderPass(VkCommandBuffer commandBuffer) {
-        assert(isFrameStarted && "Cant end Swap chain while frame is not in progress");
+    void Renderer::endSwapChainRendering(VkCommandBuffer commandBuffer) {
+        assert(isFrameStarted && "Cant end rendering while frame is not in progress");
 
         assert(
             commandBuffer == getCurrentCommandBuffer() &&
-            "Can't end render pass on cmd buffer from a different frame.");
+            "Can't end rendering on cmd buffer from a different frame.");
 
-        vkCmdEndRenderPass(commandBuffer);
+        vkCmdEndRendering(commandBuffer);
+
+        // The other half of the render pass's implicit work: hand the image to
+        // the presentation engine. No destination access - the semaphore
+        // signalled at submit is what orders presentation.
+        VkImageMemoryBarrier2 presentBarrier{};
+        presentBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+        presentBarrier.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        presentBarrier.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+        presentBarrier.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+        presentBarrier.dstAccessMask = VK_ACCESS_2_NONE;
+        presentBarrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        presentBarrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        presentBarrier.image = egeSwapChain->getImage(currentImageIndex);
+        presentBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+        VkDependencyInfo dependencyInfo{};
+        dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+        dependencyInfo.imageMemoryBarrierCount = 1;
+        dependencyInfo.pImageMemoryBarriers = &presentBarrier;
+        vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
     }
 
 }  // namespace ege

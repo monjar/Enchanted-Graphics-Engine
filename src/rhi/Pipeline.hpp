@@ -26,8 +26,11 @@ namespace ege {
         std::vector<VkDynamicState> dynamicStateEnables{};
         VkPipelineDynamicStateCreateInfo dynamicStateInfo{};
         VkPipelineLayout pipelineLayout = nullptr;
-        VkRenderPass renderPass = nullptr;
-        uint32_t subpass = 0;
+
+        // Dynamic rendering has no render pass object; a pipeline is instead
+        // created against the formats of the attachments it will render to.
+        std::vector<VkFormat> colorAttachmentFormats{};
+        VkFormat depthAttachmentFormat = VK_FORMAT_UNDEFINED;
     };
 
     class Pipeline {
