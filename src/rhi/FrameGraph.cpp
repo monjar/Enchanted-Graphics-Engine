@@ -1,0 +1,553 @@
+#include "rhi/FrameGraph.hpp"
+
+#include "core/Assert.hpp"
+#include "core/Log.hpp"
+
+#include <algorithm>
+#include <stdexcept>
+
+namespace ege {
+
+    namespace {
+
+        // Every write bit a graph resource can carry. Source access masks are
+        // filtered to these: making writes available is what a memory
+        // dependency is for, and read bits in a source mask are meaningless.
+        constexpr VkAccessFlags2 allWrites = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                             VK_ACCESS_2_SHADER_WRITE_BIT |
+                                             VK_ACCESS_2_TRANSFER_WRITE_BIT;
+
+        struct AccessInfo {
+            VkImageLayout layout;
+            VkPipelineStageFlags2 stage;
+            VkAccessFlags2 access;
+        };
+
+        AccessInfo accessInfo(ResourceAccess access) {
+            switch (access) {
+                case ResourceAccess::colorWrite:
+                    return {
+                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT};
+                case ResourceAccess::depthWrite:
+                    return {
+                        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                            VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                        VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
+                case ResourceAccess::sampled:
+                    return {
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
+            }
+            return {VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE};
+        }
+
+        VkImageUsageFlags usageFor(ResourceAccess access) {
+            switch (access) {
+                case ResourceAccess::colorWrite:
+                    return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                case ResourceAccess::depthWrite:
+                    return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+                case ResourceAccess::sampled:
+                    return VK_IMAGE_USAGE_SAMPLED_BIT;
+            }
+            return 0;
+        }
+
+        VkImageAspectFlags aspectFor(VkFormat format) {
+            switch (format) {
+                case VK_FORMAT_D16_UNORM:
+                case VK_FORMAT_X8_D24_UNORM_PACK32:
+                case VK_FORMAT_D32_SFLOAT:
+                    return VK_IMAGE_ASPECT_DEPTH_BIT;
+                case VK_FORMAT_D16_UNORM_S8_UINT:
+                case VK_FORMAT_D24_UNORM_S8_UINT:
+                case VK_FORMAT_D32_SFLOAT_S8_UINT:
+                    return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+                default:
+                    return VK_IMAGE_ASPECT_COLOR_BIT;
+            }
+        }
+
+    }  // namespace
+
+    // ---- FrameGraphResources ----------------------------------------------
+
+    VkImageView FrameGraphResources::view(FrameGraphResource resource) const {
+        const auto& res = graph.resources.at(resource.index);
+        if (res.imported) {
+            return res.importedView;
+        }
+        EGE_VERIFY(
+            res.physicalIndex != UINT32_MAX, "resource '{}' has no physical image", res.name);
+        return graph.physicalImages[res.physicalIndex].view;
+    }
+
+    VkExtent2D FrameGraphResources::extent(FrameGraphResource resource) const {
+        return graph.resolveExtent(graph.resources.at(resource.index));
+    }
+
+    // ---- declaration -------------------------------------------------------
+
+    void FrameGraph::beginFrame(VkExtent2D outputExtentRef) {
+        resources.clear();
+        passes.clear();
+        compiled.clear();
+        finishingBarriers.clear();
+        passLive.clear();
+        outputExtent = outputExtentRef;
+        compiledThisFrame = false;
+        frameCounter++;
+    }
+
+    FrameGraphResource FrameGraph::createTransient(
+        std::string name, const TransientImageDesc& desc) {
+        Resource resource{};
+        resource.name = std::move(name);
+        resource.desc = desc;
+        resources.push_back(std::move(resource));
+        return FrameGraphResource{static_cast<uint32_t>(resources.size() - 1)};
+    }
+
+    FrameGraphResource FrameGraph::importImage(
+        std::string name,
+        VkImage image,
+        VkImageView view,
+        VkFormat format,
+        VkExtent2D extent,
+        VkClearValue clearValue,
+        VkPipelineStageFlags2 srcStage,
+        VkImageLayout finalLayout) {
+        Resource resource{};
+        resource.name = std::move(name);
+        resource.desc.format = format;
+        resource.desc.extent = extent;
+        resource.desc.clearValue = clearValue;
+        resource.imported = true;
+        resource.importedImage = image;
+        resource.importedView = view;
+        resource.importSrcStage = srcStage;
+        resource.finalLayout = finalLayout;
+        resources.push_back(std::move(resource));
+        return FrameGraphResource{static_cast<uint32_t>(resources.size() - 1)};
+    }
+
+    void FrameGraph::PassBuilder::read(FrameGraphResource resource, ResourceAccess access) {
+        if (!resource.valid() || resource.index >= graph.resources.size()) {
+            throw std::logic_error{"pass declared a read of an invalid resource handle"};
+        }
+        graph.passes[passIndex].accesses.push_back({resource, access, false});
+    }
+
+    void FrameGraph::PassBuilder::write(FrameGraphResource resource, ResourceAccess access) {
+        if (!resource.valid() || resource.index >= graph.resources.size()) {
+            throw std::logic_error{"pass declared a write of an invalid resource handle"};
+        }
+        graph.passes[passIndex].accesses.push_back({resource, access, true});
+    }
+
+    void FrameGraph::addPass(
+        std::string name, const std::function<void(PassBuilder&)>& setup, ExecuteCallback execute) {
+        Pass pass{};
+        pass.name = std::move(name);
+        pass.execute = std::move(execute);
+        passes.push_back(std::move(pass));
+
+        PassBuilder builder{*this, static_cast<uint32_t>(passes.size() - 1)};
+        setup(builder);
+    }
+
+    // ---- compilation -------------------------------------------------------
+
+    void FrameGraph::compile() {
+        const bool hasImport =
+            std::any_of(resources.begin(), resources.end(), [](const Resource& resource) {
+                return resource.imported;
+            });
+        if (!hasImport) {
+            throw std::logic_error{
+                "frame graph has no imported output; nothing it renders could ever be seen"};
+        }
+
+        // Liveness, walking backwards: a pass matters if it writes an imported
+        // image, or writes something a later live pass reads. One reverse
+        // sweep suffices because writers always precede their readers in
+        // execution order.
+        passLive.assign(passes.size(), false);
+        std::vector<bool> needed(resources.size(), false);
+
+        for (size_t i = passes.size(); i-- > 0;) {
+            const Pass& pass = passes[i];
+            bool live = false;
+            for (const PassAccess& access : pass.accesses) {
+                if (access.isWrite &&
+                    (resources[access.resource.index].imported || needed[access.resource.index])) {
+                    live = true;
+                }
+            }
+            passLive[i] = live;
+            if (live) {
+                for (const PassAccess& access : pass.accesses) {
+                    if (!access.isWrite) {
+                        needed[access.resource.index] = true;
+                    }
+                }
+            }
+        }
+
+        // Initial states and usage. Usage accumulates only over live passes,
+        // so an image asked for solely by culled work is never allocated.
+        for (Resource& resource : resources) {
+            resource.state = ResourceState{};
+            resource.usage = 0;
+            resource.written = false;
+            resource.physicalIndex = UINT32_MAX;
+            if (resource.imported) {
+                resource.state.stage = resource.importSrcStage;
+            }
+        }
+
+        compiled.clear();
+        for (uint32_t passIndex = 0; passIndex < passes.size(); passIndex++) {
+            if (!passLive[passIndex]) {
+                EGE_TRACE("frame graph culled pass '{}'", passes[passIndex].name);
+                continue;
+            }
+
+            CompiledPass compiledPass{};
+            compiledPass.passIndex = passIndex;
+
+            for (const PassAccess& passAccess : passes[passIndex].accesses) {
+                Resource& resource = resources[passAccess.resource.index];
+                const AccessInfo target = accessInfo(passAccess.access);
+
+                if (!passAccess.isWrite && !resource.written && !resource.imported) {
+                    throw std::logic_error{
+                        "pass '" + passes[passIndex].name + "' reads '" + resource.name +
+                        "', which no earlier pass has written"};
+                }
+
+                resource.usage |= usageFor(passAccess.access);
+
+                // A barrier is needed on any layout change, and on any hazard
+                // involving a write. The only transition that may be elided is
+                // read-after-read in an unchanged layout.
+                const bool layoutChanges = resource.state.layout != target.layout;
+                const bool hazard =
+                    (resource.state.access & allWrites) != 0 ||
+                    ((target.access & allWrites) != 0 && resource.state.access != VK_ACCESS_2_NONE);
+                if (layoutChanges || hazard) {
+                    PlannedBarrier barrier{};
+                    barrier.resourceIndex = passAccess.resource.index;
+                    barrier.oldLayout = resource.state.layout;
+                    barrier.newLayout = target.layout;
+                    barrier.srcStage = resource.state.stage;
+                    barrier.srcAccess = resource.state.access & allWrites;
+                    barrier.dstStage = target.stage;
+                    barrier.dstAccess = target.access;
+                    barrier.firstUse =
+                        !resource.imported && resource.state.layout == VK_IMAGE_LAYOUT_UNDEFINED;
+                    compiledPass.barriers.push_back(barrier);
+                }
+
+                if (passAccess.isWrite) {
+                    PlannedAttachment attachment{};
+                    attachment.resourceIndex = passAccess.resource.index;
+                    attachment.loadOp =
+                        resource.written ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    attachment.storeOp = (resource.imported || needed[passAccess.resource.index])
+                                             ? VK_ATTACHMENT_STORE_OP_STORE
+                                             : VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                    attachment.clearValue = resource.desc.clearValue;
+
+                    if (passAccess.access == ResourceAccess::colorWrite) {
+                        compiledPass.colorAttachments.push_back(attachment);
+                    } else if (passAccess.access == ResourceAccess::depthWrite) {
+                        if (compiledPass.depthAttachment.has_value()) {
+                            throw std::logic_error{
+                                "pass '" + passes[passIndex].name +
+                                "' declares two depth attachments"};
+                        }
+                        compiledPass.depthAttachment = attachment;
+                    }
+                    resource.written = true;
+                }
+
+                resource.state = {target.layout, target.stage, target.access};
+            }
+
+            compiled.push_back(std::move(compiledPass));
+        }
+
+        // Imported images owe their owner a final layout - for a swapchain
+        // image, PRESENT_SRC. Emitted even if every pass was culled, because
+        // the image will be presented regardless.
+        finishingBarriers.clear();
+        for (uint32_t resourceIndex = 0; resourceIndex < resources.size(); resourceIndex++) {
+            Resource& resource = resources[resourceIndex];
+            if (!resource.imported || resource.finalLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+                resource.state.layout == resource.finalLayout) {
+                continue;
+            }
+            PlannedBarrier barrier{};
+            barrier.resourceIndex = resourceIndex;
+            barrier.oldLayout = resource.state.layout;
+            barrier.newLayout = resource.finalLayout;
+            barrier.srcStage = resource.state.stage;
+            barrier.srcAccess = resource.state.access & allWrites;
+            barrier.dstStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+            barrier.dstAccess = VK_ACCESS_2_NONE;
+            finishingBarriers.push_back(barrier);
+        }
+
+        compiledThisFrame = true;
+    }
+
+    // ---- execution ---------------------------------------------------------
+
+    VkExtent2D FrameGraph::resolveExtent(const Resource& resource) const {
+        if (resource.desc.extent.width == 0 || resource.desc.extent.height == 0) {
+            return outputExtent;
+        }
+        return resource.desc.extent;
+    }
+
+    uint32_t FrameGraph::acquirePhysicalImage(Device& deviceRef, Resource& resource) {
+        const VkExtent2D extent = resolveExtent(resource);
+
+        for (uint32_t i = 0; i < physicalImages.size(); i++) {
+            PhysicalImage& physical = physicalImages[i];
+            if (!physical.usedThisFrame && physical.format == resource.desc.format &&
+                physical.extent.width == extent.width && physical.extent.height == extent.height &&
+                physical.usage == resource.usage) {
+                physical.usedThisFrame = true;
+                physical.lastFrameUsed = frameCounter;
+                return i;
+            }
+        }
+
+        PhysicalImage physical{};
+        physical.format = resource.desc.format;
+        physical.extent = extent;
+        physical.usage = resource.usage;
+        physical.usedThisFrame = true;
+        physical.lastFrameUsed = frameCounter;
+
+        VkImageCreateInfo imageInfo{};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent = {extent.width, extent.height, 1};
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = resource.desc.format;
+        imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = resource.usage;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        deviceRef.createImageWithInfo(
+            imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, physical.image, physical.allocation);
+
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = physical.image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = resource.desc.format;
+        viewInfo.subresourceRange = {aspectFor(resource.desc.format), 0, 1, 0, 1};
+
+        if (vkCreateImageView(deviceRef.device(), &viewInfo, nullptr, &physical.view) !=
+            VK_SUCCESS) {
+            deviceRef.destroyImage(physical.image, physical.allocation);
+            throw std::runtime_error{"failed to create a frame graph image view"};
+        }
+
+        EGE_DEBUG(
+            "frame graph allocated {}x{} transient for '{}'",
+            extent.width,
+            extent.height,
+            resource.name);
+
+        physicalImages.push_back(physical);
+        return static_cast<uint32_t>(physicalImages.size() - 1);
+    }
+
+    void FrameGraph::destroyPhysicalImage(PhysicalImage& physical) {
+        vkDestroyImageView(device->device(), physical.view, nullptr);
+        device->destroyImage(physical.image, physical.allocation);
+        physical.view = VK_NULL_HANDLE;
+        physical.image = VK_NULL_HANDLE;
+        physical.allocation = VK_NULL_HANDLE;
+    }
+
+    void FrameGraph::execute(Device& deviceRef, VkCommandBuffer commandBuffer) {
+        EGE_VERIFY(compiledThisFrame, "FrameGraph::execute called without compile");
+        device = &deviceRef;
+
+        for (PhysicalImage& physical : physicalImages) {
+            physical.usedThisFrame = false;
+        }
+
+        // Give every live transient a physical image. Liveness is encoded in
+        // usage: only accesses from surviving passes accumulated any.
+        for (Resource& resource : resources) {
+            if (!resource.imported && resource.usage != 0) {
+                resource.physicalIndex = acquirePhysicalImage(deviceRef, resource);
+            }
+        }
+
+        const FrameGraphResources resolvedResources{*this};
+
+        auto recordBarriers = [&](const std::vector<PlannedBarrier>& planned) {
+            if (planned.empty()) {
+                return;
+            }
+            std::vector<VkImageMemoryBarrier2> barriers;
+            barriers.reserve(planned.size());
+            for (const PlannedBarrier& plan : planned) {
+                const Resource& resource = resources[plan.resourceIndex];
+
+                VkImageMemoryBarrier2 barrier{};
+                barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+                barrier.srcStageMask = plan.srcStage;
+                barrier.srcAccessMask = plan.srcAccess;
+                barrier.dstStageMask = plan.dstStage;
+                barrier.dstAccessMask = plan.dstAccess;
+                barrier.oldLayout = plan.oldLayout;
+                barrier.newLayout = plan.newLayout;
+                barrier.image = resource.imported ? resource.importedImage
+                                                  : physicalImages[resource.physicalIndex].image;
+                barrier.subresourceRange = {aspectFor(resource.desc.format), 0, 1, 0, 1};
+
+                // A transient's first use discards content from UNDEFINED, but
+                // execution still has to wait for whatever the previous frame
+                // was doing with the recycled physical image.
+                if (plan.firstUse && !resource.imported) {
+                    const PhysicalImage& physical = physicalImages[resource.physicalIndex];
+                    barrier.srcStageMask = physical.lastStage;
+                    barrier.srcAccessMask = physical.lastWriteAccess;
+                }
+
+                barriers.push_back(barrier);
+            }
+
+            VkDependencyInfo dependencyInfo{};
+            dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
+            dependencyInfo.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
+            dependencyInfo.pImageMemoryBarriers = barriers.data();
+            vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
+        };
+
+        for (const CompiledPass& compiledPass : compiled) {
+            recordBarriers(compiledPass.barriers);
+
+            const bool raster =
+                !compiledPass.colorAttachments.empty() || compiledPass.depthAttachment.has_value();
+
+            if (raster) {
+                std::vector<VkRenderingAttachmentInfo> colorAttachments;
+                colorAttachments.reserve(compiledPass.colorAttachments.size());
+                VkExtent2D renderArea = outputExtent;
+
+                for (const PlannedAttachment& attachment : compiledPass.colorAttachments) {
+                    const Resource& resource = resources[attachment.resourceIndex];
+                    renderArea = resolveExtent(resource);
+
+                    VkRenderingAttachmentInfo info{};
+                    info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    info.imageView = resource.imported
+                                         ? resource.importedView
+                                         : physicalImages[resource.physicalIndex].view;
+                    info.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                    info.loadOp = attachment.loadOp;
+                    info.storeOp = attachment.storeOp;
+                    info.clearValue = attachment.clearValue;
+                    colorAttachments.push_back(info);
+                }
+
+                VkRenderingAttachmentInfo depthAttachment{};
+                if (compiledPass.depthAttachment.has_value()) {
+                    const PlannedAttachment& attachment = *compiledPass.depthAttachment;
+                    const Resource& resource = resources[attachment.resourceIndex];
+                    renderArea = resolveExtent(resource);
+
+                    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+                    depthAttachment.imageView = resource.imported
+                                                    ? resource.importedView
+                                                    : physicalImages[resource.physicalIndex].view;
+                    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                    depthAttachment.loadOp = attachment.loadOp;
+                    depthAttachment.storeOp = attachment.storeOp;
+                    depthAttachment.clearValue = attachment.clearValue;
+                }
+
+                VkRenderingInfo renderingInfo{};
+                renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+                renderingInfo.renderArea = {{0, 0}, renderArea};
+                renderingInfo.layerCount = 1;
+                renderingInfo.colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size());
+                renderingInfo.pColorAttachments = colorAttachments.data();
+                renderingInfo.pDepthAttachment =
+                    compiledPass.depthAttachment.has_value() ? &depthAttachment : nullptr;
+
+                vkCmdBeginRendering(commandBuffer, &renderingInfo);
+
+                VkViewport viewport{};
+                viewport.width = static_cast<float>(renderArea.width);
+                viewport.height = static_cast<float>(renderArea.height);
+                viewport.minDepth = 0.0f;
+                viewport.maxDepth = 1.0f;
+                VkRect2D scissor{{0, 0}, renderArea};
+                vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
+                vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+            }
+
+            passes[compiledPass.passIndex].execute(commandBuffer, resolvedResources);
+
+            if (raster) {
+                vkCmdEndRendering(commandBuffer);
+            }
+        }
+
+        recordBarriers(finishingBarriers);
+
+        // Remember what each physical image was left doing; that becomes the
+        // source scope when next frame's first barrier discards its content.
+        for (const Resource& resource : resources) {
+            if (resource.imported || resource.physicalIndex == UINT32_MAX) {
+                continue;
+            }
+            PhysicalImage& physical = physicalImages[resource.physicalIndex];
+            physical.lastStage = resource.state.stage;
+            physical.lastWriteAccess = resource.state.access & allWrites;
+        }
+
+        // Evict images no frame has asked for in a while. The margin is far
+        // larger than the frames-in-flight count, so nothing still referenced
+        // by an unretired command buffer can be destroyed.
+        constexpr uint64_t evictAfterFrames = 8;
+        for (auto it = physicalImages.begin(); it != physicalImages.end();) {
+            if (!it->usedThisFrame && frameCounter - it->lastFrameUsed > evictAfterFrames) {
+                destroyPhysicalImage(*it);
+                it = physicalImages.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    FrameGraph::~FrameGraph() {
+        if (device == nullptr) {
+            return;
+        }
+        for (PhysicalImage& physical : physicalImages) {
+            destroyPhysicalImage(physical);
+        }
+    }
+
+}  // namespace ege
