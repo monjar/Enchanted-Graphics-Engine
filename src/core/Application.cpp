@@ -8,7 +8,9 @@
 #include "reflect/Serialization.hpp"
 #include "render/Camera.hpp"
 #include "render/PbrRenderSystem.hpp"
+#include "render/PostProcessSystem.hpp"
 #include "rhi/Buffer.hpp"
+#include "rhi/FrameGraph.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
@@ -99,12 +101,24 @@ namespace ege {
                 .build(globalDescriptorSets[i]);
         }
 
+        // The scene renders into a linear HDR target, not the backbuffer:
+        // lighting sums exceed 1 constantly, and clamping them at the
+        // swapchain is what made every bright highlight flat white. Sixteen
+        // bits per channel is the float format with guaranteed
+        // color-attachment support.
+        constexpr VkFormat hdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
         PbrRenderSystem pbrRenderSystem{
             device,
-            renderer.getSwapChainColorFormat(),
+            hdrFormat,
             renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout(),
             materialSetLayout->getDescriptorSetLayout()};
+
+        PostProcessSystem postProcess{
+            device, renderer.getSwapChainColorFormat(), SwapChain::MAX_FRAMES_IN_FLIGHT};
+
+        FrameGraph graph{};
 
         Camera camera{};
 
@@ -191,10 +205,56 @@ namespace ege {
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
-                // render
-                renderer.beginSwapChainRendering(commandBuffer);
-                pbrRenderSystem.render(frameInfo);
-                renderer.endSwapChainRendering(commandBuffer);
+                // render: declare the frame, then let the graph run it. The
+                // declarations are cheap enough to restate every frame, and
+                // doing so is what lets passes appear and disappear freely.
+                graph.beginFrame(renderer.getSwapChainExtent());
+
+                TransientImageDesc sceneColorDesc{};
+                sceneColorDesc.format = hdrFormat;
+                sceneColorDesc.clearValue.color = {{0.01f, 0.01f, 0.01f, 1.0f}};
+                FrameGraphResource sceneColor = graph.createTransient("sceneColor", sceneColorDesc);
+
+                TransientImageDesc sceneDepthDesc{};
+                sceneDepthDesc.format = renderer.getSwapChainDepthFormat();
+                sceneDepthDesc.clearValue.depthStencil = {1.0f, 0};
+                FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", sceneDepthDesc);
+
+                FrameGraphResource backbuffer = graph.importImage(
+                    "backbuffer",
+                    renderer.currentSwapChainImage(),
+                    renderer.currentSwapChainImageView(),
+                    renderer.getSwapChainColorFormat(),
+                    renderer.getSwapChainExtent(),
+                    VkClearValue{},
+                    // What the acquire semaphore is waited at, so the first
+                    // backbuffer barrier chains after the acquire.
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+                graph.addPass(
+                    "scene",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.write(sceneColor, ResourceAccess::colorWrite);
+                        pass.write(sceneDepth, ResourceAccess::depthWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                        frameInfo.commandBuffer = cmd;
+                        pbrRenderSystem.render(frameInfo);
+                    });
+
+                graph.addPass(
+                    "tonemap",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(sceneColor, ResourceAccess::sampled);
+                        pass.write(backbuffer, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        postProcess.render(cmd, frameIndex, resolved.view(sceneColor));
+                    });
+
+                graph.compile();
+                graph.execute(device, commandBuffer);
                 renderer.endFrame();
             }
         }

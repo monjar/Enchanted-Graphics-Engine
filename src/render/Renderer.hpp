@@ -22,7 +22,21 @@ namespace ege {
 
         VkFormat getSwapChainDepthFormat() const { return egeSwapChain->getSwapChainDepthFormat(); }
 
+        VkExtent2D getSwapChainExtent() const { return egeSwapChain->getSwapChainExtent(); }
+
         float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
+
+        // The image acquired by beginFrame, for the frame graph to import as
+        // this frame's backbuffer.
+        VkImage currentSwapChainImage() const {
+            assert(isFrameStarted && "no image is acquired outside a frame");
+            return egeSwapChain->getImage(currentImageIndex);
+        }
+
+        VkImageView currentSwapChainImageView() const {
+            assert(isFrameStarted && "no image is acquired outside a frame");
+            return egeSwapChain->getImageView(currentImageIndex);
+        }
 
         bool isFrameInProgress() const { return isFrameStarted; };
 
@@ -38,8 +52,6 @@ namespace ege {
 
         VkCommandBuffer beginFrame();
         void endFrame();
-        void beginSwapChainRendering(VkCommandBuffer commandBuffer);
-        void endSwapChainRendering(VkCommandBuffer commandBuffer);
 
     private:
         void createCommandBuffers();

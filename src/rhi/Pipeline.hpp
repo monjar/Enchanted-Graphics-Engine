@@ -27,6 +27,12 @@ namespace ege {
         VkPipelineDynamicStateCreateInfo dynamicStateInfo{};
         VkPipelineLayout pipelineLayout = nullptr;
 
+        // Vertex input belongs to whoever owns the vertex data, not to the
+        // pipeline machinery - a fullscreen pass has none at all. Empty means
+        // exactly that: no vertex buffers, positions from gl_VertexIndex.
+        std::vector<VkVertexInputBindingDescription> bindingDescriptions{};
+        std::vector<VkVertexInputAttributeDescription> attributeDescriptions{};
+
         // Dynamic rendering has no render pass object; a pipeline is instead
         // created against the formats of the attachments it will render to.
         std::vector<VkFormat> colorAttachmentFormats{};

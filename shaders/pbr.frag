@@ -136,13 +136,9 @@ void main() {
     vec3 ambient = ubo.ambientLightColor.rgb * ubo.ambientLightColor.w * albedo * occlusion;
     vec3 emissive = texture(emissiveMap, fragUv).rgb * push.emissiveAndMetallic.rgb;
 
-    vec3 color = ambient + Lo + emissive;
-
-    // Reinhard tonemapping and a gamma encode. A proper HDR target with ACES
-    // belongs in the post-processing stack; this keeps the swapchain write
-    // sane until then.
-    color = color / (color + vec3(1.0));
-    color = pow(color, vec3(1.0 / 2.2));
-
-    outColor = vec4(color, baseSample.a);
+    // Linear HDR radiance, written to a float target. Tonemapping and the
+    // sRGB encode are the post pass's job - doing either here would bake the
+    // display transform into a buffer later passes still want to read as
+    // physical light.
+    outColor = vec4(ambient + Lo + emissive, baseSample.a);
 }

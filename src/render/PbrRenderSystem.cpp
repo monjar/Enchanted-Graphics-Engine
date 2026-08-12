@@ -85,6 +85,8 @@ namespace ege {
 
         PipelineConfigInfo pipelineConfig{};
         Pipeline::defaultPipelineConfigInfo(pipelineConfig);
+        pipelineConfig.bindingDescriptions = Model::Vertex::getBindingDescriptions();
+        pipelineConfig.attributeDescriptions = Model::Vertex::getAttributeDescriptions();
         pipelineConfig.colorAttachmentFormats = {colorFormat};
         pipelineConfig.depthAttachmentFormat = depthFormat;
         pipelineConfig.pipelineLayout = pipelineLayout;

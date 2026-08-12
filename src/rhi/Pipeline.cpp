@@ -1,7 +1,5 @@
 #include "rhi/Pipeline.hpp"
 
-#include "render/Model.hpp"
-
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -86,17 +84,14 @@ namespace ege {
         shaderStages[1].pNext = nullptr;
         shaderStages[1].pSpecializationInfo = nullptr;
 
-        auto bindingDescriptions = Model::Vertex::getBindingDescriptions();
-        auto attributeDescriptions = Model::Vertex::getAttributeDescriptions();
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInputInfo.vertexAttributeDescriptionCount =
-            static_cast<uint32_t>(attributeDescriptions.size());
+            static_cast<uint32_t>(configInfo.attributeDescriptions.size());
         vertexInputInfo.vertexBindingDescriptionCount =
-            static_cast<uint32_t>(bindingDescriptions.size());
-        ;
-        vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
-        vertexInputInfo.pVertexBindingDescriptions = bindingDescriptions.data();
+            static_cast<uint32_t>(configInfo.bindingDescriptions.size());
+        vertexInputInfo.pVertexAttributeDescriptions = configInfo.attributeDescriptions.data();
+        vertexInputInfo.pVertexBindingDescriptions = configInfo.bindingDescriptions.data();
 
         // The dynamic-rendering replacement for a render pass reference: the
         // pipeline is compatible with any rendering instance whose attachments

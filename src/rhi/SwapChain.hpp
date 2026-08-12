@@ -35,10 +35,6 @@ namespace ege {
 
         VkImageView getImageView(uint32_t index) const { return swapChainImageViews[index]; }
 
-        VkImage getDepthImage(uint32_t index) const { return depthImages[index]; }
-
-        VkImageView getDepthImageView(uint32_t index) const { return depthImageViews[index]; }
-
         size_t imageCount() const { return swapChainImages.size(); }
 
         VkFormat getSwapChainImageFormat() const { return swapChainImageFormat; }
@@ -70,7 +66,6 @@ namespace ege {
         void init();
         void createSwapChain();
         void createImageViews();
-        void createDepthResources();
         void createSyncObjects();
 
         // Helper functions
@@ -81,12 +76,11 @@ namespace ege {
         VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
 
         VkFormat swapChainImageFormat;
+        // Chosen here so pipelines and the frame graph agree on it, but the
+        // depth image itself is a frame graph transient, not swapchain state.
         VkFormat swapChainDepthFormat;
         VkExtent2D swapChainExtent;
 
-        std::vector<VkImage> depthImages;
-        std::vector<VmaAllocation> depthImageAllocations;
-        std::vector<VkImageView> depthImageViews;
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
 
