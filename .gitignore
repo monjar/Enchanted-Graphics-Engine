@@ -370,3 +370,6 @@ FodyWeavers.xsd
 
 # CMake presets write here
 build/
+
+# Runtime log
+enchanted.log

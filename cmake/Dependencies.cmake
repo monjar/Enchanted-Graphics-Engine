@@ -113,3 +113,31 @@ add_library(ege_tinyobj INTERFACE)
 target_include_directories(ege_tinyobj SYSTEM INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}/external/tinyobjectloader)
 add_library(ege::tinyobj ALIAS ege_tinyobj)
+
+# ---------------------------------------------------------------------------
+# spdlog - logging
+# ---------------------------------------------------------------------------
+set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
+set(SPDLOG_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
+
+CPMAddPackage(
+  NAME spdlog
+  GITHUB_REPOSITORY gabime/spdlog
+  GIT_TAG v1.14.1
+  VERSION 1.14.1
+  FIND_PACKAGE_ARGUMENTS "NAMES spdlog"
+  EXCLUDE_FROM_ALL YES
+)
+
+add_library(ege_spdlog INTERFACE)
+if(TARGET spdlog::spdlog)
+  ege_make_includes_system(spdlog::spdlog)
+  target_link_libraries(ege_spdlog INTERFACE spdlog::spdlog)
+elseif(TARGET spdlog)
+  ege_make_includes_system(spdlog)
+  target_link_libraries(ege_spdlog INTERFACE spdlog)
+else()
+  message(FATAL_ERROR "spdlog resolved but exported no usable target")
+endif()
+add_library(ege::spdlog ALIAS ege_spdlog)

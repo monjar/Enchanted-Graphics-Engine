@@ -1,5 +1,6 @@
 #include "core/Application.hpp"
 
+#include "core/Log.hpp"
 #include "platform/KeyboardMovementController.hpp"
 #include "render/Camera.hpp"
 #include "render/SimpleRenderSystem.hpp"
@@ -22,6 +23,8 @@ namespace ege {
     };
 
     Application::Application() {
+        Log::init();
+        EGE_INFO("Enchanted Engine starting up");
         globalPool =
             DescriptorPool::Builder(device)
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
