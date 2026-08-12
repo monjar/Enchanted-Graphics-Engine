@@ -6,6 +6,7 @@
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "reflect/Serialization.hpp"
+#include "render/BloomSystem.hpp"
 #include "render/Camera.hpp"
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
@@ -22,6 +23,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 
@@ -167,6 +169,8 @@ namespace ege {
 
         ShadowMapSystem shadowSystem{device, renderer.getSwapChainDepthFormat()};
 
+        BloomSystem bloom{device, hdrFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
+
         PostProcessSystem postProcess{
             device, renderer.getSwapChainColorFormat(), SwapChain::MAX_FRAMES_IN_FLIGHT};
 
@@ -303,6 +307,19 @@ namespace ege {
                 shadowMapDesc.clearValue.depthStencil = {1.0f, 0};
                 FrameGraphResource shadowMap = graph.createTransient("shadowMap", shadowMapDesc);
 
+                // Bloom works at half resolution: it is blurred anyway, and
+                // half the pixels means a quarter of the blur cost.
+                const VkExtent2D swapExtent = renderer.getSwapChainExtent();
+                const VkExtent2D halfExtent{
+                    std::max(swapExtent.width / 2, 1u), std::max(swapExtent.height / 2, 1u)};
+
+                TransientImageDesc bloomDesc{};
+                bloomDesc.format = hdrFormat;
+                bloomDesc.extent = halfExtent;
+                FrameGraphResource bloomBright = graph.createTransient("bloomBright", bloomDesc);
+                FrameGraphResource bloomBlurred = graph.createTransient("bloomBlurred", bloomDesc);
+                FrameGraphResource bloomFinal = graph.createTransient("bloomFinal", bloomDesc);
+
                 FrameGraphResource backbuffer = graph.importImage(
                     "backbuffer",
                     renderer.currentSwapChainImage(),
@@ -352,14 +369,51 @@ namespace ege {
                         skybox.render(cmd, frameInfo.globalDescriptorSet);
                     });
 
+                // The bloom chain: what glows, extracted and blurred. Three
+                // passes, each an addPass call - the graph derives all the
+                // render-to-sample transitions between them.
+                graph.addPass(
+                    "bloomBright",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(sceneColor, ResourceAccess::sampled);
+                        pass.write(bloomBright, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        bloom.renderBrightPass(cmd, frameIndex, resolved.view(sceneColor));
+                    });
+
+                graph.addPass(
+                    "bloomBlurH",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(bloomBright, ResourceAccess::sampled);
+                        pass.write(bloomBlurred, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        bloom.renderBlur(
+                            cmd, frameIndex, resolved.view(bloomBright), glm::vec2{1.f, 0.f});
+                    });
+
+                graph.addPass(
+                    "bloomBlurV",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(bloomBlurred, ResourceAccess::sampled);
+                        pass.write(bloomFinal, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        bloom.renderBlur(
+                            cmd, frameIndex, resolved.view(bloomBlurred), glm::vec2{0.f, 1.f});
+                    });
+
                 graph.addPass(
                     "tonemap",
                     [&](FrameGraph::PassBuilder& pass) {
                         pass.read(sceneColor, ResourceAccess::sampled);
+                        pass.read(bloomFinal, ResourceAccess::sampled);
                         pass.write(backbuffer, ResourceAccess::colorWrite);
                     },
                     [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
-                        postProcess.render(cmd, frameIndex, resolved.view(sceneColor));
+                        postProcess.render(
+                            cmd, frameIndex, resolved.view(sceneColor), resolved.view(bloomFinal));
                     });
 
                 graph.compile();

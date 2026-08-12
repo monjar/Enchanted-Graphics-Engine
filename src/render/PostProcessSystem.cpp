@@ -43,11 +43,13 @@ namespace ege {
             DescriptorSetLayout::Builder(device)
                 .addBinding(
                     0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                .addBinding(
+                    1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         pool = DescriptorPool::Builder(device)
                    .setMaxSets(framesInFlight)
-                   .addPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, framesInFlight)
+                   .addPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, framesInFlight * 2)
                    .build();
 
         descriptorSets.resize(framesInFlight, VK_NULL_HANDLE);
@@ -95,7 +97,10 @@ namespace ege {
     }
 
     void PostProcessSystem::render(
-        VkCommandBuffer commandBuffer, uint32_t frameIndex, VkImageView sceneColorView) {
+        VkCommandBuffer commandBuffer,
+        uint32_t frameIndex,
+        VkImageView sceneColorView,
+        VkImageView bloomView) {
         EGE_ASSERT(frameIndex < descriptorSets.size(), "frame index out of range");
 
         // Rewritten every frame, unconditionally. The graph may recycle, evict
@@ -109,8 +114,14 @@ namespace ege {
         imageInfo.imageView = sceneColorView;
         imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+        VkDescriptorImageInfo bloomInfo{};
+        bloomInfo.sampler = sampler;
+        bloomInfo.imageView = bloomView;
+        bloomInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
         DescriptorWriter(*setLayout, *pool)
             .writeImage(0, &imageInfo)
+            .writeImage(1, &bloomInfo)
             .overwrite(descriptorSets[frameIndex]);
 
         pipeline->bind(commandBuffer);

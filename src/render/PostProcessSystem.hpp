@@ -24,11 +24,15 @@ namespace ege {
         PostProcessSystem(const PostProcessSystem&) = delete;
         PostProcessSystem& operator=(const PostProcessSystem&) = delete;
 
-        // Records the fullscreen pass. The scene view is bound fresh each
-        // frame because the frame graph may hand back a different physical
-        // image after a resize; the per-frame descriptor set makes that safe
-        // while earlier frames are still in flight.
-        void render(VkCommandBuffer commandBuffer, uint32_t frameIndex, VkImageView sceneColorView);
+        // Records the fullscreen pass. The views are bound fresh each frame
+        // because the frame graph may hand back different physical images
+        // after a resize; the per-frame descriptor set makes that safe while
+        // earlier frames are still in flight.
+        void render(
+            VkCommandBuffer commandBuffer,
+            uint32_t frameIndex,
+            VkImageView sceneColorView,
+            VkImageView bloomView);
 
     private:
         void createSampler();
