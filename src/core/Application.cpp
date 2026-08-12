@@ -10,6 +10,7 @@
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PostProcessSystem.hpp"
+#include "render/SkyboxSystem.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/FrameGraph.hpp"
 #include "scene/ComponentRegistry.hpp"
@@ -35,6 +36,8 @@ namespace ege {
             glm::mat4 projection{1.f};
             glm::mat4 view{1.f};
             glm::mat4 inverseView{1.f};
+            // The skybox unprojects pixels back into rays with this.
+            glm::mat4 inverseProjection{1.f};
             glm::vec4 ambientLightColor{1.f, 1.f, 1.f, .03f};  // w is intensity
             GpuPointLight pointLights[maxPointLights]{};
             alignas(16) int numLights = 0;
@@ -52,10 +55,15 @@ namespace ege {
         registerBuiltinSerializers();
         registerBuiltinComponents();
         EGE_DEBUG("Reflection: {} types registered", TypeRegistry::instance().all().size());
+        // Each per-frame global set holds the UBO plus the four image-based
+        // lighting maps: irradiance, prefiltered specular, BRDF LUT and the
+        // raw environment for the skybox.
         globalPool =
             DescriptorPool::Builder(device)
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
+                .addPoolSize(
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 4)
                 .build();
 
         // Four image samplers per material, and room for a reasonable number
@@ -96,13 +104,31 @@ namespace ege {
         auto globalSetLayout =
             DescriptorSetLayout::Builder(device)
                 .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS)
+                .addBinding(
+                    1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                .addBinding(
+                    2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                .addBinding(
+                    3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                .addBinding(
+                    4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < globalDescriptorSets.size(); i++) {
             auto bufferInfo = uboBuffers[i]->descriptorInfo();
+            // The lighting maps are generated once and never change, so they
+            // are written alongside the per-frame buffer and left alone.
+            auto irradianceInfo = environmentLighting.irradianceInfo();
+            auto prefilteredInfo = environmentLighting.prefilteredInfo();
+            auto brdfLutInfo = environmentLighting.brdfLutInfo();
+            auto environmentInfo = environmentLighting.environmentInfo();
             DescriptorWriter(*globalSetLayout, *globalPool)
                 .writeBuffer(0, &bufferInfo)
+                .writeImage(1, &irradianceInfo)
+                .writeImage(2, &prefilteredInfo)
+                .writeImage(3, &brdfLutInfo)
+                .writeImage(4, &environmentInfo)
                 .build(globalDescriptorSets[i]);
         }
 
@@ -119,6 +145,12 @@ namespace ege {
             renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout(),
             materialSetLayout->getDescriptorSetLayout()};
+
+        SkyboxSystem skybox{
+            device,
+            hdrFormat,
+            renderer.getSwapChainDepthFormat(),
+            globalSetLayout->getDescriptorSetLayout()};
 
         PostProcessSystem postProcess{
             device, renderer.getSwapChainColorFormat(), SwapChain::MAX_FRAMES_IN_FLIGHT};
@@ -191,6 +223,7 @@ namespace ege {
                 ubo.projection = camera.getProjection();
                 ubo.view = camera.getView();
                 ubo.inverseView = glm::inverse(camera.getView());
+                ubo.inverseProjection = glm::inverse(camera.getProjection());
                 // Lights are entities now, gathered per frame rather than
                 // held in a parallel list. The cap is the shader's array size;
                 // clustered shading in Phase 9 is what removes it.
@@ -246,6 +279,9 @@ namespace ege {
                     [&](VkCommandBuffer cmd, const FrameGraphResources&) {
                         frameInfo.commandBuffer = cmd;
                         pbrRenderSystem.render(frameInfo);
+                        // After the geometry: the depth test rejects every
+                        // covered pixel, so the sky shades only what remains.
+                        skybox.render(cmd, frameInfo.globalDescriptorSet);
                     });
 
                 graph.addPass(
