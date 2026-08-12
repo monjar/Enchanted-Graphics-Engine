@@ -3,6 +3,7 @@
 #include "assets/GltfLoader.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
+#include "editor/EditorOverlay.hpp"
 #include "platform/CameraController.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
@@ -176,6 +177,9 @@ namespace ege {
         PostProcessSystem postProcess{
             device, renderer.getSwapChainColorFormat(), SwapChain::MAX_FRAMES_IN_FLIGHT};
 
+        EditorOverlay overlay{
+            window, device, renderer.getSwapChainColorFormat(), renderer.getSwapChainImageCount()};
+
         FrameGraph graph{};
 
         Camera camera{};
@@ -215,9 +219,17 @@ namespace ege {
                 // fixedTick(time.fixedStep());
             }
 
+            if (window.input().wasPressed(Key::F1)) {
+                overlay.toggle();
+            }
+
             // Rendering and camera control stay on the variable delta: they
-            // should run as often as the display allows.
-            cameraController.update(window.input(), frameTime, viewerTransform);
+            // should run as often as the display allows - unless a panel owns
+            // the input, in which case dragging a slider must not also fly
+            // the camera.
+            if (!overlay.wantsInput()) {
+                cameraController.update(window.input(), frameTime, viewerTransform);
+            }
 
             // Composes world matrices for every parented entity once per frame,
             // rather than each consumer recomputing the same parent chain.
@@ -230,6 +242,12 @@ namespace ege {
             camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
 
             if (auto commandBuffer = renderer.beginFrame()) {
+                // The ImGui frame opens with the render frame: NewFrame and
+                // Render must pair, and a frame skipped for resize renders
+                // no UI either.
+                overlay.beginFrame();
+                overlay.buildUi(world, pbrRenderSystem.stats(), frameTime);
+
                 const uint32_t frameIndex = renderer.getFrameIndex();
                 FrameInfo frameInfo{
                     frameIndex,
@@ -417,6 +435,16 @@ namespace ege {
                         postProcess.render(
                             cmd, frameIndex, resolved.view(sceneColor), resolved.view(bloomFinal));
                     });
+
+                // UI last, straight onto the backbuffer: the second writer
+                // loads what the tonemap stored, and the graph inserts the
+                // write-after-write barrier between them.
+                graph.addPass(
+                    "ui",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.write(backbuffer, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources&) { overlay.render(cmd); });
 
                 graph.compile();
                 graph.execute(device, commandBuffer);

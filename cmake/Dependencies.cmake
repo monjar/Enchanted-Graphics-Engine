@@ -115,6 +115,34 @@ target_include_directories(ege_tinyobj SYSTEM INTERFACE
 add_library(ege::tinyobj ALIAS ege_tinyobj)
 
 # ---------------------------------------------------------------------------
+# Dear ImGui (docking branch) - the editor UI. Compiled as its own static
+# library with the GLFW and Vulkan backends, and without the engine's
+# warnings-as-errors, because third-party code is not ours to fix.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME imgui
+  GITHUB_REPOSITORY ocornut/imgui
+  GIT_TAG v1.91.8-docking
+  VERSION 1.91.8
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_imgui STATIC
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_demo.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+target_include_directories(ege_imgui SYSTEM PUBLIC
+  ${imgui_SOURCE_DIR}
+  ${imgui_SOURCE_DIR}/backends)
+target_link_libraries(ege_imgui PUBLIC ege::glfw Vulkan::Vulkan)
+add_library(ege::imgui ALIAS ege_imgui)
+
+# ---------------------------------------------------------------------------
 # cgltf - glTF 2.0 import. Single header, implementation compiled in
 # assets/GltfLoader.cpp.
 # ---------------------------------------------------------------------------

@@ -24,6 +24,10 @@ namespace ege {
 
         VkExtent2D getSwapChainExtent() const { return egeSwapChain->getSwapChainExtent(); }
 
+        uint32_t getSwapChainImageCount() const {
+            return static_cast<uint32_t>(egeSwapChain->imageCount());
+        }
+
         float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
 
         // The image acquired by beginFrame, for the frame graph to import as
