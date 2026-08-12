@@ -47,6 +47,7 @@ target_link_libraries(Enchanted PUBLIC
   ege::glfw
   ege::glm
   ege::tinyobj
+  ege::cgltf
   ege::spdlog
   ege::vma
   ege::stb

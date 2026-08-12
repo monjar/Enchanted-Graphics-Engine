@@ -115,6 +115,23 @@ target_include_directories(ege_tinyobj SYSTEM INTERFACE
 add_library(ege::tinyobj ALIAS ege_tinyobj)
 
 # ---------------------------------------------------------------------------
+# cgltf - glTF 2.0 import. Single header, implementation compiled in
+# assets/GltfLoader.cpp.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME cgltf
+  GITHUB_REPOSITORY jkuhlmann/cgltf
+  GIT_TAG v1.14
+  VERSION 1.14
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_cgltf INTERFACE)
+target_include_directories(ege_cgltf SYSTEM INTERFACE ${cgltf_SOURCE_DIR})
+add_library(ege::cgltf ALIAS ege_cgltf)
+
+# ---------------------------------------------------------------------------
 # spdlog - logging
 # ---------------------------------------------------------------------------
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)
