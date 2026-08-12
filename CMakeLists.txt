@@ -47,7 +47,9 @@ target_link_libraries(Enchanted PUBLIC
   ege::glfw
   ege::glm
   ege::tinyobj
-  ege::spdlog)
+  ege::spdlog
+  ege::vma
+  ege::stb)
 
 target_compile_definitions(Enchanted PRIVATE
   EGE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets")

@@ -1,3 +1,4 @@
+#define VMA_IMPLEMENTATION
 #include "rhi/Device.hpp"
 
 #include "core/Log.hpp"
@@ -53,11 +54,13 @@ namespace ege {
         createSurface();
         pickPhysicalDevice();
         createLogicalDevice();
+        createAllocator();
         createCommandPool();
     }
 
     Device::~Device() {
         vkDestroyCommandPool(device_, commandPool, nullptr);
+        vmaDestroyAllocator(vmaAllocator);
         vkDestroyDevice(device_, nullptr);
 
         if (enableValidationLayers) {
@@ -406,36 +409,53 @@ namespace ege {
         throw std::runtime_error("failed to find suitable memory type!");
     }
 
+    void Device::createAllocator() {
+        VmaAllocatorCreateInfo allocatorInfo{};
+        allocatorInfo.physicalDevice = physicalDevice;
+        allocatorInfo.device = device_;
+        allocatorInfo.instance = instance;
+        allocatorInfo.vulkanApiVersion = VK_API_VERSION_1_0;
+
+        if (vmaCreateAllocator(&allocatorInfo, &vmaAllocator) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create the memory allocator");
+        }
+
+        VkPhysicalDeviceMemoryProperties memoryProperties{};
+        vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+        EGE_INFO(
+            "Memory allocator ready: {} heap(s), {} type(s), device allocation limit {}",
+            memoryProperties.memoryHeapCount,
+            memoryProperties.memoryTypeCount,
+            properties.limits.maxMemoryAllocationCount);
+    }
+
     void Device::createBuffer(
         VkDeviceSize size,
         VkBufferUsageFlags usage,
         VkMemoryPropertyFlags memoryProperties,
         VkBuffer& buffer,
-        VkDeviceMemory& bufferMemory) {
+        VmaAllocation& allocation) {
         VkBufferCreateInfo bufferInfo{};
         bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
         bufferInfo.size = size;
         bufferInfo.usage = usage;
         bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-        if (vkCreateBuffer(device_, &bufferInfo, nullptr, &buffer) != VK_SUCCESS) {
+        // requiredFlags rather than a usage hint, so the existing call sites -
+        // which ask for HOST_VISIBLE or DEVICE_LOCAL explicitly - keep their
+        // exact meaning.
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+        allocInfo.requiredFlags = memoryProperties;
+
+        if (vmaCreateBuffer(vmaAllocator, &bufferInfo, &allocInfo, &buffer, &allocation, nullptr) !=
+            VK_SUCCESS) {
             throw std::runtime_error("failed to create vertex buffer!");
         }
+    }
 
-        VkMemoryRequirements memRequirements;
-        vkGetBufferMemoryRequirements(device_, buffer, &memRequirements);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex =
-            findMemoryType(memRequirements.memoryTypeBits, memoryProperties);
-
-        if (vkAllocateMemory(device_, &allocInfo, nullptr, &bufferMemory) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate vertex buffer memory!");
-        }
-
-        vkBindBufferMemory(device_, buffer, bufferMemory, 0);
+    void Device::destroyBuffer(VkBuffer buffer, VmaAllocation allocation) {
+        vmaDestroyBuffer(vmaAllocator, buffer, allocation);
     }
 
     VkCommandBuffer Device::beginSingleTimeCommands() {
@@ -508,27 +528,19 @@ namespace ege {
         const VkImageCreateInfo& imageInfo,
         VkMemoryPropertyFlags memoryProperties,
         VkImage& image,
-        VkDeviceMemory& imageMemory) {
-        if (vkCreateImage(device_, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+        VmaAllocation& allocation) {
+        VmaAllocationCreateInfo allocInfo{};
+        allocInfo.usage = VMA_MEMORY_USAGE_UNKNOWN;
+        allocInfo.requiredFlags = memoryProperties;
+
+        if (vmaCreateImage(vmaAllocator, &imageInfo, &allocInfo, &image, &allocation, nullptr) !=
+            VK_SUCCESS) {
             throw std::runtime_error("failed to create image!");
         }
+    }
 
-        VkMemoryRequirements memRequirements;
-        vkGetImageMemoryRequirements(device_, image, &memRequirements);
-
-        VkMemoryAllocateInfo allocInfo{};
-        allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        allocInfo.allocationSize = memRequirements.size;
-        allocInfo.memoryTypeIndex =
-            findMemoryType(memRequirements.memoryTypeBits, memoryProperties);
-
-        if (vkAllocateMemory(device_, &allocInfo, nullptr, &imageMemory) != VK_SUCCESS) {
-            throw std::runtime_error("failed to allocate image memory!");
-        }
-
-        if (vkBindImageMemory(device_, image, imageMemory, 0) != VK_SUCCESS) {
-            throw std::runtime_error("failed to bind image memory!");
-        }
+    void Device::destroyImage(VkImage image, VmaAllocation allocation) {
+        vmaDestroyImage(vmaAllocator, image, allocation);
     }
 
 }  // namespace ege

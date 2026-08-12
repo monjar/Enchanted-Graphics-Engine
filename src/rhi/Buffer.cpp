@@ -43,13 +43,12 @@ namespace ege {
           memoryPropertyFlags{memoryPropertyFlags_} {
         alignmentSize = getAlignment(instanceSize_, minOffsetAlignment_);
         bufferSize = alignmentSize * instanceCount_;
-        deviceRef.createBuffer(bufferSize, usageFlags_, memoryPropertyFlags_, buffer, memory);
+        deviceRef.createBuffer(bufferSize, usageFlags_, memoryPropertyFlags_, buffer, allocation);
     }
 
     Buffer::~Buffer() {
         unmap();
-        vkDestroyBuffer(device.device(), buffer, nullptr);
-        vkFreeMemory(device.device(), memory, nullptr);
+        device.destroyBuffer(buffer, allocation);
     }
 
     /**
@@ -64,7 +63,12 @@ namespace ege {
      */
     VkResult Buffer::map(VkDeviceSize size, VkDeviceSize offset) {
         assert(buffer && memory && "Called map on buffer before create");
-        return vkMapMemory(device.device(), memory, offset, size, 0, &mapped);
+        // VMA maps the whole allocation; the offset and size arguments are kept
+        // for interface compatibility with the previous vkMapMemory call, and
+        // writeToBuffer applies the offset itself.
+        (void)size;
+        (void)offset;
+        return vmaMapMemory(device.allocator(), allocation, &mapped);
     }
 
     /**
@@ -74,7 +78,7 @@ namespace ege {
      */
     void Buffer::unmap() {
         if (mapped) {
-            vkUnmapMemory(device.device(), memory);
+            vmaUnmapMemory(device.allocator(), allocation);
             mapped = nullptr;
         }
     }
@@ -112,12 +116,9 @@ namespace ege {
      * @return VkResult of the flush call
      */
     VkResult Buffer::flush(VkDeviceSize size, VkDeviceSize offset) {
-        VkMappedMemoryRange mappedRange = {};
-        mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        mappedRange.memory = memory;
-        mappedRange.offset = offset;
-        mappedRange.size = size;
-        return vkFlushMappedMemoryRanges(device.device(), 1, &mappedRange);
+        // VMA is a no-op for coherent memory and issues the range flush
+        // otherwise, so callers no longer have to know which they got.
+        return vmaFlushAllocation(device.allocator(), allocation, offset, size);
     }
 
     /**
@@ -132,12 +133,7 @@ namespace ege {
      * @return VkResult of the invalidate call
      */
     VkResult Buffer::invalidate(VkDeviceSize size, VkDeviceSize offset) {
-        VkMappedMemoryRange mappedRange = {};
-        mappedRange.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
-        mappedRange.memory = memory;
-        mappedRange.offset = offset;
-        mappedRange.size = size;
-        return vkInvalidateMappedMemoryRanges(device.device(), 1, &mappedRange);
+        return vmaInvalidateAllocation(device.allocator(), allocation, offset, size);
     }
 
     /**

@@ -141,3 +141,35 @@ else()
   message(FATAL_ERROR "spdlog resolved but exported no usable target")
 endif()
 add_library(ege::spdlog ALIAS ege_spdlog)
+
+# ---------------------------------------------------------------------------
+# VulkanMemoryAllocator - GPU memory suballocation
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME VulkanMemoryAllocator
+  GITHUB_REPOSITORY GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator
+  GIT_TAG v3.1.0
+  VERSION 3.1.0
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_vma INTERFACE)
+target_include_directories(ege_vma SYSTEM INTERFACE
+  ${VulkanMemoryAllocator_SOURCE_DIR}/include)
+add_library(ege::vma ALIAS ege_vma)
+
+# ---------------------------------------------------------------------------
+# stb - image loading. Header only, implementation compiled in one TU.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME stb
+  GITHUB_REPOSITORY nothings/stb
+  GIT_TAG f0569113c93ad095470c54bf34a17b36646bbbb5
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_stb INTERFACE)
+target_include_directories(ege_stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
+add_library(ege::stb ALIAS ege_stb)
