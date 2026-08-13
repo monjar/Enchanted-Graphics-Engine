@@ -2,7 +2,9 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0, 1 and 3 complete. Phases 2 and 4 partially complete. Phases 5 and 6 not started.** See the outcome notes on each phase for exactly what landed and what is outstanding.
+> **Status: Phases 0, 1 and 3 complete. Phases 2 and 4 partially complete. Phases 5 and 6 not started.**
+>
+> Each phase below carries an outcome note listing exactly what landed and what did not. The single largest outstanding item is the **frame graph** (§Phase 2): shadows, IBL, MSAA and the HDR post stack all want to be passes that declare their resources, and each is materially harder to add against the current hardcoded render pass. It is the right next piece of work.
 
 ## 1. Where the project stands today
 
@@ -243,7 +245,13 @@ Three things worth recording:
 
 *Done:* VMA now backs every buffer and image allocation. This was the urgent part: one `vkAllocateMemory` per buffer hits `maxMemoryAllocationCount` (commonly 4096) at a few thousand meshes while plenty of memory remains free. `rhi/Texture` adds upload, mip generation by successive blits, samplers with device-clamped anisotropy, and per-texture sRGB-versus-linear selection — which finally uses `createImageWithInfo`, `copyBufferToImage` and the `samplerAnisotropy` feature, all of which had been requested or written and never called.
 
-*Not done, and why:* **Vulkan 1.3 with dynamic rendering** is a large rewrite of `SwapChain` and every pipeline, and the whole point is to delete render-pass bookkeeping — worth doing in one deliberate pass, not squeezed in beside feature work. **SPIRV-Reflect** driven pipeline layouts, **bindless descriptors**, the **frame graph** and the **on-disk pipeline cache** are all still outstanding. The frame graph is the one that gates Phase 9: shadows → G-buffer → lighting → post only compose cheaply once passes declare their resources.
+The **on-disk pipeline cache** also landed: pipelines no longer recompile from SPIR-V on every launch, a corrupt or stale blob is rejected by the driver rather than breaking start-up, and the cache is written explicitly after pipeline creation as well as at shutdown, because a killed process never unwinds.
+
+*Not done, and why:*
+
+- **Frame graph** — the most valuable remaining item in the whole roadmap. Shadows, IBL, MSAA and the HDR post stack are all passes with resource dependencies, and adding any of them to the current single hardcoded render pass means writing barrier and attachment management by hand that the graph would then replace. Everything downstream is cheaper after this and more expensive before it.
+- **Vulkan 1.3 with dynamic rendering** — a rewrite of `SwapChain` and every pipeline whose entire purpose is deleting render-pass bookkeeping. Worth one deliberate pass, and naturally done together with the frame graph rather than twice.
+- **SPIRV-Reflect** driven pipeline layouts, and **bindless descriptors**. Neither blocks anything today; bindless becomes worthwhile when material count grows past what per-material descriptor sets handle comfortably.
 
 ### Phase 3 — ECS world & scene (~4–5 weeks)
 
@@ -291,7 +299,14 @@ Two design notes worth carrying forward:
 
 *Done:* the shading model. Cook-Torrance with Trowbridge-Reitz GGX, Smith/Schlick-GGX geometry, Schlick Fresnel, and correct energy conservation between the diffuse and specular lobes with metals carrying no diffuse term. `render/Material` holds metallic-roughness properties plus four texture slots behind a per-material descriptor set, ordered after the per-frame set by update frequency. Normal mapping derives its tangent frame from screen-space derivatives. Up to sixteen point lights, replacing the single hardcoded one. Backface culling, and a Reinhard tonemap with gamma encode as a placeholder for a real HDR target.
 
-*Not done:* **glTF 2.0 import** (still OBJ and procedural primitives only), **IBL** (irradiance and prefiltered specular, the BRDF LUT, skybox), **shadow maps**, the **HDR target with ACES and bloom**, **MSAA/FXAA/TAA**, and **frustum culling, material sorting and instancing**. The absence of IBL is visible in the demo image: the smoothest metal sphere is nearly black because a mirror with nothing to reflect *is* nearly black. That is correct behaviour and exactly what an environment map fixes.
+**Frustum culling and material sorting** landed too. Meshes carry local-space bounds; the render system gathers visible objects, rejects those whose transformed bounds fall outside the frustum, sorts survivors by material then mesh, and submits. Sorting matters because descriptor set binds dominate a draw and component-pool order has no reason to group objects sharing a material. Per-frame statistics record candidates, culled, drawn and material binds.
+
+*Not done:*
+
+- **IBL** — irradiance and prefiltered specular maps, the BRDF LUT, a skybox. Its absence is visible in the demo image: the smoothest metal sphere is nearly black, because a mirror with nothing to reflect *is* nearly black. Correct behaviour, and the single biggest visual improvement still available.
+- **Shadow maps**, the **HDR target with ACES and bloom**, and **MSAA/FXAA/TAA** — all wanting the frame graph first, for the reason given under Phase 2. MSAA in particular means multisampled colour and depth attachments plus a resolve, which is exactly the attachment management the graph should own.
+- **glTF 2.0 import** — still OBJ and procedural primitives only. Independent of the frame graph, so it can be done at any time; it pairs naturally with the Phase 6 asset database, which is what gives imported meshes and textures stable references.
+- **Instancing** — the draw list is sorted and ready for it, but nothing merges consecutive identical draws yet.
 
 One bug worth recording, found by looking at the output rather than by the build passing: the default metallic-roughness texture was `(1, 1, 0)`, read as "fully rough, non-metal". But metallic samples from blue and is *multiplied* by `metallicFactor`, so a zero there forced every material to be a dielectric regardless of its factor, and the metal spheres shaded as diffuse plastic. Fallback textures have to be the multiplicative identity.
 

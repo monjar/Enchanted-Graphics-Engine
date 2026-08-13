@@ -14,10 +14,11 @@ The smoothest metal is nearly black because a mirror with no environment to
 reflect *is* nearly black — that is what image-based lighting fixes, and it is
 one of the things still outstanding.
 
-Scenes save and load as reflection-driven JSON, and entities can be parented.
+Scenes save and load as reflection-driven JSON, entities can be parented, and
+draws are frustum-culled and sorted by material.
 
-Still to come: glTF import, IBL, shadows, an HDR post-processing stack, the
-editor, C++ scripting and physics.
+Still to come: a frame graph, IBL, shadows, an HDR post-processing stack, glTF
+import, the editor, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -77,7 +78,7 @@ src/
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
   rhi/          device, swapchain, pipeline, buffer, descriptors, textures
-  render/       renderer, model, camera, materials, lights, PBR render system
+  render/       renderer, model, camera, materials, lights, bounds, PBR render system
   scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
