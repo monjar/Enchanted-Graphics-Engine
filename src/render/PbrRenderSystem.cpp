@@ -4,6 +4,7 @@
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
 
+#include <algorithm>
 #include <array>
 #include <stdexcept>
 
@@ -91,6 +92,66 @@ namespace ege {
     }
 
     void PbrRenderSystem::render(FrameInfo& frameInfo) {
+        frameStats = Stats{};
+        drawList.clear();
+
+        const Frustum frustum = Frustum::fromViewProjection(
+            frameInfo.camera.getProjection() * frameInfo.camera.getView());
+
+        // Gather and cull first, submit second. Separating them is what makes
+        // sorting possible at all, and it keeps the Vulkan calls out of the
+        // query callback where an early return would be easy to get wrong.
+        frameInfo.world.each<Transform, MeshRenderer>(
+            Without<Hidden>{}, [&](Entity entity, Transform& transform, MeshRenderer& renderer) {
+                if (!renderer.visible || renderer.model == nullptr ||
+                    renderer.material == nullptr) {
+                    return;
+                }
+
+                frameStats.candidates++;
+
+                DrawItem item{};
+
+                if (frameInfo.world.has<Hierarchy>(entity.id())) {
+                    // Under a hierarchy the model matrix is the composed world
+                    // matrix, and the inverse-scale shortcut for the normal
+                    // matrix no longer holds: a non-uniform parent scale
+                    // combined with a child rotation introduces shear, which is
+                    // exactly the case that shortcut excludes. Fall back to the
+                    // general transpose(inverse(M)).
+                    item.modelMatrix = hierarchy::worldMatrix(frameInfo.world, entity.id());
+                    item.normalMatrix =
+                        glm::mat4{glm::transpose(glm::inverse(glm::mat3{item.modelMatrix}))};
+                } else {
+                    item.modelMatrix = transform.mat4();
+                    item.normalMatrix = glm::mat4{transform.normalMatrix()};
+                }
+
+                if (cullingEnabled) {
+                    const Aabb worldBounds = renderer.model->bounds().transformed(item.modelMatrix);
+                    if (!frustum.intersects(worldBounds)) {
+                        frameStats.culled++;
+                        return;
+                    }
+                }
+
+                item.material = renderer.material.get();
+                item.materialSet = renderer.material->descriptorSet();
+                item.model = renderer.model.get();
+                drawList.push_back(item);
+            });
+
+        // Sorted by material, then by mesh. Descriptor set binds are the
+        // expensive part of a draw, and pool iteration order has no reason to
+        // group objects that share one - so without this a scene alternating
+        // between two materials rebinds on every single object.
+        std::sort(drawList.begin(), drawList.end(), [](const DrawItem& a, const DrawItem& b) {
+            if (a.material != b.material) {
+                return a.material < b.material;
+            }
+            return a.model < b.model;
+        });
+
         pipeline->bind(frameInfo.commandBuffer);
 
         vkCmdBindDescriptorSets(
@@ -105,69 +166,47 @@ namespace ege {
 
         VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
 
-        frameInfo.world.each<Transform, MeshRenderer>(
-            Without<Hidden>{}, [&](Entity entity, Transform& transform, MeshRenderer& renderer) {
-                if (!renderer.visible || renderer.model == nullptr ||
-                    renderer.material == nullptr) {
-                    return;
-                }
-
-                // Materials are bound only when they change. Iteration order is
-                // pool order, not sorted by material, so this only helps when
-                // neighbours happen to share one; sorting into material buckets
-                // is a later step.
-                VkDescriptorSet materialSet = renderer.material->descriptorSet();
-                if (materialSet != boundMaterial) {
-                    vkCmdBindDescriptorSets(
-                        frameInfo.commandBuffer,
-                        VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        pipelineLayout,
-                        1,
-                        1,
-                        &materialSet,
-                        0,
-                        nullptr);
-                    boundMaterial = materialSet;
-                }
-
-                const MaterialProperties& properties = renderer.material->properties;
-
-                PushConstants push{};
-
-                if (frameInfo.world.has<Hierarchy>(entity.id())) {
-                    // Under a hierarchy the model matrix is the composed world
-                    // matrix, and the inverse-scale shortcut for the normal
-                    // matrix no longer holds: a non-uniform parent scale
-                    // combined with a child rotation introduces shear, which is
-                    // exactly the case that shortcut excludes. Fall back to the
-                    // general transpose(inverse(M)).
-                    push.modelMatrix = hierarchy::worldMatrix(frameInfo.world, entity.id());
-                    push.normalMatrix =
-                        glm::mat4{glm::transpose(glm::inverse(glm::mat3{push.modelMatrix}))};
-                } else {
-                    push.modelMatrix = transform.mat4();
-                    push.normalMatrix = glm::mat4{transform.normalMatrix()};
-                }
-                push.baseColorFactor = properties.baseColorFactor;
-                push.emissiveAndMetallic =
-                    glm::vec4{properties.emissiveFactor, properties.metallicFactor};
-                push.roughnessNormalOcclusion = glm::vec4{
-                    properties.roughnessFactor,
-                    properties.normalScale,
-                    properties.occlusionStrength,
-                    0.f};
-
-                vkCmdPushConstants(
+        for (const DrawItem& item : drawList) {
+            if (item.materialSet != boundMaterial) {
+                vkCmdBindDescriptorSets(
                     frameInfo.commandBuffer,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipelineLayout,
-                    VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    1,
+                    1,
+                    &item.materialSet,
                     0,
-                    sizeof(PushConstants),
-                    &push);
+                    nullptr);
+                boundMaterial = item.materialSet;
+                frameStats.materialBinds++;
+            }
 
-                renderer.model->bind(frameInfo.commandBuffer);
-                renderer.model->draw(frameInfo.commandBuffer);
-            });
+            const MaterialProperties& properties = item.material->properties;
+
+            PushConstants push{};
+            push.modelMatrix = item.modelMatrix;
+            push.normalMatrix = item.normalMatrix;
+            push.baseColorFactor = properties.baseColorFactor;
+            push.emissiveAndMetallic =
+                glm::vec4{properties.emissiveFactor, properties.metallicFactor};
+            push.roughnessNormalOcclusion = glm::vec4{
+                properties.roughnessFactor,
+                properties.normalScale,
+                properties.occlusionStrength,
+                0.f};
+
+            vkCmdPushConstants(
+                frameInfo.commandBuffer,
+                pipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(PushConstants),
+                &push);
+
+            const_cast<Model*>(item.model)->bind(frameInfo.commandBuffer);
+            const_cast<Model*>(item.model)->draw(frameInfo.commandBuffer);
+            frameStats.drawn++;
+        }
     }
 
 }  // namespace ege

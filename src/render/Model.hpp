@@ -1,5 +1,6 @@
 #pragma once
 
+#include "render/Bounds.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/Device.hpp"
 
@@ -51,11 +52,17 @@ namespace ege {
         static std::unique_ptr<Model> createModelFromFile(
             Device& device, const std::string& filepath);
 
+        // Local-space bounds, computed once at construction from the vertex
+        // data. Culling transforms these per frame rather than re-deriving
+        // them from vertices, which would defeat the point.
+        const Aabb& bounds() const { return localBounds; }
+
         void bind(VkCommandBuffer commandBuffer);
         void draw(VkCommandBuffer commandBuffer);
 
     private:
         Device& device;
+        Aabb localBounds{};
         std::unique_ptr<Buffer> vertexBuffer;
         uint32_t vertexCount;
         bool hasIndexBuffer = false;

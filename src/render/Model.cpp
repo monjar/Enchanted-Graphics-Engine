@@ -31,6 +31,10 @@ namespace std {
 namespace ege {
 
     Model::Model(Device& deviceRef, const Model::Builder& builder) : device{deviceRef} {
+        for (const Vertex& vertex : builder.vertices) {
+            localBounds.expand(vertex.position);
+        }
+
         createVertexBuffers(builder.vertices);
         createIndexBuffers(builder.indices);
     }
