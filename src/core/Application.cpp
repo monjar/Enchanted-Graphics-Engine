@@ -11,6 +11,7 @@
 #include "rhi/Buffer.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
+#include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
 
 #include <glm/glm.hpp>
@@ -139,6 +140,10 @@ namespace ege {
             // Rendering and camera control stay on the variable delta: they
             // should run as often as the display allows.
             cameraController.update(window.input(), frameTime, viewerTransform);
+
+            // Composes world matrices for every parented entity once per frame,
+            // rather than each consumer recomputing the same parent chain.
+            hierarchy::resolveTransforms(world);
             camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
             float aspectRatio = renderer.getAspectRatio();
 
@@ -257,14 +262,24 @@ namespace ege {
         // A row of metal spheres sweeping roughness, which is the clearest way
         // to see whether the GGX distribution and the geometry term behave: the
         // highlight should broaden smoothly from left to right.
+        //
+        // Parented under a pivot so the hierarchy is exercised by the running
+        // engine rather than only by the tests: the spheres' positions below are
+        // relative to it, and moving the pivot moves the whole row.
+        Entity sphereRow = world.spawn("SphereRow");
+        Transform rowTransform{};
+        rowTransform.translation = {0.f, .25f, 1.2f};
+        sphereRow.attach<Transform>(rowTransform);
+
         for (int i = 0; i < 5; i++) {
             const float roughness = 0.05f + 0.95f * static_cast<float>(i) / 4.f;
-            addMesh(
+            Entity ball = addMesh(
                 "MetalSphere" + std::to_string(i),
                 sphere,
                 makeMaterial(glm::vec3{0.95f, 0.8f, 0.35f}, 1.f, roughness),
-                {-1.2f + 0.6f * static_cast<float>(i), .25f, 1.2f},
+                {-1.2f + 0.6f * static_cast<float>(i), 0.f, 0.f},
                 glm::vec3{.45f});
+            hierarchy::setParent(world, ball.id(), sphereRow.id());
         }
 
         addMesh(

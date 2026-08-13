@@ -2,6 +2,7 @@
 
 #include "core/Assert.hpp"
 #include "scene/Components.hpp"
+#include "scene/Hierarchy.hpp"
 
 #include <array>
 #include <stdexcept>
@@ -105,7 +106,7 @@ namespace ege {
         VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
 
         frameInfo.world.each<Transform, MeshRenderer>(
-            Without<Hidden>{}, [&](Entity, Transform& transform, MeshRenderer& renderer) {
+            Without<Hidden>{}, [&](Entity entity, Transform& transform, MeshRenderer& renderer) {
                 if (!renderer.visible || renderer.model == nullptr ||
                     renderer.material == nullptr) {
                     return;
@@ -132,8 +133,21 @@ namespace ege {
                 const MaterialProperties& properties = renderer.material->properties;
 
                 PushConstants push{};
-                push.modelMatrix = transform.mat4();
-                push.normalMatrix = glm::mat4{transform.normalMatrix()};
+
+                if (frameInfo.world.has<Hierarchy>(entity.id())) {
+                    // Under a hierarchy the model matrix is the composed world
+                    // matrix, and the inverse-scale shortcut for the normal
+                    // matrix no longer holds: a non-uniform parent scale
+                    // combined with a child rotation introduces shear, which is
+                    // exactly the case that shortcut excludes. Fall back to the
+                    // general transpose(inverse(M)).
+                    push.modelMatrix = hierarchy::worldMatrix(frameInfo.world, entity.id());
+                    push.normalMatrix =
+                        glm::mat4{glm::transpose(glm::inverse(glm::mat3{push.modelMatrix}))};
+                } else {
+                    push.modelMatrix = transform.mat4();
+                    push.normalMatrix = glm::mat4{transform.normalMatrix()};
+                }
                 push.baseColorFactor = properties.baseColorFactor;
                 push.emissiveAndMetallic =
                     glm::vec4{properties.emissiveFactor, properties.metallicFactor};

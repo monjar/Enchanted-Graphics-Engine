@@ -4,6 +4,7 @@
 #include "render/Light.hpp"
 #include "render/Material.hpp"
 #include "render/Model.hpp"
+#include "scene/Entity.hpp"
 
 #include <glm/glm.hpp>
 
@@ -39,6 +40,29 @@ namespace ege {
     // Tag excluding an entity from rendering without detaching its renderer.
     struct Hidden {};
 
+    // Parent and child links.
+    //
+    // Stored as an intrusive linked list - first child plus next sibling -
+    // rather than a vector of children per entity. A vector per parent means a
+    // heap allocation for every entity that has children and a linear scan to
+    // unlink one; the list keeps unlinking constant time and adds two handles
+    // to entities that have no children at all.
+    //
+    // The links are entity handles, so a child that is despawned leaves a
+    // stale handle the traversal detects rather than a dangling pointer.
+    struct Hierarchy {
+        EntityId parent{};
+        EntityId firstChild{};
+        EntityId nextSibling{};
+        EntityId previousSibling{};
+
+        // World matrix from the last time transforms were resolved, and whether
+        // it needs recomputing. Cached because a deep hierarchy otherwise
+        // recomputes the same parent chain once per descendant per frame.
+        glm::mat4 worldMatrix{1.f};
+        bool dirty = true;
+    };
+
 }  // namespace ege
 
 EGE_REFLECT(ege::Transform)
@@ -55,3 +79,7 @@ EGE_REFLECT_END()
 // what serialization and the editor's component list key on.
 EGE_REFLECT(ege::Hidden)
 EGE_REFLECT_END()
+
+// Hierarchy is deliberately not reflected for serialization: the links are
+// runtime entity handles, which are not stable across a save and load. Scene
+// files record parenting by entity order instead - see SceneSerializer.
