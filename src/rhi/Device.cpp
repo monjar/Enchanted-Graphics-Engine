@@ -5,6 +5,7 @@
 
 // std headers
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <unordered_set>
@@ -55,11 +56,14 @@ namespace ege {
         pickPhysicalDevice();
         createLogicalDevice();
         createAllocator();
+        createPipelineCache();
         createCommandPool();
     }
 
     Device::~Device() {
         vkDestroyCommandPool(device_, commandPool, nullptr);
+        savePipelineCache();
+        vkDestroyPipelineCache(device_, cache, nullptr);
         vmaDestroyAllocator(vmaAllocator);
         vkDestroyDevice(device_, nullptr);
 
@@ -427,6 +431,72 @@ namespace ege {
             memoryProperties.memoryHeapCount,
             memoryProperties.memoryTypeCount,
             properties.limits.maxMemoryAllocationCount);
+    }
+
+    namespace {
+
+        // Beside the executable rather than in the source tree: it is a
+        // per-driver, per-device artifact, not something to share or commit.
+        const char* pipelineCachePath() {
+            return "pipeline_cache.bin";
+        }
+
+    }  // namespace
+
+    void Device::createPipelineCache() {
+        std::vector<char> initialData;
+
+        if (std::ifstream file{pipelineCachePath(), std::ios::binary | std::ios::ate}) {
+            const auto size = static_cast<std::streamsize>(file.tellg());
+            if (size > 0) {
+                initialData.resize(static_cast<std::size_t>(size));
+                file.seekg(0);
+                file.read(initialData.data(), size);
+            }
+        }
+
+        VkPipelineCacheCreateInfo cacheInfo{};
+        cacheInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+        cacheInfo.initialDataSize = initialData.size();
+        cacheInfo.pInitialData = initialData.empty() ? nullptr : initialData.data();
+
+        // The driver validates the blob's header against itself and silently
+        // ignores one written by a different device or driver version, so a
+        // stale file costs a recompile rather than corrupting anything. That is
+        // why no version checking is needed here.
+        if (vkCreatePipelineCache(device_, &cacheInfo, nullptr, &cache) != VK_SUCCESS) {
+            // Not fatal: without a cache every pipeline simply compiles from
+            // scratch, which is the behaviour before this existed.
+            EGE_WARN("failed to create the pipeline cache; pipelines will compile uncached");
+            cache = VK_NULL_HANDLE;
+            return;
+        }
+
+        if (initialData.empty()) {
+            EGE_INFO("Pipeline cache created empty");
+        } else {
+            EGE_INFO("Pipeline cache loaded, {} bytes", initialData.size());
+        }
+    }
+
+    void Device::savePipelineCache() const {
+        if (cache == VK_NULL_HANDLE) {
+            return;
+        }
+
+        std::size_t size = 0;
+        if (vkGetPipelineCacheData(device_, cache, &size, nullptr) != VK_SUCCESS || size == 0) {
+            return;
+        }
+
+        std::vector<char> data(size);
+        if (vkGetPipelineCacheData(device_, cache, &size, data.data()) != VK_SUCCESS) {
+            return;
+        }
+
+        if (std::ofstream file{pipelineCachePath(), std::ios::binary}) {
+            file.write(data.data(), static_cast<std::streamsize>(size));
+        }
     }
 
     void Device::createBuffer(

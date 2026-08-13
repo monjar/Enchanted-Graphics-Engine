@@ -72,6 +72,20 @@ namespace ege {
         // supports the linear filtering that mip generation blits require.
         VkPhysicalDevice physicalDeviceHandle() const { return physicalDevice; }
 
+        // Shared pipeline cache, persisted to disk between runs.
+        //
+        // Compiling a pipeline means the driver compiling SPIR-V to its own ISA,
+        // which is the slowest part of start-up and is repaid on every launch
+        // without this. The cache is a hint: a stale or rejected one costs a
+        // recompile, never a wrong result.
+        VkPipelineCache pipelineCache() const { return cache; }
+
+        // Writes the cache to disk. Called from the destructor, but also worth
+        // calling explicitly once pipelines have been created: a process that
+        // is killed rather than closed never runs the destructor, and an engine
+        // is killed fairly often during development.
+        void savePipelineCache() const;
+
         // Buffer Helper Functions
         //
         // Allocation is suballocated from VMA's pools rather than taken from
@@ -109,6 +123,7 @@ namespace ege {
         void pickPhysicalDevice();
         void createLogicalDevice();
         void createAllocator();
+        void createPipelineCache();
         void createCommandPool();
 
         // helper functions
@@ -129,6 +144,7 @@ namespace ege {
 
         VkDevice device_;
         VmaAllocator vmaAllocator = VK_NULL_HANDLE;
+        VkPipelineCache cache = VK_NULL_HANDLE;
         VkSurfaceKHR surface_;
         VkQueue graphicsQueue_;
         VkQueue presentQueue_;

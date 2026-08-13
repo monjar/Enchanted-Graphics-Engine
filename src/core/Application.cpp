@@ -117,6 +117,11 @@ namespace ege {
         CameraController cameraController{};
         CameraController::registerDefaultActions(window.input());
 
+        // Pipelines exist by this point, so the cache has something worth
+        // keeping. Saved here rather than only at shutdown because a killed
+        // process never unwinds.
+        device.savePipelineCache();
+
         Time time{};
 
         while (!window.shouldClose()) {
