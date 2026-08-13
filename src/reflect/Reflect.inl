@@ -64,6 +64,7 @@ namespace ege {
             TypeInfo& created =
                 instance().add(detail::nameOf<T>(), sizeof(T), alignof(T));
             if constexpr (detail::Describe<T>::reflected) {
+                created.reflectedFlag = true;
                 TypeBuilder<T> builder{created};
                 detail::Describe<T>::apply(builder);
             }

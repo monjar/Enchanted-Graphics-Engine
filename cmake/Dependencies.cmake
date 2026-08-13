@@ -173,3 +173,27 @@ CPMAddPackage(
 add_library(ege_stb INTERFACE)
 target_include_directories(ege_stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 add_library(ege::stb ALIAS ege_stb)
+
+# ---------------------------------------------------------------------------
+# nlohmann/json - scene and asset serialization
+# ---------------------------------------------------------------------------
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+set(JSON_Install OFF CACHE INTERNAL "")
+
+CPMAddPackage(
+  NAME nlohmann_json
+  GITHUB_REPOSITORY nlohmann/json
+  GIT_TAG v3.11.3
+  VERSION 3.11.3
+  FIND_PACKAGE_ARGUMENTS "NAMES nlohmann_json"
+  EXCLUDE_FROM_ALL YES
+)
+
+add_library(ege_json INTERFACE)
+if(TARGET nlohmann_json::nlohmann_json)
+  ege_make_includes_system(nlohmann_json::nlohmann_json)
+  target_link_libraries(ege_json INTERFACE nlohmann_json::nlohmann_json)
+else()
+  message(FATAL_ERROR "nlohmann_json resolved but exported no usable target")
+endif()
+add_library(ege::json ALIAS ege_json)

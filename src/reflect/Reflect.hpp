@@ -140,6 +140,12 @@ namespace ege {
         // has to draw directly, such as float, bool and glm::vec3.
         bool isLeaf() const { return typeFields.empty(); }
 
+        // True when the type went through EGE_REFLECT. Distinguishes a tag
+        // component, which is reflected but deliberately has no fields, from a
+        // primitive, which has none because reflection cannot see inside it.
+        // Both are leaves; only the second needs a hand-written converter.
+        bool isReflected() const { return reflectedFlag; }
+
     private:
         template<typename T>
         friend class TypeBuilder;
@@ -149,6 +155,7 @@ namespace ege {
         std::string typeName;
         std::size_t typeSize = 0;
         std::size_t typeAlignment = 0;
+        bool reflectedFlag = false;
         std::vector<FieldInfo> typeFields;
     };
 
@@ -281,14 +288,15 @@ namespace ege {
         };                                             \
     }
 
-#define EGE_REFLECT(Type)                           \
-    EGE_TYPE_NAME(Type, #Type)                      \
-    namespace ege::detail {                         \
-        template<>                                  \
-        struct Describe<Type> {                     \
-            using Self = Type;                      \
-            static constexpr bool reflected = true; \
-            static void apply(::ege::TypeBuilder<Type>& builder) {
+#define EGE_REFLECT(Type)                                          \
+    EGE_TYPE_NAME(Type, #Type)                                     \
+    namespace ege::detail {                                        \
+        template<>                                                 \
+        struct Describe<Type> {                                    \
+            using Self = Type;                                     \
+            static constexpr bool reflected = true;                \
+            static void apply(::ege::TypeBuilder<Type>& builder) { \
+                (void)builder; /* a tag component declares no fields */
 #define EGE_FIELD(FieldName) builder.addField(#FieldName, &Self::FieldName)
 
 #define EGE_REFLECT_END() \

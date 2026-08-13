@@ -50,3 +50,8 @@ EGE_REFLECT_END()
 EGE_REFLECT(ege::MeshRenderer)
 EGE_FIELD(visible);
 EGE_REFLECT_END()
+
+// A tag has no fields. It is still reflected so that it has a name, which is
+// what serialization and the editor's component list key on.
+EGE_REFLECT(ege::Hidden)
+EGE_REFLECT_END()

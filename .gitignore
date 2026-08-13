@@ -373,3 +373,6 @@ build/
 
 # Runtime log
 enchanted.log
+
+# Scene written by the demo at start-up
+demo_scene.egescene

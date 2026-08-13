@@ -31,6 +31,10 @@ namespace ege {
     private:
         void loadScene();
 
+        // Round-trips the scene through the serializer at start-up, which keeps
+        // save and load exercised by every run rather than only by the tests.
+        void verifySceneRoundTrip();
+
         Window window{WIDTH, HEIGHT, "Hello World!"};
         Device device{window};
         Renderer renderer{window, device};

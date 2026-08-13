@@ -5,10 +5,13 @@
 #include "platform/CameraController.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
+#include "reflect/Serialization.hpp"
 #include "render/Camera.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "rhi/Buffer.hpp"
+#include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
+#include "scene/SceneSerializer.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -42,6 +45,8 @@ namespace ege {
         // Makes the leaf types findable by name before anything has touched
         // them, which scene loading and the editor's type pickers rely on.
         registerBuiltinTypes();
+        registerBuiltinSerializers();
+        registerBuiltinComponents();
         EGE_DEBUG("Reflection: {} types registered", TypeRegistry::instance().all().size());
         globalPool =
             DescriptorPool::Builder(device)
@@ -281,6 +286,41 @@ namespace ege {
             world.count<Transform, MeshRenderer>(),
             world.count<Transform, PointLight>(),
             materials.size());
+
+        verifySceneRoundTrip();
+    }
+
+    void Application::verifySceneRoundTrip() {
+        // Writes the scene, reads it back into a scratch world, writes that,
+        // and compares. Cheap, and it means every run exercises the path rather
+        // than leaving it to the tests - which matters because serialization
+        // breaks quietly when a component gains a field nothing converts.
+        //
+        // Note that MeshRenderer's model and material are not serialized: they
+        // are runtime handles, and turning them into asset references is what
+        // the asset database in Phase 6 is for. The reloaded scene therefore
+        // has geometry-less renderers, which is why this runs against a scratch
+        // world rather than replacing the live one.
+        try {
+            const std::string written = SceneSerializer::toString(world);
+
+            World scratch;
+            SceneSerializer::fromString(scratch, written);
+            const std::string rewritten = SceneSerializer::toString(scratch);
+
+            if (written == rewritten) {
+                EGE_INFO(
+                    "Scene round-trip verified: {} bytes, {} entities restored",
+                    written.size(),
+                    scratch.entityCount());
+            } else {
+                EGE_WARN("scene round-trip is not stable; save and load disagree");
+            }
+
+            SceneSerializer::save(world, "demo_scene.egescene");
+        } catch (const std::exception& e) {
+            EGE_ERROR("scene round-trip failed: {}", e.what());
+        }
     }
 
 }  // namespace ege
