@@ -14,8 +14,10 @@ The smoothest metal is nearly black because a mirror with no environment to
 reflect *is* nearly black — that is what image-based lighting fixes, and it is
 one of the things still outstanding.
 
-Still to come: glTF import, IBL, shadows, an HDR post-processing stack, scene
-serialization, the editor, C++ scripting and physics.
+Scenes save and load as reflection-driven JSON, and entities can be parented.
+
+Still to come: glTF import, IBL, shadows, an HDR post-processing stack, the
+editor, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -76,7 +78,7 @@ src/
   platform/     window and input; everything touching GLFW
   rhi/          device, swapchain, pipeline, buffer, descriptors, textures
   render/       renderer, model, camera, materials, lights, PBR render system
-  scene/        world, entities, component pools, components
+  scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
 tests/          doctest suite
@@ -112,6 +114,7 @@ reformat out of `git blame`.
 | [spdlog](https://github.com/gabime/spdlog) 1.14.1 | logging | fetched or system |
 | [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) 3.1.0 | GPU memory | fetched |
 | [stb_image](https://github.com/nothings/stb) | image decoding | fetched |
+| [nlohmann/json](https://github.com/nlohmann/json) 3.11.3 | scene serialization | fetched or system |
 | [doctest](https://github.com/doctest/doctest) 2.4.11 | tests | fetched |
 
 The Vulkan buffer abstraction started from Sascha Willems'

@@ -2,7 +2,7 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0 and 1 complete. Phases 2, 3 and 4 partially complete** — see the outcome notes on each for exactly what landed and what is still outstanding.
+> **Status: Phases 0, 1 and 3 complete. Phases 2 and 4 partially complete. Phases 5 and 6 not started.** See the outcome notes on each phase for exactly what landed and what is outstanding.
 
 ## 1. Where the project stands today
 
@@ -255,11 +255,19 @@ Three things worth recording:
 
 **Done when:** a scene of hundreds of entities with multiple lights loads from a `.egescene` file, is inspectable, and saves back byte-identically.
 
-**Outcome — partial.**
+**Outcome — complete**, apart from two items deferred to the phase that gives them a caller.
 
-*Done:* the ECS itself — `World`, `EntityId`, `ComponentPool`, the `spawn`/`attach`/`fetch`/`find`/`detach`/`despawn` API, `each()` queries with `With`/`Without` filters — and the migration of the scene, the render system and the lights onto it. `GameObject` is gone. Lights were previously fixed fields in a uniform struct, set once at construction and never updated; they are entities with transforms now.
+*Done:* the ECS — `World`, `EntityId`, `ComponentPool`, the `spawn`/`attach`/`fetch`/`find`/`detach`/`despawn` API, `each()` with `With`/`Without` filters — and the migration of the scene, renderer and lights onto it. `GameObject` is gone. **Scene serialization** saves and loads `.egescene` JSON entirely through reflection: nothing in the serializer knows what a `Transform` is, and a new component becomes serializable by being reflected and registered. **Hierarchy** adds parenting with cycle refusal and cached world matrices.
 
-*Not done:* **scene serialization** (`.egescene` load/save), **hierarchy and parenting**, the explicit **`Schedule`** for system phases, and the **debug ImGui overlay**. Serialization is the next thing to build and is nearly all reflection-driven, so it is mostly plumbing rather than design.
+*Deferred:* the explicit **`Schedule`** for system phases and the **debug ImGui overlay**. The schedule has no second system to order against the renderer yet, and the overlay is subsumed by the editor in Phase 5 — building a throwaway version first would be wasted.
+
+Three design notes worth carrying forward:
+
+- `EntityId` packs a 24-bit index with an 8-bit generation, bumped on despawn, so a handle held across a despawn is *detectably* stale rather than silently addressing whatever recycled the slot. A slot that exhausts its generations is retired rather than reused.
+- `each()` iterates a snapshot of the driving pool so a callback may despawn or attach without invalidating the walk. That copy is a real per-query cost; a deferred command buffer is the eventual answer.
+- Hierarchy makes the Phase 0 normal-matrix finding bite: a non-uniform parent scale combined with a child rotation introduces shear, which is exactly the case the inverse-scale shortcut excludes. Parented entities use the general `transpose(inverse(M))`; unparented ones keep the cheap path.
+
+`MeshRenderer`'s model and material are deliberately **not** serialized. They are runtime handles, and turning them into stable references is what the asset database in Phase 6 is for — so a reloaded scene currently restores transforms, names, lights and hierarchy but not geometry.
 
 Two design notes worth carrying forward:
 
