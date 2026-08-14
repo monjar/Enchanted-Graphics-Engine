@@ -2,6 +2,7 @@
 
 #include "core/LogBuffer.hpp"
 #include "editor/EditorViewport.hpp"
+#include "editor/PlayMode.hpp"
 #include "platform/Window.hpp"
 #include "render/Camera.hpp"
 #include "render/PbrRenderSystem.hpp"
@@ -53,14 +54,20 @@ namespace ege {
         // NewFrame and Render must pair even when the overlay is hidden.
         void beginFrame();
 
-        // Declares the panels. Skipped entirely while hidden. The camera is
-        // needed by the scene view, whose gizmo has to agree with the picture
-        // it is drawn over.
-        void buildUi(
-            World& world,
-            const Camera& camera,
-            const PbrRenderSystem::Stats& stats,
-            float frameTime);
+        // Everything a frame's panels need. A struct rather than a growing
+        // parameter list: each new panel wants one more thing, and threading
+        // them through by hand is how a UI layer ends up with a twelve-
+        // argument entry point.
+        struct Context {
+            World& world;
+            const Camera& camera;
+            const PbrRenderSystem::Stats& stats;
+            PlayMode& playMode;
+            float frameTime = 0.f;
+        };
+
+        // Declares the panels. Skipped entirely while hidden.
+        void buildUi(Context& context);
 
         // Finalises the frame and records the draw data.
         void render(VkCommandBuffer commandBuffer);
@@ -94,8 +101,9 @@ namespace ege {
         enum class GizmoMode { translate, rotate, scale };
 
         void buildDefaultLayout(unsigned int dockspaceId);
-        void drawStatsPanel(const PbrRenderSystem::Stats& stats, float frameTime);
-        void drawViewportPanel(World& world, const Camera& camera);
+        void drawMainMenuBar(Context& context);
+        void drawStatsPanel(const Context& context);
+        void drawViewportPanel(Context& context);
         void drawGizmo(World& world, const Camera& camera);
         void drawGizmoToolbar();
         void drawHierarchyPanel(World& world);

@@ -5,6 +5,7 @@
 #include "core/Log.hpp"
 #include "core/Time.hpp"
 #include "editor/EditorOverlay.hpp"
+#include "editor/PlayMode.hpp"
 #include "platform/CameraController.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
@@ -22,6 +23,7 @@
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
+#include "scene/Systems.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -192,6 +194,8 @@ namespace ege {
 
         Camera camera{};
 
+        PlayMode playMode{};
+
         // The viewer is a plain transform rather than an entity: it is the
         // editor camera, not part of the scene being edited.
         Transform viewerTransform{};
@@ -219,12 +223,14 @@ namespace ege {
 
             window.input().newFrame();
 
-            // Fixed-rate simulation. Nothing runs here yet - physics attaches
-            // in Phase 8 - but the loop shape is what makes that possible, and
-            // it is far easier to establish before there is anything depending
-            // on the old variable-rate behaviour.
+            // Fixed-rate simulation, and only while the editor is playing.
+            // Keeping edit mode and play mode distinct is what lets Stop put
+            // the world back: nothing advances the scene unless Play asked
+            // for it, so the snapshot stays the truth until then.
             while (time.consumeFixedStep()) {
-                // fixedTick(time.fixedStep());
+                if (playMode.consumeTick()) {
+                    systems::spin(world, time.fixedStep());
+                }
             }
 
             if (window.input().wasPressed(Key::F1)) {
@@ -270,7 +276,9 @@ namespace ege {
                 // Render must pair, and a frame skipped for resize renders
                 // no UI either.
                 overlay.beginFrame();
-                overlay.buildUi(world, camera, pbrRenderSystem.stats(), frameTime);
+                EditorOverlay::Context editorContext{
+                    world, camera, pbrRenderSystem.stats(), playMode, frameTime};
+                overlay.buildUi(editorContext);
 
                 const uint32_t frameIndex = renderer.getFrameIndex();
                 FrameInfo frameInfo{
@@ -575,12 +583,13 @@ namespace ege {
             {8.f, 1.f, 8.f},
             {glm::pi<float>(), 0.f, 0.f});
 
-        addMesh(
+        Entity redBox = addMesh(
             "RedBox",
             box,
             makeMaterial("RedBox", glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
             {-.9f, .25f, 0.f},
             glm::vec3{.5f});
+        redBox.attach<Spin>(Spin{{0.f, 1.2f, 0.f}});
 
         // A row of metal spheres sweeping roughness, which is the clearest way
         // to see whether the GGX distribution and the geometry term behave: the
@@ -593,6 +602,10 @@ namespace ege {
         Transform rowTransform{};
         rowTransform.translation = {0.f, .25f, 1.2f};
         sphereRow.attach<Transform>(rowTransform);
+        // Something for Play to do, and for Stop to undo. Turning the pivot
+        // rather than the spheres also demonstrates that the hierarchy is
+        // carrying the motion down to its children.
+        sphereRow.attach<Spin>(Spin{{0.f, 0.5f, 0.f}});
 
         for (int i = 0; i < 5; i++) {
             const float roughness = 0.05f + 0.95f * static_cast<float>(i) / 4.f;

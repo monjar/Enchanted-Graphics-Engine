@@ -30,6 +30,7 @@ namespace ege {
         registry.add<PointLight>();
         registry.add<DirectionalLight>();
         registry.add<Hidden>();
+        registry.add<Spin>();
 
         EGE_DEBUG("Component registry: {} component types", registry.all().size());
     }

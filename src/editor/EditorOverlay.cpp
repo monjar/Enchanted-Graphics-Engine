@@ -6,6 +6,7 @@
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
+#include "scene/SceneSerializer.hpp"
 
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
@@ -210,6 +211,10 @@ namespace ege {
             return changed;
         }
 
+        // Where Scene > Save and Scene > Load go. One well-known file until
+        // there is a project window to open scenes by id from.
+        constexpr const char* scenePath = "demo_scene.egescene";
+
         // The drag-and-drop payload the hierarchy moves entities with. Entity
         // handles are a packed integer, so the payload is the handle itself
         // rather than a pointer into anything that could be reallocated.
@@ -358,17 +363,20 @@ namespace ege {
         return io.WantCaptureMouse || io.WantCaptureKeyboard;
     }
 
-    void EditorOverlay::buildUi(
-        World& world, const Camera& camera, const PbrRenderSystem::Stats& stats, float frameTime) {
+    void EditorOverlay::buildUi(Context& context) {
         if (!overlayVisible) {
             return;
         }
+
+        World& world = context.world;
 
         // Something under the cursor from the first frame: the panels are
         // the product here, and an empty inspector demonstrates nothing.
         if (selected.isNull() && !world.all().empty()) {
             selected = world.all().front().id();
         }
+
+        drawMainMenuBar(context);
 
         // Panels dock into this rather than floating over the scene, which is
         // the difference between a debug overlay and an editor.
@@ -383,8 +391,8 @@ namespace ege {
             }
         }
 
-        drawViewportPanel(world, camera);
-        drawStatsPanel(stats, frameTime);
+        drawViewportPanel(context);
+        drawStatsPanel(context);
         drawHierarchyPanel(world);
         drawInspectorPanel(world);
         drawAssetBrowserPanel();
@@ -426,7 +434,75 @@ namespace ege {
         EGE_DEBUG("editor: built the default panel layout");
     }
 
-    void EditorOverlay::drawViewportPanel(World& world, const Camera& camera) {
+    void EditorOverlay::drawMainMenuBar(Context& context) {
+        if (!ImGui::BeginMainMenuBar()) {
+            return;
+        }
+
+        if (ImGui::BeginMenu("Scene")) {
+            // Disabled while playing: writing the running world over the file
+            // would make Stop restore something nobody authored.
+            ImGui::BeginDisabled(!context.playMode.isEditing());
+            if (ImGui::MenuItem("Save")) {
+                try {
+                    SceneSerializer::save(context.world, scenePath);
+                } catch (const std::exception& error) {
+                    EGE_ERROR("{}", error.what());
+                }
+            }
+            if (ImGui::MenuItem("Load")) {
+                try {
+                    SceneSerializer::load(context.world, scenePath);
+                    selected = EntityId{};
+                } catch (const std::exception& error) {
+                    EGE_ERROR("{}", error.what());
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::EndMenu();
+        }
+
+        // Play controls belong here rather than over the viewport: they change
+        // what the whole editor is doing, not what the scene view shows.
+        ImGui::Separator();
+        PlayMode& play = context.playMode;
+        if (play.isEditing()) {
+            if (ImGui::MenuItem("Play")) {
+                play.play(context.world);
+            }
+        } else if (play.isPlaying()) {
+            if (ImGui::MenuItem("Pause")) {
+                play.pause();
+            }
+        } else if (ImGui::MenuItem("Resume")) {
+            play.resume();
+        }
+
+        if (ImGui::MenuItem("Step")) {
+            play.step(context.world);
+        }
+
+        ImGui::BeginDisabled(play.isEditing());
+        if (ImGui::MenuItem("Stop")) {
+            play.stop(context.world);
+            // Restoring respawns everything, so whatever was selected is a
+            // stale handle now.
+            selected = EntityId{};
+        }
+        ImGui::EndDisabled();
+
+        if (!play.isEditing()) {
+            ImGui::Separator();
+            ImGui::TextColored(
+                ImVec4{1.f, 0.8f, 0.35f, 1.f}, "%s", play.isPaused() ? "paused" : "playing");
+        }
+
+        ImGui::EndMainMenuBar();
+    }
+
+    void EditorOverlay::drawViewportPanel(Context& context) {
+        World& world = context.world;
+        const Camera& camera = context.camera;
         // No padding: the image is the panel, and a strip of window background
         // around the scene reads as a rendering bug.
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.f, 0.f});
@@ -577,12 +653,13 @@ namespace ege {
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
     }
 
-    void EditorOverlay::drawStatsPanel(const PbrRenderSystem::Stats& stats, float frameTime) {
+    void EditorOverlay::drawStatsPanel(const Context& context) {
+        const PbrRenderSystem::Stats& stats = context.stats;
         ImGui::Begin("Stats");
         ImGui::Text(
             "%.2f ms  (%.0f fps)",
-            static_cast<double>(frameTime) * 1000.0,
-            1.0 / static_cast<double>(frameTime));
+            static_cast<double>(context.frameTime) * 1000.0,
+            1.0 / static_cast<double>(context.frameTime));
         ImGui::Separator();
         // Culling numbers describe the previous frame: the render that
         // produces them runs after the UI is declared.
@@ -590,6 +667,10 @@ namespace ege {
         ImGui::Text("culled      %zu", stats.culled);
         ImGui::Text("drawn       %zu", stats.drawn);
         ImGui::Text("mat binds   %zu", stats.materialBinds);
+        if (!context.playMode.isEditing()) {
+            ImGui::Separator();
+            ImGui::Text("snapshot    %zu B", context.playMode.snapshotSize());
+        }
         ImGui::End();
     }
 
