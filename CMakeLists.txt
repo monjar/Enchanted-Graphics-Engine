@@ -53,7 +53,8 @@ target_link_libraries(Enchanted PUBLIC
   ege::spdlog
   ege::vma
   ege::stb
-  ege::json)
+  ege::json
+  ege::jolt)
 
 target_compile_definitions(Enchanted PRIVATE
   EGE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets")
