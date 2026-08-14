@@ -61,6 +61,17 @@ target_compile_definitions(Enchanted PRIVATE
 
 ege_set_target_warnings(Enchanted WARNINGS_AS_ERRORS)
 
+# GCC's -Wtsan flags Jolt's fence-based reference counting when it is inlined
+# into this one translation unit, and SYSTEM include suppression does not
+# reach warnings raised at inlining time. The warning is about Jolt's idiom,
+# not our code, so it is switched off for exactly that file - everywhere,
+# not only under TSan, because the flag is harmless when TSan is off and the
+# preset must not change which warnings exist.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(src/physics/JoltPhysicsWorld.cpp
+    PROPERTIES COMPILE_OPTIONS "-Wno-tsan")
+endif()
+
 ege_add_shaders(Enchanted "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 
 # ---------------------------------------------------------------------------

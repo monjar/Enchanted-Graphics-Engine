@@ -8,7 +8,7 @@
 
 // The rest of Jolt, only after Jolt.h.
 #include <Jolt/Core/Factory.h>
-#include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Core/JobSystemSingleThreaded.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
@@ -26,7 +26,6 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
-#include <thread>
 
 namespace ege {
 
@@ -144,10 +143,12 @@ namespace ege {
             });
         }
 
-        // Buffers contacts raised during a step. Jolt calls the listener from
-        // its worker threads mid-simulation, so anything gameplay-facing has
-        // to be queued under a lock and handed over after the step, not acted
-        // on in the callback.
+        // Buffers contacts raised during a step: gameplay state must not be
+        // touched from inside the solver, so events are queued and handed
+        // over after the step. The lock is held because Jolt calls listeners
+        // from whatever threads its job system runs - today that is the
+        // stepping thread only, but this class must not silently become
+        // wrong the day the backend grows a worker pool.
         class ContactCollector final : public JPH::ContactListener {
         public:
             void OnContactAdded(
@@ -181,14 +182,14 @@ namespace ege {
         class JoltPhysicsWorld final : public PhysicsWorld {
         public:
             explicit JoltPhysicsWorld(const Settings& settings)
-                : tempAllocator{tempAllocatorBytes},
-                  // Fewer threads than cores: physics shares the machine with
-                  // rendering and the engine's own JobSystem, and the scenes
-                  // this engine simulates are far from saturating even one.
-                  jobs{
-                      JPH::cMaxPhysicsJobs,
-                      JPH::cMaxPhysicsBarriers,
-                      static_cast<int>(std::min(2u, std::thread::hardware_concurrency()))} {
+                // The step runs on the calling thread, no worker pool. The
+                // scenes this engine simulates are nowhere near paying for
+                // one, Jolt is deterministic regardless of thread count so
+                // nothing changes when one arrives, and a single-threaded
+                // step is one ThreadSanitizer can actually see through -
+                // Jolt's lock-free internals synchronise with bare fences,
+                // which TSan cannot model and would report as races.
+                : tempAllocator{tempAllocatorBytes}, jobs{JPH::cMaxPhysicsJobs} {
                 system.Init(
                     settings.maxBodies,
                     0,
@@ -416,7 +417,7 @@ namespace ege {
             ObjectLayerFilter objectPairs{};
             ContactCollector contacts{};
             JPH::TempAllocatorImpl tempAllocator;
-            JPH::JobSystemThreadPool jobs;
+            JPH::JobSystemSingleThreaded jobs;
             JPH::PhysicsSystem system{};
         };
 
