@@ -35,20 +35,51 @@ The copper torus is a **glTF import**: any `.gltf`/`.glb` dropped into
 hierarchy spawned as entities at startup. The demo's torus is itself a
 self-contained text glTF, so the no-binary-assets rule still holds.
 
-![The editor: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector, stats and console](docs/images/editor.png)
+## The demo
 
-Press **F1** for the editor. The scene renders into an offscreen image the UI
-samples as a texture, so it is a **viewport** — a panel with its own aspect
-ratio, with the hierarchy, inspector, stats and console docked around it
-rather than floating over the picture they describe. Entities can be created,
-deleted and reparented by dragging, moved with translate/rotate/scale
-**gizmos**, and edited through an **inspector generated entirely from the
-engine's reflection system**: a component gets editable fields, sliders,
-colour pickers and an entry in the add-component list by declaring itself with
-`EGE_REFLECT`, with no inspector code written per type.
+```sh
+./build/default/bin/EnchantedEngine --demo
+```
 
-Still to come: cascaded and point-light shadows, anti-aliasing, play mode and
-undo, the standalone editor application, C++ scripting and physics.
+![A camera tour of the demo scene](docs/images/demo-tour.gif)
+
+A scripted camera move through the scene with the editor hidden and the scene
+playing. Most of what a renderer does only becomes visible when the camera
+moves: a mirror sphere is a coloured ball until its reflection slides across
+it, and a shadow is a dark patch until it swings.
+[`docs/DEMO.md`](docs/DEMO.md) says what each shot is aimed at. The engine
+records its own frames — `--record DIR` writes every one as a PNG, with time
+advancing a fixed step per frame so the same recording is the same on any
+machine.
+
+## The editor
+
+![The editor: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector, asset browser and console](docs/images/editor.png)
+
+Press **F1**. The scene renders into an offscreen image the UI samples as a
+texture, so it is a **viewport** — a panel with its own aspect ratio, with the
+hierarchy, inspector, assets and console docked around it rather than floating
+over the picture they describe.
+
+- **Hierarchy** — create, delete and reparent by dragging.
+- **Inspector** — generated entirely from the engine's reflection system. A
+  component gets editable fields, sliders, colour pickers, asset slots and an
+  entry in the add-component list by declaring itself with `EGE_REFLECT`, with
+  no inspector code written per type.
+- **Gizmos** — translate, rotate and scale, world or local, with snapping.
+- **Assets** — everything the project catalogued, draggable into the
+  inspector's slots.
+- **Play / Pause / Step / Stop** — Play snapshots the world and Stop restores
+  it, so running the scene never costs the one you authored.
+- **Undo and redo** over every kind of edit, `Ctrl+Z` and `Ctrl+Shift+Z`.
+
+Assets are referenced by a stable id kept in a `.egameta` sidecar, so a
+reference survives its file being moved, renamed or reimported — and a saved
+scene comes back with its geometry, which is what makes Play/Stop and undo
+possible at all.
+
+Still to come: cascaded and point-light shadows, anti-aliasing, the standalone
+editor application, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -87,9 +118,10 @@ ctest --test-dir build/default --output-on-failure
 ```
 
 The suite covers logic that needs no GPU — primitive geometry, transform
-maths — so it runs anywhere. Rendering is covered separately by a headless
-smoke test in CI, which draws the demo scene under lavapipe with the
-validation layers enabled and fails on any validation message.
+maths, asset ids and cataloguing, scene round-trips, play mode and undo — so
+it runs anywhere. Rendering is covered separately by a headless smoke test in
+CI, which draws the demo scene under lavapipe with the validation layers
+enabled and fails on any validation message.
 
 ## Controls
 
@@ -100,6 +132,7 @@ validation layers enabled and fails on any validation message.
 | Arrow keys | Look |
 | Hold right mouse | Mouse-look (captures the cursor) |
 | `F1` | Show or hide the editor |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
 
 With the editor up, the camera answers only while the cursor is over the
 scene view; anywhere else the mouse and keyboard belong to the panels.
@@ -112,10 +145,11 @@ src/
   core/         application root, logging, assertions, time, job system
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
-  assets/       glTF import (cgltf); grows into the asset database in Phase 6
-  editor/       in-process panels and the offscreen viewport; the panels move
-                into EnchantedEditor in Phase 5 rather than being rewritten
-  rhi/          device, swapchain, pipeline, buffer, descriptors, textures, frame graph
+  assets/       asset database, stable ids, glTF import (cgltf)
+  editor/       in-process panels, the offscreen viewport, play mode and undo;
+                these move into EnchantedEditor rather than being rewritten
+  rhi/          device, swapchain, pipeline, buffer, descriptors, textures,
+                frame graph, frame recording
   render/       renderer, model, camera, materials, lights, bounds,
                 environment lighting, PBR, shadows, skybox, bloom and post-process
   scene/        world, entities, component pools, components, hierarchy, serialization

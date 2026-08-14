@@ -114,5 +114,8 @@ EGE_FIELD(anglesPerSecond).tooltip("Radians per second, applied while playing");
 EGE_REFLECT_END()
 
 // Hierarchy is deliberately not reflected for serialization: the links are
-// runtime entity handles, which are not stable across a save and load. Scene
-// files record parenting by entity order instead - see SceneSerializer.
+// runtime entity handles, and an EntityId is an index into a running world's
+// slot table, which means nothing in the next process. A scene file records
+// parenting as a position in its own entity array instead - see
+// SceneSerializer, which reads them back in a second pass because a child may
+// be written before its parent.

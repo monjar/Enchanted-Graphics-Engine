@@ -2,15 +2,15 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4 and 5 partially complete. Phase 6 not started.**
+> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4, 5 and 6 substantially complete. Phase 7 next.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import** with materials, textures and hierarchy. **Phase 5 is well underway**: the editor has an offscreen **viewport** with docked panels around it, a hierarchy that creates, deletes and reparents by dragging, a reflection-driven inspector with component add and remove, **transform gizmos**, and a console. Next: Play/Stop, undo/redo, the asset browser, and the **Phase 6 asset database** that gives imported content stable references — which is also what Play/Stop is waiting on, since a world snapshot cannot restore what a scene file cannot describe.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import**. The **editor** now has an offscreen viewport with docked panels, hierarchy editing, a reflection-driven inspector, transform gizmos, a console, an asset browser, **Play/Pause/Step/Stop** and **undo/redo**. The **asset database** underneath it gives every asset a stable id in a `.egameta` sidecar, which is what finally lets a scene save what it draws — and what unblocked play mode and undo, both of which are world snapshots. A `--demo` camera tour and self-recorded frames make all of it demonstrable. Next: **Phase 7 scripting**, which is what the placeholder `Spin` component is standing in for.
 
 ## 1. Where the project stands today
 
 Enchanted is a **Vulkan 1.3 forward renderer with a metallic-roughness PBR pipeline, image-based lighting and a frame graph**, an entity-component system, runtime reflection, VMA-backed GPU memory, textures with mip generation, a job system and a fixed-timestep clock. The scene renders linear HDR into a graph-managed float target and is tonemapped to the swapchain with the ACES fit; ambient light comes from a procedurally generated sky via irradiance and prefiltered-specular convolutions computed on the GPU at startup. It began as a port of Brendan Galea's Vulkan tutorial series and has since grown past it.
 
-Still absent, and tracked per phase in §6: anti-aliasing, cascaded and point-light shadows, the asset database, play mode, scripting and physics.
+Still absent, and tracked per phase in §6: anti-aliasing, cascaded and point-light shadows, cooked asset packaging, hot reload, scripting and physics.
 
 The Vulkan foundations are idiomatic and are being kept:
 
@@ -27,8 +27,14 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::ShadowMapSystem` | Depth-only sun shadow pass; the map itself is a frame graph transient |
 | `ege::BloomSystem` | Half-resolution bright-pass and separable blur, composited before the tonemap |
 | `ege::PostProcessSystem` | Fullscreen ACES tonemap from the HDR scene target to the backbuffer |
-| `ege::EditorOverlay` | In-process editor: viewport, hierarchy, reflection-driven inspector, gizmos, console, stats |
+| `ege::EditorOverlay` | In-process editor: viewport, hierarchy, inspector, gizmos, assets, console, stats |
 | `ege::EditorViewport` | The offscreen image the scene renders into and the UI samples |
+| `ege::PlayMode` | Snapshots the world on Play, restores it on Stop |
+| `ege::UndoStack` | Whole-scene mementos, bounded, with labels |
+| `ege::AssetDatabase` | Stable ids to assets; `.egameta` sidecars, cataloguing, loading |
+| `ege::Guid` | The 128-bit identifier an asset reference is made of |
+| `ege::FrameRecorder` | Writes rendered frames to disk, one PNG per frame |
+| `ege::DemoTour` | The scripted camera move `--demo` runs |
 | `ege::LogBuffer` | The recent log, in memory, for the console to show |
 | `ege::Buffer` | Generic mapped/staged Vulkan buffer |
 | `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
@@ -287,7 +293,7 @@ Three design notes worth carrying forward:
 - `each()` iterates a snapshot of the driving pool so a callback may despawn or attach without invalidating the walk. That copy is a real per-query cost; a deferred command buffer is the eventual answer.
 - Hierarchy makes the Phase 0 normal-matrix finding bite: a non-uniform parent scale combined with a child rotation introduces shear, which is exactly the case the inverse-scale shortcut excludes. Parented entities use the general `transpose(inverse(M))`; unparented ones keep the cheap path.
 
-`MeshRenderer`'s model and material are deliberately **not** serialized. They are runtime handles, and turning them into stable references is what the asset database in Phase 6 is for — so a reloaded scene currently restores transforms, names, lights and hierarchy but not geometry.
+~~`MeshRenderer`'s model and material are deliberately **not** serialized.~~ They were runtime handles, and a reloaded scene restored transforms, names and lights but nothing to draw. Phase 6's asset database replaced them with id-backed references, and parenting - which this section claimed was recorded by entity order and in fact was not recorded at all - is now written as a position in the file's own entity array.
 
 Two design notes worth carrying forward:
 
@@ -347,7 +353,7 @@ One bug worth recording, found by looking at the output rather than by the build
 
 **Done when:** a scene can be built, arranged, saved, played and stopped entirely inside the editor without touching code.
 
-**Outcome — partial, and past the point where it is only an overlay.** It began as one, as this phase's own sequencing note advises (thin and early beats complete and late): Dear ImGui (docking) drawn as the frame's last declared pass, with a hierarchy tree, a reflection-driven inspector and a stats panel over the backbuffer. It is deliberately in-process — the panels exercise the ECS and reflection APIs now and move into the standalone `EnchantedEditor` application when it exists, rather than being rewritten.
+**Outcome — substantially complete.** It began as one, as this phase's own sequencing note advises (thin and early beats complete and late): Dear ImGui (docking) drawn as the frame's last declared pass, with a hierarchy tree, a reflection-driven inspector and a stats panel over the backbuffer. It is deliberately in-process — the panels exercise the ECS and reflection APIs now and move into the standalone `EnchantedEditor` application when it exists, rather than being rewritten.
 
 *Done:*
 
@@ -363,7 +369,13 @@ One bug worth recording, found by looking at the output rather than by the build
 
 One bug worth recording, found because the viewport made it impossible to miss: editing a parented entity's `Transform` in the inspector changed the numbers and moved nothing. World matrices are cached behind a dirty flag on `Hierarchy`, and writing fields through reflection never set it. Fields now report whether they changed, and an edited entity and its descendants are marked dirty. This is the general shape of the problem reflection-driven editing has — a generic writer knows how to set a field but not what setting it invalidates.
 
-*Not done:* multi-select, an **asset browser** (waiting on Phase 6 — there is no asset database to browse), asset-backed inspector fields for the same reason, **undo/redo**, and **Play / Pause / Step / Stop**. Play/Stop is genuinely blocked rather than merely unscheduled: it snapshots the world on Play and restores it on Stop, and a scene file today cannot describe a `MeshRenderer`, whose model and material are runtime handles. Stopping would restore a scene with no geometry in it. Phase 6's stable asset references are the prerequisite.
+**Play / Pause / Step / Stop.** Play snapshots the world, Stop restores it, Step advances exactly one fixed tick. This was blocked on Phase 6 and said so: a snapshot is a scene file, and until a scene file could describe what a `MeshRenderer` draws, Stop would have handed back a world with no geometry in it. Snapshotting through the serializer rather than by copying pools is slower and deliberate — it means anything a scene file cannot describe does not survive Play, which is a property worth having visible, because it is exactly the set of things that will not survive a save either. Edit and play mode stay distinct by the simplest rule that works: nothing advances the world unless Play asked for it. The one play-mode system is honestly a placeholder — a `Spin` component with an angular velocity — because play mode has to be observable before it can be trusted and, until Phase 7, nothing else in the engine changes the world over time.
+
+**Undo and redo**, as whole-scene mementos rather than inverse commands. The serializer is fast, complete and reflection-driven, so the state before a change is one call away and correct by construction for every kind of edit — a dragged slider, a deleted subtree, a component attached, a reparent — with no command class per operation, each of which is somewhere a bug can hide. Inverse commands earn their cost when copying a scene is expensive; this one is eight kilobytes. The price is stated rather than hidden: restoring respawns every entity, so the selection is re-found by name afterwards. A drag is one step, not one per frame, because the memento is taken when the interaction begins and kept only if something changed before it ended.
+
+**The asset browser**, listing what the project holds by kind, with drag-and-drop into the inspector's mesh and material slots.
+
+*Not done:* multi-select, custom drawers for enums, and the standalone `EnchantedEditor` executable — the panels are still hosted in the engine's own application, which is where they were always going to start. Moving them is a build-system change now rather than a rewrite, which was the point of building them in-process.
 
 ### Phase 6 — Asset pipeline (~4 weeks)
 
@@ -374,6 +386,25 @@ One bug worth recording, found because the viewport made it impossible to miss: 
 - Cooked-asset packaging for `EnchantedPlayer` — a single archive, no source assets shipped.
 
 **Done when:** dropping a `.gltf` into the project folder imports it automatically and it is immediately draggable into the scene.
+
+**Outcome — substantially complete.** The identity half is done, which is the half everything else was blocked on.
+
+**GUID-based asset database.** Scanning the project catalogues every importable file and writes a `.egameta` sidecar for any that lacks one, so an id exists before the first reference to it does — requiring an explicit import step before assets have identities is how a pipeline becomes something people work around. The property the whole thing exists for is pinned by a test: move a file, rename it, rescan, and every reference already written still resolves. Paths are what the database answers, never what it stores.
+
+Three ways to get an id, for three situations. Random and minted into a sidecar, for a file just met. Derived from a name, for assets that exist only in code — the procedural primitives the demo is built from have no file to keep a sidecar beside and still have to be referenceable from a scene. Derived from a container's id plus an index, for the meshes and materials inside a glTF, so reimporting a model does not orphan every reference into it. The name derivation is part of the contract rather than an implementation detail, and the test pins its actual value: changing it would silently break every scene file already written.
+
+**References that survive.** `MeshRenderer` holds asset references rather than pointers, and only the id is written — a pointer is this process's answer to that id and means nothing in the next one. That asymmetry is why the component used to be unserializable, and fixing it is what let a saved scene come back drawable, which in turn unblocked play mode and undo. Parenting is recorded too, as a position in the file's own entity array, because an `EntityId` is an index into a running world's slot table and means nothing on disk.
+
+A native `.egematerial` format loads through the same reflection-driven serializer the scene uses, so a field added to `MaterialProperties` is readable without touching the loader.
+
+The database is split at the device boundary on purpose: cataloguing, sidecars and resolution need no GPU and are unit-tested; loading needs one, returns null without one, and is covered by the headless render test. Without that split none of it would be testable on a machine with no Vulkan device.
+
+*Not done, each for a stated reason:*
+
+- **Cooked-asset packaging** — it exists to feed `EnchantedPlayer`, which is Phase 10. Building the packer before the thing that unpacks it is how formats get designed against nothing.
+- **KTX2 and BC compression** — the same: it is a shipping concern, and the engine ships nothing yet.
+- **Hot reload** for textures, shaders, materials and meshes — wants the `FileWatcher` that Phase 7 builds for script hot reload. Doing it twice would be waste, which is the same reason Phase 2 deferred shader hot reload.
+- **Async loading on the JobSystem** — and this one is a hazard, not a preference. Uploading from a worker thread needs a command pool per thread; `Device` has one, and using it from several threads is a data race the validation layers would not necessarily catch. It lands when the RHI grows per-thread pools, not before.
 
 ### Phase 7 — C++ scripting (~5–6 weeks)
 
@@ -466,6 +497,7 @@ One bug worth recording, found because the viewport made it impossible to miss: 
 | 3 | Load a `.egescene`, edit in the debug overlay, save, reload — identical result |
 | 4 | Render Sponza / Damaged Helmet and compare against glTF sample-viewer references |
 | 5 | Build a scene from scratch in the editor, save, quit, reopen — everything preserved; Play/Stop restores exact pre-play state |
+| 6 | Move a referenced asset on disk, rescan, and the scene still finds it |
 | 7 | Edit a script during a play session; behaviour updates and entity state survives |
 | 8 | Character controller walks, jumps, pushes dynamic bodies, fires triggers; the same fixed-step sim run twice is identical |
 | 9+ | RenderDoc frame captures; frame-time budgets tracked in the profiler panel |
