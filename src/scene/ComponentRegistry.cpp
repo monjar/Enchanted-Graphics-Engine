@@ -2,7 +2,10 @@
 
 #include "assets/AssetSerialization.hpp"
 #include "core/Log.hpp"
+#include "render/DynamicMesh.hpp"
 #include "scene/Components.hpp"
+#include "script/Script.hpp"
+#include "script/ScriptSerialization.hpp"
 
 namespace ege {
 
@@ -24,13 +27,17 @@ namespace ege {
         // the asset database. Registered here so that anything with the
         // built-in components also has the converters they require.
         registerAssetSerializers();
+        // A behaviour list is polymorphic, so reflection cannot describe it
+        // and it converts specially too.
+        registerScriptSerializer();
 
         registry.add<Transform>();
         registry.add<MeshRenderer>();
         registry.add<PointLight>();
         registry.add<DirectionalLight>();
         registry.add<Hidden>();
-        registry.add<Spin>();
+        registry.add<Script>();
+        registry.add<DynamicMesh>();
 
         EGE_DEBUG("Component registry: {} component types", registry.all().size());
     }

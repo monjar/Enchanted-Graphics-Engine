@@ -2,17 +2,24 @@
 
 #include "scene/World.hpp"
 
+namespace ege {
+
+    class Device;
+
+}  // namespace ege
+
 namespace ege::systems {
 
-    // Systems that run only while the editor is playing.
-    //
-    // There is exactly one for now, and it is deliberately trivial: play mode
-    // has to be observable before it can be trusted, and until scripting
-    // arrives in Phase 7 nothing else in the engine changes the world over
-    // time. `Spin` is the placeholder that makes pressing Play do something
-    // visible and pressing Stop demonstrably undo it.
+    // Work the engine does over whole component sets, as opposed to the
+    // per-entity work a behaviour does.
 
-    // Advances every Spin component's owner by one fixed step.
-    void spin(World& world, float deltaSeconds);
+    // Rebuilds the GPU model of every dirty DynamicMesh and points its
+    // renderer at it.
+    //
+    // Once per frame rather than on every write, because a behaviour deforming
+    // a surface writes every vertex and uploading per write would upload per
+    // vertex. The dirty flag is what turns "a script changed this" into "this
+    // needs one upload".
+    void uploadDynamicMeshes(World& world, Device& device);
 
 }  // namespace ege::systems

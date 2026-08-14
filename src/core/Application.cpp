@@ -13,6 +13,7 @@
 #include "reflect/Serialization.hpp"
 #include "render/BloomSystem.hpp"
 #include "render/Camera.hpp"
+#include "render/DynamicMesh.hpp"
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PostProcessSystem.hpp"
@@ -26,6 +27,10 @@
 #include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
 #include "scene/Systems.hpp"
+#include "script/BehaviorRegistry.hpp"
+#include "script/Behaviors.hpp"
+#include "script/Script.hpp"
+#include "script/ScriptSystem.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -204,6 +209,7 @@ namespace ege {
         Camera camera{};
 
         PlayMode playMode{};
+        ScriptSystem scripts{};
 
         // The viewer is a plain transform rather than an entity: it is the
         // editor camera, not part of the scene being edited.
@@ -248,6 +254,7 @@ namespace ege {
         }
 
         bool running = true;
+        bool scriptsRunning = false;
         float sessionSeconds = 0.f;
 
         while (running && !window.shouldClose()) {
@@ -261,14 +268,28 @@ namespace ege {
 
             window.input().newFrame();
 
+            // Behaviours start when play does, not when they are attached:
+            // in the editor an entity carrying one is a description of what
+            // will happen, and Play is what makes it happen.
+            const bool wasPlaying = scriptsRunning;
+            scriptsRunning = !playMode.isEditing();
+            if (scriptsRunning) {
+                scripts.spawnPending(world);
+            } else if (wasPlaying) {
+                scripts.despawnAll(world);
+            }
+
             // Fixed-rate simulation, and only while the editor is playing.
             // Keeping edit mode and play mode distinct is what lets Stop put
             // the world back: nothing advances the scene unless Play asked
             // for it, so the snapshot stays the truth until then.
             while (time.consumeFixedStep()) {
                 if (playMode.consumeTick()) {
-                    systems::spin(world, time.fixedStep());
+                    scripts.fixedTick(world, time.fixedStep());
                 }
+            }
+            if (playMode.isPlaying()) {
+                scripts.tick(world, frameTime);
             }
 
             if (window.input().wasPressed(Key::F1)) {
@@ -296,6 +317,10 @@ namespace ege {
             if (options.exitAfterSeconds > 0.f && sessionSeconds >= options.exitAfterSeconds) {
                 running = false;
             }
+
+            // After the scripts, before anything reads geometry: a behaviour
+            // that rewrote a surface this tick wants it drawn this frame.
+            systems::uploadDynamicMeshes(world, device);
 
             // Composes world matrices for every parented entity once per frame,
             // rather than each consumer recomputing the same parent chain.
@@ -653,7 +678,18 @@ namespace ege {
             makeMaterial("RedBox", glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
             {-.9f, .25f, 0.f},
             glm::vec3{.5f});
-        redBox.attach<Spin>(Spin{{0.f, 1.2f, 0.f}});
+        {
+            // The behaviour, not a component with the same job: this is what
+            // `Spin` was standing in for.
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "ege::Spinner";
+            auto spinner = std::make_shared<Spinner>();
+            spinner->anglesPerSecond = {0.f, 1.2f, 0.f};
+            slot.instance = std::move(spinner);
+            script.behaviors.push_back(std::move(slot));
+            redBox.attach<Script>(std::move(script));
+        }
 
         // A row of metal spheres sweeping roughness, which is the clearest way
         // to see whether the GGX distribution and the geometry term behave: the
@@ -669,7 +705,16 @@ namespace ege {
         // Something for Play to do, and for Stop to undo. Turning the pivot
         // rather than the spheres also demonstrates that the hierarchy is
         // carrying the motion down to its children.
-        sphereRow.attach<Spin>(Spin{{0.f, 0.5f, 0.f}});
+        {
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "ege::Spinner";
+            auto spinner = std::make_shared<Spinner>();
+            spinner->anglesPerSecond = {0.f, 0.5f, 0.f};
+            slot.instance = std::move(spinner);
+            script.behaviors.push_back(std::move(slot));
+            sphereRow.attach<Script>(std::move(script));
+        }
 
         for (int i = 0; i < 5; i++) {
             const float roughness = 0.05f + 0.95f * static_cast<float>(i) / 4.f;

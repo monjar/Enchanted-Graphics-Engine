@@ -11,13 +11,16 @@
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
-#include "scene/Systems.hpp"
+#include "script/Behaviors.hpp"
+#include "script/Script.hpp"
+#include "script/ScriptSystem.hpp"
 
 #include <doctest/doctest.h>
 
 using ege::Entity;
 using ege::PlayMode;
-using ege::Spin;
+using ege::Script;
+using ege::ScriptSystem;
 using ege::Transform;
 using ege::World;
 
@@ -32,8 +35,24 @@ namespace {
     Entity buildSpinner(World& world) {
         Entity entity = world.spawn("Spinner");
         entity.attach<Transform>();
-        entity.attach<Spin>(Spin{{0.f, 2.f, 0.f}});
+        Script script{};
+        Script::Slot slot{};
+        slot.behavior = "ege::Spinner";
+        auto spinner = std::make_shared<ege::Spinner>();
+        spinner->anglesPerSecond = {0.f, 2.f, 0.f};
+        slot.instance = std::move(spinner);
+        script.behaviors.push_back(std::move(slot));
+        entity.attach<Script>(std::move(script));
         return entity;
+    }
+
+    // Play mode drives behaviours through the script system, so the tests
+    // drive them the same way rather than calling into a behaviour directly.
+    void advance(World& world, ScriptSystem& scripts, int steps) {
+        scripts.spawnPending(world);
+        for (int step = 0; step < steps; step++) {
+            scripts.fixedTick(world, 1.f / 60.f);
+        }
     }
 
 }  // namespace
@@ -51,10 +70,11 @@ TEST_CASE("play snapshots and stop restores") {
     REQUIRE(play.isPlaying());
     CHECK(play.snapshotSize() > 0);
 
+    ScriptSystem scripts;
     for (int step = 0; step < 30; step++) {
         REQUIRE(play.consumeTick());
-        ege::systems::spin(world, 1.f / 60.f);
     }
+    advance(world, scripts, 30);
     CHECK(world.findByName("Spinner").fetch<Transform>().rotation.y > 0.5f);
 
     play.stop(world);
@@ -139,11 +159,9 @@ TEST_CASE("a second play does not overwrite the snapshot") {
     buildSpinner(world);
 
     PlayMode play;
+    ScriptSystem scripts;
     play.play(world);
-    for (int step = 0; step < 30; step++) {
-        play.consumeTick();
-        ege::systems::spin(world, 1.f / 60.f);
-    }
+    advance(world, scripts, 30);
 
     play.play(world);
     play.stop(world);
@@ -173,17 +191,22 @@ TEST_CASE("play mode restores hierarchy as well as components") {
     World world;
     Entity pivot = world.spawn("Pivot");
     pivot.attach<Transform>();
-    pivot.attach<Spin>(Spin{{0.f, 2.f, 0.f}});
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "ege::Spinner";
+    auto spinner = std::make_shared<ege::Spinner>();
+    spinner->anglesPerSecond = {0.f, 2.f, 0.f};
+    slot.instance = std::move(spinner);
+    script.behaviors.push_back(std::move(slot));
+    pivot.attach<Script>(std::move(script));
     Entity child = world.spawn("Child");
     child.attach<Transform>();
     ege::hierarchy::setParent(world, child.id(), pivot.id());
 
     PlayMode play;
+    ScriptSystem scripts;
     play.play(world);
-    for (int step = 0; step < 30; step++) {
-        play.consumeTick();
-        ege::systems::spin(world, 1.f / 60.f);
-    }
+    advance(world, scripts, 30);
     play.stop(world);
 
     Entity restoredPivot = world.findByName("Pivot");
