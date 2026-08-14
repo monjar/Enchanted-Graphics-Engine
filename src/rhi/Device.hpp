@@ -72,6 +72,12 @@ namespace ege {
         // supports the linear filtering that mip generation blits require.
         VkPhysicalDevice physicalDeviceHandle() const { return physicalDevice; }
 
+        // Needed by libraries that drive Vulkan themselves - the ImGui
+        // backend initialises against the instance and queue family directly.
+        VkInstance instanceHandle() const { return instance; }
+
+        uint32_t graphicsQueueFamily() { return findPhysicalQueueFamilies().graphicsFamily; }
+
         // Shared pipeline cache, persisted to disk between runs.
         //
         // Compiling a pipeline means the driver compiling SPIR-V to its own ISA,
@@ -129,6 +135,8 @@ namespace ege {
         // helper functions
         bool isDeviceSuitable(VkPhysicalDevice device);
         std::vector<const char*> getRequiredExtensions();
+        static bool isInstanceExtensionAvailable(const char* name);
+        static bool isDeviceExtensionAvailable(VkPhysicalDevice device, const char* name);
         bool checkValidationLayerSupport();
         QueueFamilyIndices findQueueFamilies(VkPhysicalDevice device);
         void populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo);

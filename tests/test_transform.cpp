@@ -108,3 +108,50 @@ TEST_CASE("normal matrix keeps normals perpendicular under non-uniform scale") {
         glm::dot(transformedNormal, glm::normalize(transformedB)) ==
         doctest::Approx(0.f).epsilon(1e-4).scale(1.f));
 }
+
+// fromMatrix is the inverse of mat4(), and both glTF import and the editor's
+// gizmo depend on the round trip being exact. Randomised rather than a handful
+// of cases, because the failure mode is a wrong Euler convention, which agrees
+// with the right one on any axis-aligned rotation.
+TEST_CASE("fromMatrix inverts mat4 for translation, rotation and scale") {
+    std::mt19937 rng{20260814};
+    std::uniform_real_distribution<float> angle{
+        -glm::pi<float>() * 0.49f, glm::pi<float>() * 0.49f};
+    std::uniform_real_distribution<float> offset{-25.f, 25.f};
+    std::uniform_real_distribution<float> scale{0.05f, 6.f};
+
+    for (int iteration = 0; iteration < 2000; iteration++) {
+        Transform original{};
+        original.translation = {offset(rng), offset(rng), offset(rng)};
+        // Pitch stays inside a right angle: at exactly +-90 degrees the YXZ
+        // decomposition is genuinely ambiguous - yaw and roll become the same
+        // rotation - so the angles need not come back as they went in even
+        // though the matrix does.
+        original.rotation = {angle(rng), offset(rng), offset(rng)};
+        original.scale = {scale(rng), scale(rng), scale(rng)};
+
+        const glm::mat4 matrix = original.mat4();
+        const Transform recovered = Transform::fromMatrix(matrix);
+        const glm::mat4 rebuilt = recovered.mat4();
+
+        for (int column = 0; column < 4; column++) {
+            for (int row = 0; row < 4; row++) {
+                REQUIRE(
+                    rebuilt[column][row] ==
+                    doctest::Approx(matrix[column][row]).epsilon(1e-4).scale(10.f));
+            }
+        }
+    }
+}
+
+TEST_CASE("fromMatrix leaves a degenerate axis as identity rather than NaN") {
+    Transform flattened{};
+    flattened.scale = {1.f, 0.f, 1.f};
+
+    const Transform recovered = Transform::fromMatrix(flattened.mat4());
+
+    CHECK(recovered.scale.y == doctest::Approx(0.f));
+    for (int component = 0; component < 3; component++) {
+        CHECK(recovered.rotation[component] == recovered.rotation[component]);
+    }
+}

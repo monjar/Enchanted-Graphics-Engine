@@ -1,7 +1,5 @@
 #include "rhi/Pipeline.hpp"
 
-#include "render/Model.hpp"
-
 #include <cassert>
 #include <fstream>
 #include <iostream>
@@ -59,8 +57,9 @@ namespace ege {
             configInfo.pipelineLayout != VK_NULL_HANDLE &&
             "Cannot create graphics pipeline: No pipelineLayout provided in configInfo");
         assert(
-            configInfo.renderPass != VK_NULL_HANDLE &&
-            "Cannot create graphics pipeline: No renderPass provided in configInfo");
+            (!configInfo.colorAttachmentFormats.empty() ||
+             configInfo.depthAttachmentFormat != VK_FORMAT_UNDEFINED) &&
+            "Cannot create graphics pipeline: no attachment formats provided");
 
         auto vertShaderCode = readFile(vertFilePath);
         auto fragShaderCode = readFile(fragFilePath);
@@ -86,20 +85,28 @@ namespace ege {
         shaderStages[1].pNext = nullptr;
         shaderStages[1].pSpecializationInfo = nullptr;
 
-        auto bindingDescriptions = Model::Vertex::getBindingDescriptions();
-        auto attributeDescriptions = Model::Vertex::getAttributeDescriptions();
         VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
         vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
         vertexInputInfo.vertexAttributeDescriptionCount =
-            static_cast<uint32_t>(attributeDescriptions.size());
+            static_cast<uint32_t>(configInfo.attributeDescriptions.size());
         vertexInputInfo.vertexBindingDescriptionCount =
-            static_cast<uint32_t>(bindingDescriptions.size());
-        ;
-        vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions.data();
-        vertexInputInfo.pVertexBindingDescriptions = bindingDescriptions.data();
+            static_cast<uint32_t>(configInfo.bindingDescriptions.size());
+        vertexInputInfo.pVertexAttributeDescriptions = configInfo.attributeDescriptions.data();
+        vertexInputInfo.pVertexBindingDescriptions = configInfo.bindingDescriptions.data();
+
+        // The dynamic-rendering replacement for a render pass reference: the
+        // pipeline is compatible with any rendering instance whose attachments
+        // match these formats.
+        VkPipelineRenderingCreateInfo renderingInfo{};
+        renderingInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+        renderingInfo.colorAttachmentCount =
+            static_cast<uint32_t>(configInfo.colorAttachmentFormats.size());
+        renderingInfo.pColorAttachmentFormats = configInfo.colorAttachmentFormats.data();
+        renderingInfo.depthAttachmentFormat = configInfo.depthAttachmentFormat;
 
         VkGraphicsPipelineCreateInfo pipelineInfo{};
         pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        pipelineInfo.pNext = &renderingInfo;
         pipelineInfo.stageCount = 2;
         pipelineInfo.pStages = shaderStages;
         pipelineInfo.pVertexInputState = &vertexInputInfo;
@@ -112,15 +119,18 @@ namespace ege {
         pipelineInfo.pDynamicState = &configInfo.dynamicStateInfo;
 
         pipelineInfo.layout = configInfo.pipelineLayout;
-        pipelineInfo.renderPass = configInfo.renderPass;
-        pipelineInfo.subpass = configInfo.subpass;
+        pipelineInfo.renderPass = VK_NULL_HANDLE;
 
         pipelineInfo.basePipelineIndex = -1;
         pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
 
         if (vkCreateGraphicsPipelines(
-                device.device(), VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &graphicsPipeline) !=
-            VK_SUCCESS) {
+                device.device(),
+                device.pipelineCache(),
+                1,
+                &pipelineInfo,
+                nullptr,
+                &graphicsPipeline) != VK_SUCCESS) {
             throw std::runtime_error("failed to create graphics pipeline");
         }
     }

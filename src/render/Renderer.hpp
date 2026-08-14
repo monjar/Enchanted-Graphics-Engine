@@ -18,9 +18,29 @@ namespace ege {
         Renderer(const Renderer& other) = delete;
         Renderer& operator=(const Renderer&) = delete;
 
-        VkRenderPass getSwapChainRenderPass() const { return egeSwapChain->getRenderPass(); }
+        VkFormat getSwapChainColorFormat() const { return egeSwapChain->getSwapChainImageFormat(); }
+
+        VkFormat getSwapChainDepthFormat() const { return egeSwapChain->getSwapChainDepthFormat(); }
+
+        VkExtent2D getSwapChainExtent() const { return egeSwapChain->getSwapChainExtent(); }
+
+        uint32_t getSwapChainImageCount() const {
+            return static_cast<uint32_t>(egeSwapChain->imageCount());
+        }
 
         float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
+
+        // The image acquired by beginFrame, for the frame graph to import as
+        // this frame's backbuffer.
+        VkImage currentSwapChainImage() const {
+            assert(isFrameStarted && "no image is acquired outside a frame");
+            return egeSwapChain->getImage(currentImageIndex);
+        }
+
+        VkImageView currentSwapChainImageView() const {
+            assert(isFrameStarted && "no image is acquired outside a frame");
+            return egeSwapChain->getImageView(currentImageIndex);
+        }
 
         bool isFrameInProgress() const { return isFrameStarted; };
 
@@ -36,8 +56,6 @@ namespace ege {
 
         VkCommandBuffer beginFrame();
         void endFrame();
-        void beginSwapChainRenderPass(VkCommandBuffer commandBuffer);
-        void endSwapChainRenderPass(VkCommandBuffer commandBuffer);
 
     private:
         void createCommandBuffers();

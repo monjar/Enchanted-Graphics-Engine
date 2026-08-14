@@ -379,3 +379,6 @@ demo_scene.egescene
 
 # Per-driver artifact, not shared
 pipeline_cache.bin
+
+# Editor layout, written by ImGui beside the executable
+imgui.ini

@@ -1,14 +1,22 @@
 #include "core/Application.hpp"
 
+#include "assets/GltfLoader.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
+#include "editor/EditorOverlay.hpp"
 #include "platform/CameraController.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "reflect/Serialization.hpp"
+#include "render/BloomSystem.hpp"
 #include "render/Camera.hpp"
+#include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
+#include "render/PostProcessSystem.hpp"
+#include "render/ShadowMapSystem.hpp"
+#include "render/SkyboxSystem.hpp"
 #include "rhi/Buffer.hpp"
+#include "rhi/FrameGraph.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
@@ -17,7 +25,9 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
 #include <array>
+#include <filesystem>
 #include <stdexcept>
 
 namespace ege {
@@ -32,7 +42,16 @@ namespace ege {
             glm::mat4 projection{1.f};
             glm::mat4 view{1.f};
             glm::mat4 inverseView{1.f};
-            glm::vec4 ambientLightColor{1.f, 1.f, 1.f, .03f};  // w is intensity
+            // The skybox unprojects pixels back into rays with this.
+            glm::mat4 inverseProjection{1.f};
+            // The sun: the shadow pass renders through this matrix and the
+            // lighting pass projects fragments back through it for the test.
+            glm::mat4 sunViewProjection{1.f};
+            glm::vec4 sunDirection{0.f, 1.f, 0.f, 0.f};
+            glm::vec4 sunColor{1.f, 1.f, 1.f, 0.f};  // w is intensity, 0 = off
+            // A tint and scale on the image-based ambient, which is already
+            // physical - so the neutral value is 1, not a small fudge factor.
+            glm::vec4 ambientLightColor{1.f, 1.f, 1.f, 1.f};  // w is intensity
             GpuPointLight pointLights[maxPointLights]{};
             alignas(16) int numLights = 0;
         };
@@ -49,10 +68,15 @@ namespace ege {
         registerBuiltinSerializers();
         registerBuiltinComponents();
         EGE_DEBUG("Reflection: {} types registered", TypeRegistry::instance().all().size());
+        // Each per-frame global set holds the UBO plus the four image-based
+        // lighting maps: irradiance, prefiltered specular, BRDF LUT and the
+        // raw environment for the skybox.
         globalPool =
             DescriptorPool::Builder(device)
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
+                .addPoolSize(
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 5)
                 .build();
 
         // Four image samplers per material, and room for a reasonable number
@@ -75,6 +99,10 @@ namespace ege {
     }
 
     void Application::run() {
+        // Generated before anything renders: the lighting environment is as
+        // much a prerequisite of the frame as the meshes are.
+        EnvironmentLighting environmentLighting{device};
+
         std::vector<std::unique_ptr<Buffer>> uboBuffers(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < uboBuffers.size(); i++) {
             uboBuffers[i] = std::make_unique<Buffer>(
@@ -89,21 +117,70 @@ namespace ege {
         auto globalSetLayout =
             DescriptorSetLayout::Builder(device)
                 .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS)
+                .addBinding(
+                    1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                .addBinding(
+                    2, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                .addBinding(
+                    3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                .addBinding(
+                    4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // The sun's shadow map. Unlike the lighting maps this one is
+                // a frame graph transient, so the binding is rewritten every
+                // frame with whatever physical image the graph provides.
+                .addBinding(
+                    5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < globalDescriptorSets.size(); i++) {
             auto bufferInfo = uboBuffers[i]->descriptorInfo();
+            // The lighting maps are generated once and never change, so they
+            // are written alongside the per-frame buffer and left alone.
+            auto irradianceInfo = environmentLighting.irradianceInfo();
+            auto prefilteredInfo = environmentLighting.prefilteredInfo();
+            auto brdfLutInfo = environmentLighting.brdfLutInfo();
+            auto environmentInfo = environmentLighting.environmentInfo();
             DescriptorWriter(*globalSetLayout, *globalPool)
                 .writeBuffer(0, &bufferInfo)
+                .writeImage(1, &irradianceInfo)
+                .writeImage(2, &prefilteredInfo)
+                .writeImage(3, &brdfLutInfo)
+                .writeImage(4, &environmentInfo)
                 .build(globalDescriptorSets[i]);
         }
 
+        // The scene renders into a linear HDR target, not the backbuffer:
+        // lighting sums exceed 1 constantly, and clamping them at the
+        // swapchain is what made every bright highlight flat white. Sixteen
+        // bits per channel is the float format with guaranteed
+        // color-attachment support.
+        constexpr VkFormat hdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
         PbrRenderSystem pbrRenderSystem{
             device,
-            renderer.getSwapChainRenderPass(),
+            hdrFormat,
+            renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout(),
             materialSetLayout->getDescriptorSetLayout()};
+
+        SkyboxSystem skybox{
+            device,
+            hdrFormat,
+            renderer.getSwapChainDepthFormat(),
+            globalSetLayout->getDescriptorSetLayout()};
+
+        ShadowMapSystem shadowSystem{device, renderer.getSwapChainDepthFormat()};
+
+        BloomSystem bloom{device, hdrFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
+
+        PostProcessSystem postProcess{
+            device, renderer.getSwapChainColorFormat(), SwapChain::MAX_FRAMES_IN_FLIGHT};
+
+        EditorOverlay overlay{
+            window, device, renderer.getSwapChainColorFormat(), renderer.getSwapChainImageCount()};
+
+        FrameGraph graph{};
 
         Camera camera{};
 
@@ -142,21 +219,51 @@ namespace ege {
                 // fixedTick(time.fixedStep());
             }
 
+            if (window.input().wasPressed(Key::F1)) {
+                overlay.toggle();
+            }
+
             // Rendering and camera control stay on the variable delta: they
-            // should run as often as the display allows.
-            cameraController.update(window.input(), frameTime, viewerTransform);
+            // should run as often as the display allows - unless a panel owns
+            // the input, in which case dragging a slider must not also fly
+            // the camera. A captured cursor is not over anything, so a look
+            // drag that began in the scene view keeps the camera regardless.
+            const bool cameraOwnsInput =
+                window.input().cursorMode() != CursorMode::Normal || !overlay.wantsInput();
+            if (cameraOwnsInput) {
+                cameraController.update(window.input(), frameTime, viewerTransform);
+            }
 
             // Composes world matrices for every parented entity once per frame,
             // rather than each consumer recomputing the same parent chain.
             hierarchy::resolveTransforms(world);
-            camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
-            float aspectRatio = renderer.getAspectRatio();
-
-            // camera.setOrthographicProjection(-aspectRatio, aspectRatio, -1, 1, -1, 1);
-
-            camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
 
             if (auto commandBuffer = renderer.beginFrame()) {
+                const VkExtent2D swapExtent = renderer.getSwapChainExtent();
+
+                // Before any UI is declared: the scene view hands ImGui a
+                // descriptor set for the image below, and resizing it after
+                // the draw list has referenced it would free the set in use.
+                overlay.prepareFrame(swapExtent);
+                const EditorOverlay::SceneTarget sceneTarget = overlay.sceneTarget(swapExtent);
+
+                // The scene is framed by whatever it renders into - the editor's
+                // viewport panel while that is up, the window itself when it is
+                // not - so the aspect ratio follows the target, not the display.
+                // Settled before the UI is built, because the scene view's
+                // gizmo projects through these very matrices.
+                const VkExtent2D renderExtent = sceneTarget.extent;
+                camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
+                const float aspectRatio = static_cast<float>(renderExtent.width) /
+                                          static_cast<float>(std::max(renderExtent.height, 1u));
+                camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
+
+                // The ImGui frame opens with the render frame: NewFrame and
+                // Render must pair, and a frame skipped for resize renders
+                // no UI either.
+                overlay.beginFrame();
+                overlay.buildUi(world, camera, pbrRenderSystem.stats(), frameTime);
+
                 const uint32_t frameIndex = renderer.getFrameIndex();
                 FrameInfo frameInfo{
                     frameIndex,
@@ -171,6 +278,29 @@ namespace ege {
                 ubo.projection = camera.getProjection();
                 ubo.view = camera.getView();
                 ubo.inverseView = glm::inverse(camera.getView());
+                ubo.inverseProjection = glm::inverse(camera.getProjection());
+
+                // The sun is the first DirectionalLight found; none means the
+                // shader's sun term stays off via zero intensity.
+                bool hasSun = false;
+                world.each<DirectionalLight>([&](Entity, DirectionalLight& sun) {
+                    if (hasSun) {
+                        return;
+                    }
+                    hasSun = true;
+                    const glm::vec3 direction = glm::normalize(sun.direction);
+                    ubo.sunDirection = glm::vec4{direction, 0.f};
+                    ubo.sunColor = glm::vec4{sun.color, sun.intensity};
+
+                    // An orthographic frustum sized to the demo floor, looking
+                    // along the light. Fitting it to the view frustum - and
+                    // splitting it into cascades - is what replaces this once
+                    // scenes outgrow a single fixed box.
+                    Camera sunCamera{};
+                    sunCamera.setViewTarget(-direction * 20.f, glm::vec3{0.f});
+                    sunCamera.setOrthographicProjection(-12.f, 12.f, -12.f, 12.f, 1.f, 40.f);
+                    ubo.sunViewProjection = sunCamera.getProjection() * sunCamera.getView();
+                });
                 // Lights are entities now, gathered per frame rather than
                 // held in a parallel list. The cap is the shader's array size;
                 // clustered shading in Phase 9 is what removes it.
@@ -190,10 +320,175 @@ namespace ege {
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
-                // render
-                renderer.beginSwapChainRenderPass(commandBuffer);
-                pbrRenderSystem.render(frameInfo);
-                renderer.endSwapChainRenderPass(commandBuffer);
+                // render: declare the frame, then let the graph run it. The
+                // declarations are cheap enough to restate every frame, and
+                // doing so is what lets passes appear and disappear freely.
+                graph.beginFrame(swapExtent);
+
+                TransientImageDesc sceneColorDesc{};
+                sceneColorDesc.format = hdrFormat;
+                sceneColorDesc.extent = renderExtent;
+                sceneColorDesc.clearValue.color = {{0.01f, 0.01f, 0.01f, 1.0f}};
+                FrameGraphResource sceneColor = graph.createTransient("sceneColor", sceneColorDesc);
+
+                TransientImageDesc sceneDepthDesc{};
+                sceneDepthDesc.format = renderer.getSwapChainDepthFormat();
+                sceneDepthDesc.extent = renderExtent;
+                sceneDepthDesc.clearValue.depthStencil = {1.0f, 0};
+                FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", sceneDepthDesc);
+
+                // Fixed-size, not swapchain-relative: shadow quality has
+                // nothing to do with window size.
+                TransientImageDesc shadowMapDesc{};
+                shadowMapDesc.format = renderer.getSwapChainDepthFormat();
+                shadowMapDesc.extent = {ShadowMapSystem::resolution, ShadowMapSystem::resolution};
+                shadowMapDesc.clearValue.depthStencil = {1.0f, 0};
+                FrameGraphResource shadowMap = graph.createTransient("shadowMap", shadowMapDesc);
+
+                // Bloom works at half resolution: it is blurred anyway, and
+                // half the pixels means a quarter of the blur cost.
+                const VkExtent2D halfExtent{
+                    std::max(renderExtent.width / 2, 1u), std::max(renderExtent.height / 2, 1u)};
+
+                TransientImageDesc bloomDesc{};
+                bloomDesc.format = hdrFormat;
+                bloomDesc.extent = halfExtent;
+                FrameGraphResource bloomBright = graph.createTransient("bloomBright", bloomDesc);
+                FrameGraphResource bloomBlurred = graph.createTransient("bloomBlurred", bloomDesc);
+                FrameGraphResource bloomFinal = graph.createTransient("bloomFinal", bloomDesc);
+
+                FrameGraphResource backbuffer = graph.importImage(
+                    "backbuffer",
+                    renderer.currentSwapChainImage(),
+                    renderer.currentSwapChainImageView(),
+                    renderer.getSwapChainColorFormat(),
+                    renderer.getSwapChainExtent(),
+                    VkClearValue{},
+                    // What the acquire semaphore is waited at, so the first
+                    // backbuffer barrier chains after the acquire.
+                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+                // Where the display transform lands. With the editor up that is
+                // the viewport image the Scene panel samples, and the UI pass
+                // becomes the only thing writing the window; with the editor
+                // hidden the tonemap goes straight to the backbuffer and the
+                // frame is exactly what it was before the editor existed.
+                FrameGraphResource displayTarget = backbuffer;
+                if (sceneTarget.offscreen) {
+                    displayTarget = graph.importImage(
+                        "viewport",
+                        sceneTarget.image,
+                        sceneTarget.view,
+                        renderer.getSwapChainColorFormat(),
+                        sceneTarget.extent,
+                        VkClearValue{},
+                        // Last frame's UI sampled this image; writing over it
+                        // has to wait for that read to have finished.
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                }
+
+                const glm::mat4 sunViewProjection = ubo.sunViewProjection;
+
+                graph.addPass(
+                    "shadow",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.write(shadowMap, ResourceAccess::depthWrite);
+                    },
+                    [&, sunViewProjection](VkCommandBuffer cmd, const FrameGraphResources&) {
+                        shadowSystem.render(cmd, world, sunViewProjection);
+                    });
+
+                graph.addPass(
+                    "scene",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(shadowMap, ResourceAccess::sampled);
+                        pass.write(sceneColor, ResourceAccess::colorWrite);
+                        pass.write(sceneDepth, ResourceAccess::depthWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        // The shadow map is a graph transient, so which
+                        // physical image backs it is only known here; the
+                        // per-frame set makes rebinding it safe.
+                        VkDescriptorImageInfo shadowInfo{};
+                        shadowInfo.sampler = shadowSystem.comparisonSampler();
+                        shadowInfo.imageView = resolved.view(shadowMap);
+                        shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                        DescriptorWriter(*globalSetLayout, *globalPool)
+                            .writeImage(5, &shadowInfo)
+                            .overwrite(globalDescriptorSets[frameIndex]);
+
+                        frameInfo.commandBuffer = cmd;
+                        pbrRenderSystem.render(frameInfo);
+                        // After the geometry: the depth test rejects every
+                        // covered pixel, so the sky shades only what remains.
+                        skybox.render(cmd, frameInfo.globalDescriptorSet);
+                    });
+
+                // The bloom chain: what glows, extracted and blurred. Three
+                // passes, each an addPass call - the graph derives all the
+                // render-to-sample transitions between them.
+                graph.addPass(
+                    "bloomBright",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(sceneColor, ResourceAccess::sampled);
+                        pass.write(bloomBright, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        bloom.renderBrightPass(cmd, frameIndex, resolved.view(sceneColor));
+                    });
+
+                graph.addPass(
+                    "bloomBlurH",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(bloomBright, ResourceAccess::sampled);
+                        pass.write(bloomBlurred, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        bloom.renderBlur(
+                            cmd, frameIndex, resolved.view(bloomBright), glm::vec2{1.f, 0.f});
+                    });
+
+                graph.addPass(
+                    "bloomBlurV",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(bloomBlurred, ResourceAccess::sampled);
+                        pass.write(bloomFinal, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        bloom.renderBlur(
+                            cmd, frameIndex, resolved.view(bloomBlurred), glm::vec2{0.f, 1.f});
+                    });
+
+                graph.addPass(
+                    "tonemap",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(sceneColor, ResourceAccess::sampled);
+                        pass.read(bloomFinal, ResourceAccess::sampled);
+                        pass.write(displayTarget, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        postProcess.render(
+                            cmd, frameIndex, resolved.view(sceneColor), resolved.view(bloomFinal));
+                    });
+
+                // UI last, onto the backbuffer. Whether it loads what the
+                // tonemap left there or samples the viewport image and paints
+                // the window itself is one declared read either way; the
+                // render-to-sample transition is the graph's problem.
+                graph.addPass(
+                    "ui",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        if (sceneTarget.offscreen) {
+                            pass.read(displayTarget, ResourceAccess::sampled);
+                        }
+                        pass.write(backbuffer, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources&) { overlay.render(cmd); });
+
+                graph.compile();
+                graph.execute(device, commandBuffer);
                 renderer.endFrame();
             }
         }
@@ -300,6 +595,22 @@ namespace ege {
         addLight("FillLight", {1.8f, -1.2f, 0.8f}, {0.4f, 0.6f, 1.f}, 5.f);
         addLight("RimLight", {0.f, -0.9f, 2.2f}, {1.f, 0.5f, 0.3f}, 3.f);
 
+        // The sun. Its direction is the negation of the sky shader's sun
+        // position, so the disk in the environment, the direct light and the
+        // shadows all agree on where the sun is.
+        {
+            Entity sun = world.spawn("Sun");
+            DirectionalLight sunLight{};
+            sunLight.direction = glm::normalize(glm::vec3{0.6f, 0.64f, 0.48f});
+            sunLight.color = glm::vec3{1.f, 0.93f, 0.82f};
+            // Low sun, matching the evening sky - bright enough to cast
+            // legible shadows without flattening the point lights.
+            sunLight.intensity = 1.4f;
+            sun.attach<DirectionalLight>(sunLight);
+        }
+
+        importGltfModels();
+
         EGE_INFO(
             "Scene loaded: {} entities, {} drawn, {} lights, {} materials",
             world.entityCount(),
@@ -308,6 +619,46 @@ namespace ege {
             materials.size());
 
         verifySceneRoundTrip();
+    }
+
+    void Application::importGltfModels() {
+        namespace fs = std::filesystem;
+
+#ifdef EGE_ASSET_ROOT
+        const fs::path modelDirectory = fs::path{EGE_ASSET_ROOT} / "models";
+#else
+        const fs::path modelDirectory = fs::path{"assets"} / "models";
+#endif
+
+        std::error_code errorCode;
+        if (!fs::is_directory(modelDirectory, errorCode)) {
+            return;
+        }
+
+        for (const fs::directory_entry& entry : fs::directory_iterator{modelDirectory}) {
+            const fs::path& path = entry.path();
+            const std::string extension = path.extension().string();
+            if (extension != ".gltf" && extension != ".glb") {
+                continue;
+            }
+
+            // One bad file should not take down the ones beside it, or the
+            // procedural scene it would have joined.
+            try {
+                const GltfSceneData scene = gltf::parseFile(path.string());
+                const gltf::ImportStats stats = gltf::instantiate(
+                    device, world, scene, *materialPool, *materialSetLayout, path.stem().string());
+                EGE_INFO(
+                    "Imported {}: {} entities, {} meshes, {} materials, {} textures",
+                    path.filename().string(),
+                    stats.entities,
+                    stats.meshes,
+                    stats.materials,
+                    stats.textures);
+            } catch (const std::exception& error) {
+                EGE_ERROR("{}", error.what());
+            }
+        }
     }
 
     void Application::verifySceneRoundTrip() {

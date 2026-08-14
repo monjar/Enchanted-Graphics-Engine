@@ -12,6 +12,13 @@
 
 namespace ege {
 
+    // Presentable images and the frame pacing around them.
+    //
+    // With dynamic rendering there is no render pass and no framebuffer, so
+    // this class owns exactly what the presentation engine forces on us: the
+    // swapchain itself, an image view per image, the per-frame depth buffer,
+    // and the semaphores and fences that pace frames in flight. Rendering
+    // attaches to the images directly via vkCmdBeginRendering.
     class SwapChain {
     public:
         static constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
@@ -24,15 +31,15 @@ namespace ege {
         SwapChain(const SwapChain&) = delete;
         SwapChain& operator=(const SwapChain&) = delete;
 
-        VkFramebuffer getFrameBuffer(uint32_t index) const { return swapChainFramebuffers[index]; }
-
-        VkRenderPass getRenderPass() const { return renderPass; }
+        VkImage getImage(uint32_t index) const { return swapChainImages[index]; }
 
         VkImageView getImageView(uint32_t index) const { return swapChainImageViews[index]; }
 
         size_t imageCount() const { return swapChainImages.size(); }
 
         VkFormat getSwapChainImageFormat() const { return swapChainImageFormat; }
+
+        VkFormat getSwapChainDepthFormat() const { return swapChainDepthFormat; }
 
         VkExtent2D getSwapChainExtent() const { return swapChainExtent; }
 
@@ -59,9 +66,6 @@ namespace ege {
         void init();
         void createSwapChain();
         void createImageViews();
-        void createDepthResources();
-        void createRenderPass();
-        void createFramebuffers();
         void createSyncObjects();
 
         // Helper functions
@@ -72,15 +76,11 @@ namespace ege {
         VkExtent2D chooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities);
 
         VkFormat swapChainImageFormat;
+        // Chosen here so pipelines and the frame graph agree on it, but the
+        // depth image itself is a frame graph transient, not swapchain state.
         VkFormat swapChainDepthFormat;
         VkExtent2D swapChainExtent;
 
-        std::vector<VkFramebuffer> swapChainFramebuffers;
-        VkRenderPass renderPass;
-
-        std::vector<VkImage> depthImages;
-        std::vector<VmaAllocation> depthImageAllocations;
-        std::vector<VkImageView> depthImageViews;
         std::vector<VkImage> swapChainImages;
         std::vector<VkImageView> swapChainImageViews;
 

@@ -115,6 +115,71 @@ target_include_directories(ege_tinyobj SYSTEM INTERFACE
 add_library(ege::tinyobj ALIAS ege_tinyobj)
 
 # ---------------------------------------------------------------------------
+# Dear ImGui (docking branch) - the editor UI. Compiled as its own static
+# library with the GLFW and Vulkan backends, and without the engine's
+# warnings-as-errors, because third-party code is not ours to fix.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME imgui
+  GITHUB_REPOSITORY ocornut/imgui
+  GIT_TAG v1.91.8-docking
+  VERSION 1.91.8
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_imgui STATIC
+  ${imgui_SOURCE_DIR}/imgui.cpp
+  ${imgui_SOURCE_DIR}/imgui_demo.cpp
+  ${imgui_SOURCE_DIR}/imgui_draw.cpp
+  ${imgui_SOURCE_DIR}/imgui_tables.cpp
+  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+target_include_directories(ege_imgui SYSTEM PUBLIC
+  ${imgui_SOURCE_DIR}
+  ${imgui_SOURCE_DIR}/backends)
+target_link_libraries(ege_imgui PUBLIC ege::glfw Vulkan::Vulkan)
+add_library(ege::imgui ALIAS ege_imgui)
+
+# ---------------------------------------------------------------------------
+# ImGuizmo - the viewport's translate/rotate/scale handles.
+#
+# Pinned to a commit rather than a tag: the last release predates the ImGui
+# version above by several years, and building against a tag that does not
+# compile is not the reproducibility anyone wanted.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME imguizmo
+  GITHUB_REPOSITORY CedricGuillemet/ImGuizmo
+  GIT_TAG 18cef5e031d8c6973d80284c67f60549fafd78c1
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_imguizmo STATIC ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp)
+target_include_directories(ege_imguizmo SYSTEM PUBLIC ${imguizmo_SOURCE_DIR}/src)
+target_link_libraries(ege_imguizmo PUBLIC ege::imgui)
+add_library(ege::imguizmo ALIAS ege_imguizmo)
+
+# ---------------------------------------------------------------------------
+# cgltf - glTF 2.0 import. Single header, implementation compiled in
+# assets/GltfLoader.cpp.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME cgltf
+  GITHUB_REPOSITORY jkuhlmann/cgltf
+  GIT_TAG v1.14
+  VERSION 1.14
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_cgltf INTERFACE)
+target_include_directories(ege_cgltf SYSTEM INTERFACE ${cgltf_SOURCE_DIR})
+add_library(ege::cgltf ALIAS ege_cgltf)
+
+# ---------------------------------------------------------------------------
 # spdlog - logging
 # ---------------------------------------------------------------------------
 set(SPDLOG_BUILD_EXAMPLE OFF CACHE BOOL "" FORCE)

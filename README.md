@@ -2,29 +2,60 @@
 
 A Vulkan game engine in C++17, built from the renderer up.
 
-![The demo scene: a box and a sphere lit by a point light on a plane](docs/images/demo-scene.png)
+![The demo scene: metal spheres sweeping roughness, two dielectrics and a plane, lit by three point lights](docs/images/demo-scene.png)
 
-A forward renderer with a metallic-roughness PBR pipeline, an entity-component
+A Vulkan 1.3 forward renderer — dynamic rendering, a frame graph, a
+metallic-roughness PBR pipeline with image-based lighting, shading into a
+linear HDR target with an ACES tonemap pass — plus an entity-component
 system, runtime reflection, textures with mip generation, a job system and a
 fixed-timestep simulation clock.
 
 The image above is the demo scene: five metal spheres sweeping roughness from
-near-mirror to fully rough, plus two dielectrics, lit by three point lights.
-The smoothest metal is nearly black because a mirror with no environment to
-reflect *is* nearly black — that is what image-based lighting fixes, and it is
-one of the things still outstanding.
+near-mirror to fully rough, plus two dielectrics, lit by three point lights
+and a low sun under a procedurally generated evening sky. The smoothest metal
+reflects that sky — in earlier builds it was nearly black, because a mirror
+with no environment to reflect *is* nearly black, and giving it one is
+exactly what image-based lighting does. The sun casts real shadows through a
+depth-only frame graph pass, and its direction, the disk in the sky and the
+shadows all agree because they share one definition. The environment, its
+irradiance and prefiltered specular convolutions and the BRDF lookup table
+are all computed on the GPU at startup, so a clean checkout still ships no
+binary assets.
 
 Scenes save and load as reflection-driven JSON, entities can be parented, and
-draws are frustum-culled and sorted by material.
+draws are frustum-culled and sorted by material. Render passes declare what
+they read and write; barriers, image layouts and transient render targets are
+derived by the frame graph rather than written by hand.
 
-Still to come: a frame graph, IBL, shadows, an HDR post-processing stack, glTF
-import, the editor, C++ scripting and physics.
+Bright highlights bloom through a half-resolution blur chain, composited in
+linear light before the ACES tonemap.
+
+The copper torus is a **glTF import**: any `.gltf`/`.glb` dropped into
+`assets/models/` is parsed, its materials and textures built, and its node
+hierarchy spawned as entities at startup. The demo's torus is itself a
+self-contained text glTF, so the no-binary-assets rule still holds.
+
+![The editor: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector, stats and console](docs/images/editor.png)
+
+Press **F1** for the editor. The scene renders into an offscreen image the UI
+samples as a texture, so it is a **viewport** — a panel with its own aspect
+ratio, with the hierarchy, inspector, stats and console docked around it
+rather than floating over the picture they describe. Entities can be created,
+deleted and reparented by dragging, moved with translate/rotate/scale
+**gizmos**, and edited through an **inspector generated entirely from the
+engine's reflection system**: a component gets editable fields, sliders,
+colour pickers and an entry in the add-component list by declaring itself with
+`EGE_REFLECT`, with no inspector code written per type.
+
+Still to come: cascaded and point-light shadows, anti-aliasing, play mode and
+undo, the standalone editor application, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
 ## Building
 
-You need a C++17 compiler, CMake 3.21 or newer, and the Vulkan SDK.
+You need a C++17 compiler, CMake 3.21 or newer, the Vulkan SDK, and a driver
+supporting Vulkan 1.3.
 Everything else — GLFW, GLM, doctest — is resolved automatically, preferring
 system packages and falling back to a pinned source build.
 
@@ -68,6 +99,10 @@ validation layers enabled and fails on any validation message.
 | `Q` / `E` | Down / up |
 | Arrow keys | Look |
 | Hold right mouse | Mouse-look (captures the cursor) |
+| `F1` | Show or hide the editor |
+
+With the editor up, the camera answers only while the cursor is over the
+scene view; anywhere else the mouse and keyboard belong to the panels.
 
 ## Layout
 
@@ -77,8 +112,12 @@ src/
   core/         application root, logging, assertions, time, job system
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
-  rhi/          device, swapchain, pipeline, buffer, descriptors, textures
-  render/       renderer, model, camera, materials, lights, bounds, PBR render system
+  assets/       glTF import (cgltf); grows into the asset database in Phase 6
+  editor/       in-process panels and the offscreen viewport; the panels move
+                into EnchantedEditor in Phase 5 rather than being rewritten
+  rhi/          device, swapchain, pipeline, buffer, descriptors, textures, frame graph
+  render/       renderer, model, camera, materials, lights, bounds,
+                environment lighting, PBR, shadows, skybox, bloom and post-process
   scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
@@ -112,6 +151,9 @@ reformat out of `git blame`.
 | [GLFW](https://www.glfw.org/) 3.4 | windowing and input | fetched or system |
 | [GLM](https://github.com/g-truc/glm) 1.0.1 | maths | fetched or system |
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | OBJ import | vendored |
+| [cgltf](https://github.com/jkuhlmann/cgltf) 1.14 | glTF 2.0 import | fetched |
+| [Dear ImGui](https://github.com/ocornut/imgui) 1.91.8 (docking) | editor UI | fetched |
+| [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | transform gizmos | fetched |
 | [spdlog](https://github.com/gabime/spdlog) 1.14.1 | logging | fetched or system |
 | [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) 3.1.0 | GPU memory | fetched |
 | [stb_image](https://github.com/nothings/stb) | image decoding | fetched |

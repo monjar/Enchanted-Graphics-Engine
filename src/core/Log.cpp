@@ -1,5 +1,8 @@
 #include "core/Log.hpp"
 
+#include "core/LogBuffer.hpp"
+
+#include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
@@ -15,6 +18,39 @@ namespace ege {
         std::shared_ptr<spdlog::logger> clientLogger;
         std::once_flag initFlag;
 
+        LogLevel translateLevel(spdlog::level::level_enum level) {
+            switch (level) {
+                case spdlog::level::trace:
+                    return LogLevel::trace;
+                case spdlog::level::debug:
+                    return LogLevel::debug;
+                case spdlog::level::warn:
+                    return LogLevel::warn;
+                case spdlog::level::err:
+                    return LogLevel::error;
+                case spdlog::level::critical:
+                    return LogLevel::critical;
+                default:
+                    return LogLevel::info;
+            }
+        }
+
+        // Keeps the recent log in memory as well as on the terminal, so the
+        // editor's console shows the same records rather than a second,
+        // separately routed stream that could disagree with the file.
+        class MemorySink final : public spdlog::sinks::base_sink<std::mutex> {
+        protected:
+            void sink_it_(const spdlog::details::log_msg& message) override {
+                LogBuffer::Record record{};
+                record.level = translateLevel(message.level);
+                record.logger.assign(message.logger_name.data(), message.logger_name.size());
+                record.message.assign(message.payload.data(), message.payload.size());
+                LogBuffer::instance().push(std::move(record));
+            }
+
+            void flush_() override {}
+        };
+
         void createLoggers() {
             std::vector<spdlog::sink_ptr> sinks;
             sinks.emplace_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
@@ -22,6 +58,7 @@ namespace ege {
             // last few lines before it are the ones worth having.
             sinks.emplace_back(
                 std::make_shared<spdlog::sinks::basic_file_sink_mt>("enchanted.log", true));
+            sinks.emplace_back(std::make_shared<MemorySink>());
 
             sinks[0]->set_pattern("%^[%T] %n: %v%$");
             sinks[1]->set_pattern("[%Y-%m-%d %T.%e] [%l] %n: %v");

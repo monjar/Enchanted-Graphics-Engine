@@ -19,7 +19,8 @@ namespace ege {
     public:
         PbrRenderSystem(
             Device& device,
-            VkRenderPass renderPass,
+            VkFormat colorFormat,
+            VkFormat depthFormat,
             VkDescriptorSetLayout globalSetLayout,
             VkDescriptorSetLayout materialSetLayout);
         ~PbrRenderSystem();
@@ -46,7 +47,7 @@ namespace ege {
     private:
         void createPipelineLayout(
             VkDescriptorSetLayout globalSetLayout, VkDescriptorSetLayout materialSetLayout);
-        void createPipeline(VkRenderPass renderPass);
+        void createPipeline(VkFormat colorFormat, VkFormat depthFormat);
 
         Device& device;
 
