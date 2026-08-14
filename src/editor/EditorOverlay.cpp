@@ -377,6 +377,7 @@ namespace ege {
         }
 
         drawMainMenuBar(context);
+        beginInteractionUndo(world);
 
         // Panels dock into this rather than floating over the scene, which is
         // the difference between a debug overlay and an editor.
@@ -397,6 +398,49 @@ namespace ege {
         drawInspectorPanel(world);
         drawAssetBrowserPanel();
         drawConsolePanel();
+
+        endInteractionUndo();
+    }
+
+    void EditorOverlay::beginInteractionUndo(World& world) {
+        // Taken when the interaction starts, not when the first change is
+        // seen: by then the widget has already written the new value, and the
+        // memento would contain one frame of the change it is meant to undo.
+        const bool interacting = ImGui::IsAnyItemActive() || ImGuizmo::IsUsing();
+        if (interacting && !interactingLastFrame) {
+            interactionScene = SceneSerializer::toString(world);
+            interactionChangedSomething = false;
+        }
+        interactingLastFrame = interacting;
+    }
+
+    void EditorOverlay::endInteractionUndo() {
+        const bool interacting = ImGui::IsAnyItemActive() || ImGuizmo::IsUsing();
+        if (interacting || !interactionChangedSomething) {
+            return;
+        }
+
+        // Pushed directly rather than through record(), which would capture
+        // the current - already changed - state instead of the one held since
+        // the interaction began.
+        undo.recordCaptured(std::move(interactionScene), "edit");
+        interactionScene.clear();
+        interactionChangedSomething = false;
+    }
+
+    void EditorOverlay::applyUndo(World& world, bool redo) {
+        // Restoring respawns everything, so the selection is re-found by name
+        // rather than kept: the handle it holds will not survive.
+        const std::string name = world.alive(selected) ? world.nameOf(selected) : std::string{};
+
+        if (redo) {
+            undo.redo(world);
+        } else {
+            undo.undo(world);
+        }
+
+        selected = name.empty() ? EntityId{} : world.findByName(name).id();
+        pending = PendingEdit{};
     }
 
     void EditorOverlay::buildDefaultLayout(unsigned int dockspaceId) {
@@ -454,12 +498,44 @@ namespace ege {
                 try {
                     SceneSerializer::load(context.world, scenePath);
                     selected = EntityId{};
+                    // The history describes a world that no longer exists;
+                    // undoing into it would silently replace the one just
+                    // opened.
+                    undo.clear();
                 } catch (const std::exception& error) {
                     EGE_ERROR("{}", error.what());
                 }
             }
             ImGui::EndDisabled();
             ImGui::EndMenu();
+        }
+
+        // Undo is meaningless while playing: the world is running, and Stop is
+        // already the way back to what was authored.
+        const bool undoAvailable = context.playMode.isEditing();
+        if (ImGui::BeginMenu("Edit")) {
+            ImGui::BeginDisabled(!undoAvailable || !undo.canUndo());
+            if (ImGui::MenuItem(("Undo " + undo.undoLabel()).c_str(), "Ctrl+Z")) {
+                applyUndo(context.world, false);
+            }
+            ImGui::EndDisabled();
+            ImGui::BeginDisabled(!undoAvailable || !undo.canRedo());
+            if (ImGui::MenuItem(("Redo " + undo.redoLabel()).c_str(), "Ctrl+Shift+Z")) {
+                applyUndo(context.world, true);
+            }
+            ImGui::EndDisabled();
+            ImGui::EndMenu();
+        }
+
+        // The shortcuts, checked here rather than in the menu bodies, which
+        // only run while the menu is open.
+        if (undoAvailable && !ImGui::GetIO().WantTextInput) {
+            if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z) ||
+                ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) {
+                applyUndo(context.world, true);
+            } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) {
+                applyUndo(context.world, false);
+            }
         }
 
         // Play controls belong here rather than over the viewport: they change
@@ -486,7 +562,9 @@ namespace ege {
         if (ImGui::MenuItem("Stop")) {
             play.stop(context.world);
             // Restoring respawns everything, so whatever was selected is a
-            // stale handle now.
+            // stale handle now. The history survives: Stop returns the world
+            // to what it was when Play was pressed, which is the state the
+            // top of the undo stack was recorded against.
             selected = EntityId{};
         }
         ImGui::EndDisabled();
@@ -646,6 +724,7 @@ namespace ege {
 
         *transform = Transform::fromMatrix(glm::inverse(parentMatrix) * worldMatrix);
         hierarchy::markDirty(world, selected);
+        interactionChangedSomething = true;
     }
 
     void EditorOverlay::render(VkCommandBuffer commandBuffer) {
@@ -841,6 +920,27 @@ namespace ege {
     void EditorOverlay::applyPendingEdit(World& world) {
         const PendingEdit edit = pending;
         pending = PendingEdit{};
+
+        if (edit.kind == PendingEdit::Kind::none) {
+            return;
+        }
+
+        const char* label = "edit";
+        switch (edit.kind) {
+            case PendingEdit::Kind::spawn:
+                label = "spawn";
+                break;
+            case PendingEdit::Kind::despawn:
+                label = "delete";
+                break;
+            case PendingEdit::Kind::reparent:
+                label = "reparent";
+                break;
+            case PendingEdit::Kind::none:
+                break;
+        }
+        // Before the change, so the memento holds the state to come back to.
+        undo.record(world, label);
 
         switch (edit.kind) {
             case PendingEdit::Kind::none:
@@ -1050,12 +1150,14 @@ namespace ege {
         if (!adding.empty()) {
             if (const ComponentRegistry::Entry* entry =
                     ComponentRegistry::instance().find(adding)) {
+                undo.record(world, "add " + adding);
                 entry->attach(world, selected);
             }
         }
         if (!removing.empty()) {
             if (const ComponentRegistry::Entry* entry =
                     ComponentRegistry::instance().find(removing)) {
+                undo.record(world, "remove " + removing);
                 entry->detach(world, selected);
             }
         }
@@ -1067,6 +1169,7 @@ namespace ege {
         if (edited || !adding.empty() || !removing.empty()) {
             hierarchy::markDirty(world, selected);
         }
+        interactionChangedSomething = interactionChangedSomething || edited;
     }
 
 }  // namespace ege

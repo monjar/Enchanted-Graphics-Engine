@@ -3,6 +3,7 @@
 #include "core/LogBuffer.hpp"
 #include "editor/EditorViewport.hpp"
 #include "editor/PlayMode.hpp"
+#include "editor/UndoStack.hpp"
 #include "platform/Window.hpp"
 #include "render/Camera.hpp"
 #include "render/PbrRenderSystem.hpp"
@@ -10,6 +11,7 @@
 #include "scene/World.hpp"
 
 #include <memory>
+#include <string>
 
 namespace ege {
 
@@ -102,6 +104,11 @@ namespace ege {
 
         void buildDefaultLayout(unsigned int dockspaceId);
         void drawMainMenuBar(Context& context);
+        // Records a memento at the moment an interaction begins, and keeps it
+        // only if the interaction changed something.
+        void beginInteractionUndo(World& world);
+        void endInteractionUndo();
+        void applyUndo(World& world, bool redo);
         void drawStatsPanel(const Context& context);
         void drawViewportPanel(Context& context);
         void drawGizmo(World& world, const Camera& camera);
@@ -136,6 +143,14 @@ namespace ege {
         bool overlayVisible = true;
         EntityId selected{};
         PendingEdit pending{};
+
+        UndoStack undo;
+        // A drag is one undo step, not one per frame, so the memento is taken
+        // when the interaction starts and committed when it ends - and only if
+        // anything actually changed in between.
+        bool interactingLastFrame = false;
+        bool interactionChangedSomething = false;
+        std::string interactionScene;
 
         // Console state. The severity floor is info by default because that is
         // where the level of the release build sits anyway; a debug build can
