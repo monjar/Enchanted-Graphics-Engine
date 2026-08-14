@@ -20,6 +20,13 @@ add_executable(EnchantedTests ${TEST_SOURCES})
 
 target_link_libraries(EnchantedTests PRIVATE ege::engine doctest::doctest)
 
+# doctest forward-declares std::ostream rather than including <ostream>, and
+# MSVC's <string_view> stream inserter cannot be instantiated against a
+# forward-declared basic_ostream - so any CHECK that stringifies a
+# string_view fails to compile on Windows. This is doctest's own switch for
+# exactly that: include the real standard headers instead.
+target_compile_definitions(EnchantedTests PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS)
+
 ege_set_target_warnings(EnchantedTests WARNINGS_AS_ERRORS)
 
 include("${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake")
