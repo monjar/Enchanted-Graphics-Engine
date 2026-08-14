@@ -1,5 +1,6 @@
 #include "editor/EditorOverlay.hpp"
 
+#include "assets/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "scene/ComponentRegistry.hpp"
@@ -21,7 +22,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace ege {
@@ -57,6 +60,83 @@ namespace ege {
 
         const TypeInfo* stringType() {
             return &TypeRegistry::of<std::string>();
+        }
+
+        const TypeInfo* meshRefType() {
+            return &TypeRegistry::of<MeshRef>();
+        }
+
+        const TypeInfo* materialRefType() {
+            return &TypeRegistry::of<MaterialRef>();
+        }
+
+        // One payload name per kind rather than one with a kind inside it, so
+        // ImGui highlights only the slots a dragged asset can actually go
+        // into. A target that lights up and then refuses the drop is worse
+        // than one that never lights up.
+        const char* assetPayloadName(AssetKind kind) {
+            switch (kind) {
+                case AssetKind::mesh:
+                    return "EGE_ASSET_MESH";
+                case AssetKind::material:
+                    return "EGE_ASSET_MATERIAL";
+                case AssetKind::texture:
+                    return "EGE_ASSET_TEXTURE";
+                case AssetKind::scene:
+                    return "EGE_ASSET_SCENE";
+                case AssetKind::unknown:
+                    break;
+            }
+            return "EGE_ASSET";
+        }
+
+        // A slot holding an asset of one kind: what it points at now, a drop
+        // target for the browser, and a way to empty it. Returns the id that
+        // was dropped, if any.
+        std::optional<Guid> drawAssetSlot(const char* label, AssetKind kind, Guid current) {
+            const AssetDatabase& database = AssetDatabase::instance();
+            const AssetRecord* record = database.find(current);
+
+            std::string display = "(none)";
+            if (record != nullptr) {
+                display = record->name;
+            } else if (!current.isNull()) {
+                // Named rather than blanked: an asset missing from this
+                // project is a different problem from a slot left empty, and
+                // the reference is still there to be repaired.
+                display = "missing " + current.toString().substr(0, 8);
+            }
+
+            std::optional<Guid> dropped;
+
+            ImGui::PushID(label);
+            ImGui::Button(display.c_str(), ImVec2{ImGui::CalcItemWidth(), 0.f});
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload =
+                        ImGui::AcceptDragDropPayload(assetPayloadName(kind))) {
+                    Guid id{};
+                    std::memcpy(&id, payload->Data, sizeof(id));
+                    dropped = id;
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if (ImGui::IsItemHovered() && record != nullptr) {
+                ImGui::SetTooltip(
+                    "%s\n%s",
+                    record->builtin ? "built in" : record->path.string().c_str(),
+                    record->id.toString().c_str());
+            }
+            if (!current.isNull()) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x")) {
+                    dropped = Guid{};
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label);
+            ImGui::PopID();
+
+            return dropped;
         }
 
         // One field, drawn by its reflected description, reporting whether the
@@ -98,6 +178,20 @@ namespace ege {
                     changed = ImGui::ColorEdit4(label.c_str(), static_cast<float*>(address));
                 } else {
                     changed = ImGui::DragFloat4(label.c_str(), static_cast<float*>(address), 0.05f);
+                }
+            } else if (type == meshRefType()) {
+                auto* ref = static_cast<MeshRef*>(address);
+                if (const std::optional<Guid> dropped =
+                        drawAssetSlot(label.c_str(), AssetKind::mesh, ref->id)) {
+                    *ref = MeshRef{*dropped, AssetDatabase::instance().mesh(*dropped)};
+                    changed = true;
+                }
+            } else if (type == materialRefType()) {
+                auto* ref = static_cast<MaterialRef*>(address);
+                if (const std::optional<Guid> dropped =
+                        drawAssetSlot(label.c_str(), AssetKind::material, ref->id)) {
+                    *ref = MaterialRef{*dropped, AssetDatabase::instance().material(*dropped)};
+                    changed = true;
                 }
             } else if (type == stringType()) {
                 ImGui::LabelText(label.c_str(), "%s", static_cast<std::string*>(address)->c_str());
@@ -293,6 +387,7 @@ namespace ege {
         drawStatsPanel(stats, frameTime);
         drawHierarchyPanel(world);
         drawInspectorPanel(world);
+        drawAssetBrowserPanel();
         drawConsolePanel();
     }
 
@@ -316,11 +411,16 @@ namespace ege {
         const ImGuiID console =
             ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.28f, nullptr, &centre);
 
+        ImGuiID inspector = right;
+        const ImGuiID assets =
+            ImGui::DockBuilderSplitNode(inspector, ImGuiDir_Down, 0.4f, nullptr, &inspector);
+
         ImGui::DockBuilderDockWindow("Scene", centre);
         ImGui::DockBuilderDockWindow("Console", console);
         ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
         ImGui::DockBuilderDockWindow("Stats", stats);
-        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("Inspector", inspector);
+        ImGui::DockBuilderDockWindow("Assets", assets);
         ImGui::DockBuilderFinish(root);
 
         EGE_DEBUG("editor: built the default panel layout");
@@ -490,6 +590,73 @@ namespace ege {
         ImGui::Text("culled      %zu", stats.culled);
         ImGui::Text("drawn       %zu", stats.drawn);
         ImGui::Text("mat binds   %zu", stats.materialBinds);
+        ImGui::End();
+    }
+
+    void EditorOverlay::drawAssetBrowserPanel() {
+        ImGui::Begin("Assets");
+
+        const AssetDatabase& database = AssetDatabase::instance();
+
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputTextWithHint("##assetFilter", "filter", assetFilter, sizeof(assetFilter));
+        const std::string needle{assetFilter};
+        ImGui::Separator();
+
+        ImGui::BeginChild("assetList");
+        constexpr std::array<AssetKind, 4> kinds{
+            AssetKind::mesh, AssetKind::material, AssetKind::texture, AssetKind::scene};
+        for (const AssetKind kind : kinds) {
+            std::vector<const AssetRecord*> matching;
+            for (const AssetRecord& record : database.all()) {
+                if (record.kind != kind) {
+                    continue;
+                }
+                if (!needle.empty() && record.name.find(needle) == std::string::npos) {
+                    continue;
+                }
+                matching.push_back(&record);
+            }
+            if (matching.empty()) {
+                continue;
+            }
+
+            // Sorted by name rather than by discovery order: a browser whose
+            // contents move when an unrelated file is added is unusable.
+            std::sort(
+                matching.begin(), matching.end(), [](const AssetRecord* a, const AssetRecord* b) {
+                    return a->name < b->name;
+                });
+
+            const std::string header =
+                std::string{assetKindName(kind)} + " (" + std::to_string(matching.size()) + ")";
+            if (!ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                continue;
+            }
+
+            for (const AssetRecord* record : matching) {
+                ImGui::PushID(static_cast<int>(record->id.low() & 0x7fffffff));
+                ImGui::Selectable(record->name.c_str());
+
+                // Dragging is what the browser is for: the inspector's slots
+                // are the other end of this.
+                if (ImGui::BeginDragDropSource()) {
+                    const Guid id = record->id;
+                    ImGui::SetDragDropPayload(assetPayloadName(record->kind), &id, sizeof(id));
+                    ImGui::TextUnformatted(record->name.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "%s\n%s",
+                        record->builtin ? "built in" : record->path.string().c_str(),
+                        record->id.toString().c_str());
+                }
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+
         ImGui::End();
     }
 

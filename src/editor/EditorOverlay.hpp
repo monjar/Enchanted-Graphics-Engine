@@ -101,6 +101,7 @@ namespace ege {
         void drawHierarchyPanel(World& world);
         void drawEntityNode(World& world, EntityId entity);
         void drawInspectorPanel(World& world);
+        void drawAssetBrowserPanel();
         void drawConsolePanel();
         void applyPendingEdit(World& world);
 
@@ -133,6 +134,7 @@ namespace ege {
         // be dropped to trace from the panel.
         LogLevel consoleMinimumLevel = LogLevel::info;
         char consoleFilter[64]{};
+        char assetFilter[64]{};
         bool consoleFollowsTail = true;
         std::uint64_t lastSeenLogRevision = 0;
     };
