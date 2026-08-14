@@ -24,6 +24,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <stdexcept>
@@ -1147,10 +1148,12 @@ namespace ege {
         // widgets push every label off the right edge.
         ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
 
-        // The name lives on the entity itself, not in a component.
+        // The name lives on the entity itself, not in a component. snprintf
+        // rather than strncpy: it always terminates, truncation is defined
+        // rather than a caller obligation, and MSVC deprecates strncpy under
+        // warnings-as-errors.
         char nameBuffer[128];
-        std::strncpy(nameBuffer, world.nameOf(selected).c_str(), sizeof(nameBuffer) - 1);
-        nameBuffer[sizeof(nameBuffer) - 1] = '\0';
+        std::snprintf(nameBuffer, sizeof(nameBuffer), "%s", world.nameOf(selected).c_str());
         if (ImGui::InputText("name", nameBuffer, sizeof(nameBuffer))) {
             world.setName(selected, nameBuffer);
         }
