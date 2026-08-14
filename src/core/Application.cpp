@@ -728,6 +728,34 @@ namespace ege {
             hierarchy::setParent(world, ball.id(), sphereRow.id());
         }
 
+        // A surface a script owns: the mesh has no asset behind it, the
+        // vertices are rewritten every tick by the Ripple behaviour, and the
+        // upload happens once per frame rather than once per write.
+        {
+            Entity surface = world.spawn("RippleSurface");
+            Transform surfaceTransform{};
+            // Stood up like a banner rather than laid flat: a travelling wave
+            // in a horizontal sheet is nearly invisible from a low camera,
+            // and the point of this entity is to be seen moving.
+            surfaceTransform.translation = {2.35f, -0.35f, 1.6f};
+            surfaceTransform.rotation.x = -glm::half_pi<float>();
+            surfaceTransform.scale = glm::vec3{1.3f};
+            surface.attach<Transform>(surfaceTransform);
+            surface.attach<DynamicMesh>(DynamicMesh::grid(48));
+
+            MeshRenderer surfaceRenderer{};
+            surfaceRenderer.material =
+                makeMaterial("Ripple", glm::vec3{0.25f, 0.7f, 0.6f}, 0.25f, 0.25f);
+            surface.attach<MeshRenderer>(std::move(surfaceRenderer));
+
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "ege::Ripple";
+            slot.instance = std::make_shared<Ripple>();
+            script.behaviors.push_back(std::move(slot));
+            surface.attach<Script>(std::move(script));
+        }
+
         addMesh(
             "BlueSphere",
             sphere,
@@ -834,7 +862,16 @@ namespace ege {
             SceneSerializer::fromString(scratch, written);
             const std::string rewritten = SceneSerializer::toString(scratch);
 
+            // Only asset-backed renderers are counted. A dynamic mesh has no
+            // asset behind it by design - a script rebuilds its vertices - so
+            // its renderer comes back empty and correctly so.
+            std::size_t assetDraws = 0;
             std::size_t restoredDraws = 0;
+            world.each<MeshRenderer>([&](Entity, MeshRenderer& original) {
+                if (!original.mesh.id.isNull()) {
+                    assetDraws++;
+                }
+            });
             scratch.each<MeshRenderer>([&](Entity, MeshRenderer& restored) {
                 if (restored.mesh.resolved() && restored.material.resolved()) {
                     restoredDraws++;
@@ -850,11 +887,11 @@ namespace ege {
             } else {
                 EGE_WARN("scene round-trip is not stable; save and load disagree");
             }
-            if (restoredDraws != world.count<Transform, MeshRenderer>()) {
+            if (restoredDraws != assetDraws) {
                 EGE_WARN(
-                    "scene round-trip lost geometry: {} of {} renderers resolved",
+                    "scene round-trip lost geometry: {} of {} asset-backed renderers resolved",
                     restoredDraws,
-                    world.count<Transform, MeshRenderer>());
+                    assetDraws);
             }
 
             SceneSerializer::save(world, "demo_scene.egescene");

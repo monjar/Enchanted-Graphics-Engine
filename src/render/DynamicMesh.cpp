@@ -44,9 +44,10 @@ namespace ege {
 
                 Model::Vertex vertex{};
                 vertex.position = {u - 0.5f, 0.f, v - 0.5f};
-                // Up is -Y in this engine's scenes, which is the one thing
-                // about a flat grid that is not obvious.
-                vertex.normal = {0.f, -1.f, 0.f};
+                // +Y, matching Builder::plane() and the winding below - the
+                // engine's scenes treat -Y as up, so a caller that wants this
+                // facing upwards rotates it, exactly as the demo floor does.
+                vertex.normal = {0.f, 1.f, 0.f};
                 vertex.uv = {u, v};
                 vertex.color = {1.f, 1.f, 1.f};
                 mesh.vertices.push_back(vertex);
@@ -61,8 +62,8 @@ namespace ege {
                 const std::uint32_t bottomLeft = topLeft + side;
                 const std::uint32_t bottomRight = bottomLeft + 1;
 
-                // Wound so the faces point along -Y, matching the normals
-                // above and the winding the pipeline culls against.
+                // Counter-clockwise seen from +Y, which is the front face the
+                // pipeline keeps and the direction the normals point.
                 mesh.indices.push_back(topLeft);
                 mesh.indices.push_back(bottomLeft);
                 mesh.indices.push_back(topRight);

@@ -116,6 +116,7 @@ namespace ege {
         void drawHierarchyPanel(World& world);
         void drawEntityNode(World& world, EntityId entity);
         void drawInspectorPanel(World& world);
+        bool drawScriptComponent(World& world, struct Script& script);
         void drawAssetBrowserPanel();
         void drawConsolePanel();
         void applyPendingEdit(World& world);

@@ -7,6 +7,8 @@
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
+#include "script/BehaviorRegistry.hpp"
+#include "script/Script.hpp"
 
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
@@ -753,6 +755,81 @@ namespace ege {
         ImGui::End();
     }
 
+    bool EditorOverlay::drawScriptComponent(World& world, Script& script) {
+        const BehaviorRegistry& registry = BehaviorRegistry::instance();
+        bool edited = false;
+        std::size_t removeIndex = script.behaviors.size();
+
+        for (std::size_t index = 0; index < script.behaviors.size(); index++) {
+            Script::Slot& slot = script.behaviors[index];
+            const BehaviorRegistry::Entry* entry = registry.find(slot.behavior);
+
+            ImGui::PushID(static_cast<int>(index));
+            const std::string title =
+                entry == nullptr ? slot.behavior + "  (missing)" : slot.behavior;
+            const bool open =
+                ImGui::TreeNodeEx("behavior", ImGuiTreeNodeFlags_DefaultOpen, "%s", title.c_str());
+
+            if (ImGui::BeginPopupContextItem("behaviorMenu")) {
+                if (ImGui::MenuItem("Remove behaviour")) {
+                    removeIndex = index;
+                }
+                ImGui::EndPopup();
+            }
+
+            if (open) {
+                if (entry == nullptr) {
+                    // Its fields are still held verbatim, so they come back if
+                    // the behaviour does. Saying so beats an empty box.
+                    ImGui::TextDisabled("not in this build; its settings are kept");
+                } else if (entry->type == nullptr || entry->type->fields().empty()) {
+                    ImGui::TextDisabled("(no fields)");
+                } else {
+                    // Instantiated on demand: a behaviour has to exist before
+                    // its fields can be shown, and in the editor it exists
+                    // only to hold them - onSpawn stays unrun until Play.
+                    if (slot.instance == nullptr) {
+                        slot.instance = entry->create();
+                    }
+                    for (const FieldInfo& field : entry->type->fields()) {
+                        edited = drawField(field, slot.instance.get()) || edited;
+                    }
+                }
+                ImGui::TreePop();
+            }
+            ImGui::PopID();
+        }
+
+        if (ImGui::Button("Add Behaviour")) {
+            ImGui::OpenPopup("addBehavior");
+        }
+        if (ImGui::BeginPopup("addBehavior")) {
+            if (registry.all().empty()) {
+                ImGui::TextDisabled("(none registered)");
+            }
+            for (const BehaviorRegistry::Entry& entry : registry.all()) {
+                if (ImGui::MenuItem(entry.name.c_str())) {
+                    undo.record(world, "add " + entry.name);
+                    Script::Slot slot{};
+                    slot.behavior = entry.name;
+                    slot.instance = entry.create();
+                    script.behaviors.push_back(std::move(slot));
+                    edited = true;
+                }
+            }
+            ImGui::EndPopup();
+        }
+
+        if (removeIndex < script.behaviors.size()) {
+            undo.record(world, "remove " + script.behaviors[removeIndex].behavior);
+            script.behaviors.erase(
+                script.behaviors.begin() + static_cast<std::ptrdiff_t>(removeIndex));
+            edited = true;
+        }
+
+        return edited;
+    }
+
     void EditorOverlay::drawAssetBrowserPanel() {
         ImGui::Begin("Assets");
 
@@ -1107,6 +1184,17 @@ namespace ege {
             if (component == nullptr || entry.type == nullptr) {
                 continue;
             }
+
+            // A behaviour list is the one component reflection cannot describe:
+            // the concrete type of each entry is known only at runtime, from a
+            // name. It gets a drawer, the same way asset references do.
+            if (entry.type == &TypeRegistry::of<Script>()) {
+                ImGui::PushID(entry.name.c_str());
+                edited = drawScriptComponent(world, *static_cast<Script*>(component)) || edited;
+                ImGui::PopID();
+                continue;
+            }
+
             if (entry.type->fields().empty()) {
                 ImGui::TextDisabled("(tag)");
                 continue;
