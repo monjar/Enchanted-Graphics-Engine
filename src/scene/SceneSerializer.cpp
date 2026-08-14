@@ -3,10 +3,14 @@
 #include "core/Log.hpp"
 #include "reflect/Serialization.hpp"
 #include "scene/ComponentRegistry.hpp"
+#include "scene/Hierarchy.hpp"
 
+#include <cstddef>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
+#include <unordered_map>
+#include <vector>
 
 namespace ege {
 
@@ -24,10 +28,28 @@ namespace ege {
             // nothing is mutated.
             World& mutableWorld = const_cast<World&>(world);
 
+            const std::vector<Entity> live = mutableWorld.all();
+
+            // Parenting is recorded as a position in this file's own entity
+            // array, not as an EntityId. Handles are indices into a running
+            // world's slot table and mean nothing in the next process; the
+            // array position is the only identity a file can honestly claim.
+            std::unordered_map<EntityId, std::size_t> position;
+            position.reserve(live.size());
+            for (std::size_t index = 0; index < live.size(); index++) {
+                position.emplace(live[index].id(), index);
+            }
+
             nlohmann::json entities = nlohmann::json::array();
-            for (Entity entity : mutableWorld.all()) {
+            for (Entity entity : live) {
                 nlohmann::json record = nlohmann::json::object();
                 record["name"] = entity.name();
+
+                const EntityId parent = hierarchy::parentOf(mutableWorld, entity.id());
+                const auto parentPosition = position.find(parent);
+                if (parentPosition != position.end()) {
+                    record["parent"] = parentPosition->second;
+                }
 
                 nlohmann::json components = nlohmann::json::object();
                 for (const ComponentRegistry::Entry& component : registry.all()) {
@@ -72,8 +94,12 @@ namespace ege {
                 return;
             }
 
+            std::vector<EntityId> spawned;
+            spawned.reserve(entities->size());
+
             for (const nlohmann::json& record : *entities) {
                 Entity entity = world.spawn(record.value("name", std::string{}));
+                spawned.push_back(entity.id());
 
                 const auto components = record.find("components");
                 if (components == record.end() || !components->is_object()) {
@@ -91,6 +117,22 @@ namespace ege {
                     void* instance = component->attach(world, entity.id());
                     serializer.read(*component->type, instance, value);
                 }
+            }
+
+            // Parenting in a second pass: a child may be written before its
+            // parent, and setParent has to have both ends to link them.
+            for (std::size_t index = 0; index < spawned.size(); index++) {
+                const nlohmann::json& record = (*entities)[index];
+                const auto parent = record.find("parent");
+                if (parent == record.end() || !parent->is_number_unsigned()) {
+                    continue;
+                }
+                const auto parentIndex = parent->get<std::size_t>();
+                if (parentIndex >= spawned.size()) {
+                    EGE_WARN("scene names a parent outside the file; leaving the entity at root");
+                    continue;
+                }
+                hierarchy::setParent(world, spawned[index], spawned[parentIndex]);
             }
         }
 

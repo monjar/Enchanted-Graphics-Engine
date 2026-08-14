@@ -1,5 +1,6 @@
 #pragma once
 
+#include "assets/AssetRef.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "render/Light.hpp"
 #include "render/Material.hpp"
@@ -41,14 +42,30 @@ namespace ege {
     };
 
     // Makes an entity drawable.
+    //
+    // Asset references rather than bare pointers, so that saving a scene
+    // records what to draw and loading one can find it again. Before the asset
+    // database this component was the reason a reloaded scene came back with
+    // its transforms, names and lights intact and nothing visible in it.
     struct MeshRenderer {
-        std::shared_ptr<Model> model;
-        std::shared_ptr<Material> material;
+        MeshRef mesh;
+        MaterialRef material;
         bool visible = true;
     };
 
     // Tag excluding an entity from rendering without detaching its renderer.
     struct Hidden {};
+
+    // Constant angular velocity, in radians per second, applied only while the
+    // editor is playing.
+    //
+    // A placeholder for the scripted behaviours of Phase 7, and an honest one:
+    // play mode has to be observable before it can be trusted, and nothing
+    // else in the engine changes the world over time yet. It is what makes
+    // pressing Play do something and pressing Stop demonstrably undo it.
+    struct Spin {
+        glm::vec3 anglesPerSecond{0.f, 1.f, 0.f};
+    };
 
     // Parent and child links.
     //
@@ -82,6 +99,8 @@ EGE_FIELD(rotation).tooltip("Tait-Bryan angles in radians, applied Y then X then
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::MeshRenderer)
+EGE_FIELD(mesh).tooltip("Geometry to draw");
+EGE_FIELD(material).tooltip("How to shade it");
 EGE_FIELD(visible);
 EGE_REFLECT_END()
 
@@ -90,6 +109,13 @@ EGE_REFLECT_END()
 EGE_REFLECT(ege::Hidden)
 EGE_REFLECT_END()
 
+EGE_REFLECT(ege::Spin)
+EGE_FIELD(anglesPerSecond).tooltip("Radians per second, applied while playing");
+EGE_REFLECT_END()
+
 // Hierarchy is deliberately not reflected for serialization: the links are
-// runtime entity handles, which are not stable across a save and load. Scene
-// files record parenting by entity order instead - see SceneSerializer.
+// runtime entity handles, and an EntityId is an index into a running world's
+// slot table, which means nothing in the next process. A scene file records
+// parenting as a position in its own entity array instead - see
+// SceneSerializer, which reads them back in a second pass because a child may
+// be written before its parent.

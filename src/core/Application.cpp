@@ -1,9 +1,12 @@
 #include "core/Application.hpp"
 
+#include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
+#include "core/DemoTour.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
 #include "editor/EditorOverlay.hpp"
+#include "editor/PlayMode.hpp"
 #include "platform/CameraController.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
@@ -17,10 +20,12 @@
 #include "render/SkyboxSystem.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/FrameGraph.hpp"
+#include "rhi/FrameRecorder.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
+#include "scene/Systems.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -58,7 +63,7 @@ namespace ege {
 
     }  // namespace
 
-    Application::Application() {
+    Application::Application(Options optionsRef) : options{optionsRef} {
         Log::init();
         EGE_INFO("Enchanted Engine starting up");
 
@@ -89,10 +94,24 @@ namespace ege {
         materialSetLayout = Material::createLayout(device);
         Material::createDefaults(device);
 
+        // Before the scene: loading one resolves asset references through the
+        // database, so it has to know where the project is and how to build
+        // GPU objects first.
+        AssetDatabase& assets = AssetDatabase::instance();
+        assets.attachDevice(device, *materialPool, *materialSetLayout);
+        assets.scan(assetRoot());
+
         loadScene();
     }
 
     Application::~Application() {
+        // The asset database is a singleton, so it outlives this object and
+        // would otherwise release its meshes, textures and materials during
+        // static destruction - with the device already gone. That is a real
+        // crash on exit, and it stayed hidden for as long as the only way to
+        // stop the engine was to kill it.
+        AssetDatabase::instance().clear();
+
         // Shared fallback textures outlive every material, so they have to be
         // released before the device goes away.
         Material::destroyDefaults();
@@ -184,6 +203,8 @@ namespace ege {
 
         Camera camera{};
 
+        PlayMode playMode{};
+
         // The viewer is a plain transform rather than an entity: it is the
         // editor camera, not part of the scene being edited.
         Transform viewerTransform{};
@@ -201,22 +222,53 @@ namespace ege {
 
         Time time{};
 
-        while (!window.shouldClose()) {
+        // The demo runs itself: no editor over the picture, the scene already
+        // playing, and the camera on rails. Everything else about the frame is
+        // identical, which is the point - it is the engine being shown, not a
+        // separate presentation mode.
+        DemoTour tour = DemoTour::demoScene();
+        if (options.demo) {
+            overlay.toggle();
+            playMode.play(world);
+            EGE_INFO("Demo tour: {:.1f} seconds", tour.duration());
+        }
+
+        // Recording replaces the clock as well as the output: a frame takes
+        // as long as it takes, and the tour has to advance by the same amount
+        // each time regardless, or the same recording made on two machines
+        // would not be the same recording.
+        std::unique_ptr<FrameRecorder> recorder;
+        if (!options.recordDirectory.empty()) {
+            if (renderer.canCaptureFrames()) {
+                recorder = std::make_unique<FrameRecorder>(
+                    device, options.recordDirectory, renderer.getSwapChainExtent());
+            } else {
+                EGE_ERROR("this driver cannot copy from swapchain images; not recording");
+            }
+        }
+
+        bool running = true;
+        float sessionSeconds = 0.f;
+
+        while (running && !window.shouldClose()) {
             Window::pollEvents();
 
             // After the poll, so that a pause spent inside it is measured as
             // part of the frame it belongs to.
             time.beginFrame();
-            const float frameTime = time.delta();
+            const float frameTime =
+                recorder == nullptr ? time.delta() : 1.f / options.recordFrameRate;
 
             window.input().newFrame();
 
-            // Fixed-rate simulation. Nothing runs here yet - physics attaches
-            // in Phase 8 - but the loop shape is what makes that possible, and
-            // it is far easier to establish before there is anything depending
-            // on the old variable-rate behaviour.
+            // Fixed-rate simulation, and only while the editor is playing.
+            // Keeping edit mode and play mode distinct is what lets Stop put
+            // the world back: nothing advances the scene unless Play asked
+            // for it, so the snapshot stays the truth until then.
             while (time.consumeFixedStep()) {
-                // fixedTick(time.fixedStep());
+                if (playMode.consumeTick()) {
+                    systems::spin(world, time.fixedStep());
+                }
             }
 
             if (window.input().wasPressed(Key::F1)) {
@@ -228,10 +280,21 @@ namespace ege {
             // the input, in which case dragging a slider must not also fly
             // the camera. A captured cursor is not over anything, so a look
             // drag that began in the scene view keeps the camera regardless.
-            const bool cameraOwnsInput =
-                window.input().cursorMode() != CursorMode::Normal || !overlay.wantsInput();
-            if (cameraOwnsInput) {
-                cameraController.update(window.input(), frameTime, viewerTransform);
+            if (options.demo) {
+                if (!tour.advance(frameTime, viewerTransform)) {
+                    running = false;
+                }
+            } else {
+                const bool cameraOwnsInput =
+                    window.input().cursorMode() != CursorMode::Normal || !overlay.wantsInput();
+                if (cameraOwnsInput) {
+                    cameraController.update(window.input(), frameTime, viewerTransform);
+                }
+            }
+
+            sessionSeconds += frameTime;
+            if (options.exitAfterSeconds > 0.f && sessionSeconds >= options.exitAfterSeconds) {
+                running = false;
             }
 
             // Composes world matrices for every parented entity once per frame,
@@ -262,7 +325,9 @@ namespace ege {
                 // Render must pair, and a frame skipped for resize renders
                 // no UI either.
                 overlay.beginFrame();
-                overlay.buildUi(world, camera, pbrRenderSystem.stats(), frameTime);
+                EditorOverlay::Context editorContext{
+                    world, camera, pbrRenderSystem.stats(), playMode, frameTime};
+                overlay.buildUi(editorContext);
 
                 const uint32_t frameIndex = renderer.getFrameIndex();
                 FrameInfo frameInfo{
@@ -367,7 +432,13 @@ namespace ege {
                     // What the acquire semaphore is waited at, so the first
                     // backbuffer barrier chains after the acquire.
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                    // While recording, the graph hands the image over ready to
+                    // be copied and the recorder returns it to PRESENT_SRC.
+                    // Reading an image that has already been presented is the
+                    // kind of thing that works on one driver and corrupts on
+                    // another.
+                    recorder == nullptr ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+                                        : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
                 // Where the display transform lands. With the editor up that is
                 // the viewport image the Scene panel samples, and the UI pass
@@ -489,7 +560,16 @@ namespace ege {
 
                 graph.compile();
                 graph.execute(device, commandBuffer);
+                if (recorder != nullptr) {
+                    recorder->recordCopy(
+                        commandBuffer,
+                        renderer.currentSwapChainImage(),
+                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                }
                 renderer.endFrame();
+                if (recorder != nullptr) {
+                    recorder->writeFrame(renderer.getSwapChainColorFormat());
+                }
             }
         }
 
@@ -501,19 +581,29 @@ namespace ege {
         // clean checkout runs with no binary assets present. Note this scene
         // treats -Y as up, matching the camera and light placement inherited
         // from the tutorial code.
-        auto makeMaterial = [this](glm::vec3 albedo, float metallic, float roughness) {
-            auto material = std::make_shared<Material>(device, *materialPool, *materialSetLayout);
-            material->properties.baseColorFactor = glm::vec4{albedo, 1.f};
-            material->properties.metallicFactor = metallic;
-            material->properties.roughnessFactor = roughness;
-            materials.push_back(material);
-            return material;
-        };
+        //
+        // Everything here is catalogued in the asset database under a
+        // name-derived id, which is what lets a scene built from code rather
+        // than from files still be saved and loaded: the ids are the same in
+        // the next run because the names are.
+        AssetDatabase& assets = AssetDatabase::instance();
+
+        auto makeMaterial =
+            [this, &assets](
+                const std::string& name, glm::vec3 albedo, float metallic, float roughness) {
+                auto material =
+                    std::make_shared<Material>(device, *materialPool, *materialSetLayout);
+                material->properties.baseColorFactor = glm::vec4{albedo, 1.f};
+                material->properties.metallicFactor = metallic;
+                material->properties.roughnessFactor = roughness;
+                const Guid id = assets.addMaterial(name, material);
+                return MaterialRef{id, std::move(material)};
+            };
 
         auto addMesh = [this](
                            std::string name,
-                           std::shared_ptr<Model> model,
-                           std::shared_ptr<Material> material,
+                           MeshRef mesh,
+                           MaterialRef material,
                            glm::vec3 translation,
                            glm::vec3 scale,
                            glm::vec3 rotation = glm::vec3{0.f}) {
@@ -523,7 +613,7 @@ namespace ege {
             transform.scale = scale;
             transform.rotation = rotation;
             entity.attach<Transform>(transform);
-            entity.attach<MeshRenderer>(MeshRenderer{std::move(model), std::move(material), true});
+            entity.attach<MeshRenderer>(MeshRenderer{std::move(mesh), std::move(material), true});
             return entity;
         };
 
@@ -537,27 +627,33 @@ namespace ege {
                 return entity;
             };
 
-        std::shared_ptr<Model> plane = std::make_shared<Model>(device, Model::Builder::plane());
-        std::shared_ptr<Model> box = std::make_shared<Model>(device, Model::Builder::box());
-        std::shared_ptr<Model> sphere =
-            std::make_shared<Model>(device, Model::Builder::sphere(32, 64));
+        const auto primitive = [this, &assets](const std::string& name, Model::Builder builder) {
+            auto model = std::make_shared<Model>(device, builder);
+            const Guid id = assets.addMesh(name, model);
+            return MeshRef{id, std::move(model)};
+        };
+
+        const MeshRef plane = primitive("plane", Model::Builder::plane());
+        const MeshRef box = primitive("box", Model::Builder::box());
+        const MeshRef sphere = primitive("sphere", Model::Builder::sphere(32, 64));
 
         // Floor, rotated a half turn about X so its +Y normal points along -Y,
         // which is up in this scene and therefore towards the lights.
         addMesh(
             "Floor",
             plane,
-            makeMaterial(glm::vec3{0.35f}, 0.f, 0.85f),
+            makeMaterial("Floor", glm::vec3{0.35f}, 0.f, 0.85f),
             {0.f, .5f, 0.f},
             {8.f, 1.f, 8.f},
             {glm::pi<float>(), 0.f, 0.f});
 
-        addMesh(
+        Entity redBox = addMesh(
             "RedBox",
             box,
-            makeMaterial(glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
+            makeMaterial("RedBox", glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
             {-.9f, .25f, 0.f},
             glm::vec3{.5f});
+        redBox.attach<Spin>(Spin{{0.f, 1.2f, 0.f}});
 
         // A row of metal spheres sweeping roughness, which is the clearest way
         // to see whether the GGX distribution and the geometry term behave: the
@@ -570,13 +666,18 @@ namespace ege {
         Transform rowTransform{};
         rowTransform.translation = {0.f, .25f, 1.2f};
         sphereRow.attach<Transform>(rowTransform);
+        // Something for Play to do, and for Stop to undo. Turning the pivot
+        // rather than the spheres also demonstrates that the hierarchy is
+        // carrying the motion down to its children.
+        sphereRow.attach<Spin>(Spin{{0.f, 0.5f, 0.f}});
 
         for (int i = 0; i < 5; i++) {
             const float roughness = 0.05f + 0.95f * static_cast<float>(i) / 4.f;
             Entity ball = addMesh(
                 "MetalSphere" + std::to_string(i),
                 sphere,
-                makeMaterial(glm::vec3{0.95f, 0.8f, 0.35f}, 1.f, roughness),
+                makeMaterial(
+                    "Metal" + std::to_string(i), glm::vec3{0.95f, 0.8f, 0.35f}, 1.f, roughness),
                 {-1.2f + 0.6f * static_cast<float>(i), 0.f, 0.f},
                 glm::vec3{.45f});
             hierarchy::setParent(world, ball.id(), sphereRow.id());
@@ -585,7 +686,7 @@ namespace ege {
         addMesh(
             "BlueSphere",
             sphere,
-            makeMaterial(glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
+            makeMaterial("BlueSphere", glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
             glm::vec3{.5f});
 
@@ -612,45 +713,54 @@ namespace ege {
         importGltfModels();
 
         EGE_INFO(
-            "Scene loaded: {} entities, {} drawn, {} lights, {} materials",
+            "Scene loaded: {} entities, {} drawn, {} lights, {} assets",
             world.entityCount(),
             world.count<Transform, MeshRenderer>(),
             world.count<Transform, PointLight>(),
-            materials.size());
+            AssetDatabase::instance().all().size());
 
         verifySceneRoundTrip();
     }
 
-    void Application::importGltfModels() {
-        namespace fs = std::filesystem;
-
+    std::filesystem::path Application::assetRoot() {
 #ifdef EGE_ASSET_ROOT
-        const fs::path modelDirectory = fs::path{EGE_ASSET_ROOT} / "models";
+        return std::filesystem::path{EGE_ASSET_ROOT};
 #else
-        const fs::path modelDirectory = fs::path{"assets"} / "models";
+        return std::filesystem::path{"assets"};
 #endif
+    }
 
-        std::error_code errorCode;
-        if (!fs::is_directory(modelDirectory, errorCode)) {
-            return;
+    void Application::importGltfModels() {
+        // Driven by the database rather than by another directory walk: the
+        // scan has already found every model and given it an id, and that id
+        // is what the meshes and materials inside it are numbered from.
+        const AssetDatabase& assets = AssetDatabase::instance();
+
+        std::vector<AssetRecord> scenes;
+        for (const AssetRecord& record : assets.all()) {
+            if (record.kind == AssetKind::scene && !record.path.empty()) {
+                scenes.push_back(record);
+            }
         }
 
-        for (const fs::directory_entry& entry : fs::directory_iterator{modelDirectory}) {
-            const fs::path& path = entry.path();
-            const std::string extension = path.extension().string();
-            if (extension != ".gltf" && extension != ".glb") {
-                continue;
-            }
+        for (const AssetRecord& record : scenes) {
+            const std::filesystem::path path = assetRoot() / record.path;
 
             // One bad file should not take down the ones beside it, or the
             // procedural scene it would have joined.
             try {
                 const GltfSceneData scene = gltf::parseFile(path.string());
                 const gltf::ImportStats stats = gltf::instantiate(
-                    device, world, scene, *materialPool, *materialSetLayout, path.stem().string());
+                    device,
+                    world,
+                    scene,
+                    *materialPool,
+                    *materialSetLayout,
+                    record.name,
+                    record.id);
                 EGE_INFO(
                     "Imported {}: {} entities, {} meshes, {} materials, {} textures",
-                    path.filename().string(),
+                    record.path.string(),
                     stats.entities,
                     stats.meshes,
                     stats.materials,
@@ -667,11 +777,11 @@ namespace ege {
         // than leaving it to the tests - which matters because serialization
         // breaks quietly when a component gains a field nothing converts.
         //
-        // Note that MeshRenderer's model and material are not serialized: they
-        // are runtime handles, and turning them into asset references is what
-        // the asset database in Phase 6 is for. The reloaded scene therefore
-        // has geometry-less renderers, which is why this runs against a scratch
-        // world rather than replacing the live one.
+        // The reloaded world now comes back drawable. Until the asset database
+        // there was nothing to write down for a MeshRenderer but a pointer, so
+        // a reloaded scene had its transforms, names and lights and nothing
+        // visible in it; counting the renderers that resolved is what would
+        // notice that returning.
         try {
             const std::string written = SceneSerializer::toString(world);
 
@@ -679,13 +789,27 @@ namespace ege {
             SceneSerializer::fromString(scratch, written);
             const std::string rewritten = SceneSerializer::toString(scratch);
 
+            std::size_t restoredDraws = 0;
+            scratch.each<MeshRenderer>([&](Entity, MeshRenderer& restored) {
+                if (restored.mesh.resolved() && restored.material.resolved()) {
+                    restoredDraws++;
+                }
+            });
+
             if (written == rewritten) {
                 EGE_INFO(
-                    "Scene round-trip verified: {} bytes, {} entities restored",
+                    "Scene round-trip verified: {} bytes, {} entities and {} draws restored",
                     written.size(),
-                    scratch.entityCount());
+                    scratch.entityCount(),
+                    restoredDraws);
             } else {
                 EGE_WARN("scene round-trip is not stable; save and load disagree");
+            }
+            if (restoredDraws != world.count<Transform, MeshRenderer>()) {
+                EGE_WARN(
+                    "scene round-trip lost geometry: {} of {} renderers resolved",
+                    restoredDraws,
+                    world.count<Transform, MeshRenderer>());
             }
 
             SceneSerializer::save(world, "demo_scene.egescene");

@@ -2,6 +2,8 @@
 
 #include "core/LogBuffer.hpp"
 #include "editor/EditorViewport.hpp"
+#include "editor/PlayMode.hpp"
+#include "editor/UndoStack.hpp"
 #include "platform/Window.hpp"
 #include "render/Camera.hpp"
 #include "render/PbrRenderSystem.hpp"
@@ -9,6 +11,7 @@
 #include "scene/World.hpp"
 
 #include <memory>
+#include <string>
 
 namespace ege {
 
@@ -53,14 +56,20 @@ namespace ege {
         // NewFrame and Render must pair even when the overlay is hidden.
         void beginFrame();
 
-        // Declares the panels. Skipped entirely while hidden. The camera is
-        // needed by the scene view, whose gizmo has to agree with the picture
-        // it is drawn over.
-        void buildUi(
-            World& world,
-            const Camera& camera,
-            const PbrRenderSystem::Stats& stats,
-            float frameTime);
+        // Everything a frame's panels need. A struct rather than a growing
+        // parameter list: each new panel wants one more thing, and threading
+        // them through by hand is how a UI layer ends up with a twelve-
+        // argument entry point.
+        struct Context {
+            World& world;
+            const Camera& camera;
+            const PbrRenderSystem::Stats& stats;
+            PlayMode& playMode;
+            float frameTime = 0.f;
+        };
+
+        // Declares the panels. Skipped entirely while hidden.
+        void buildUi(Context& context);
 
         // Finalises the frame and records the draw data.
         void render(VkCommandBuffer commandBuffer);
@@ -94,13 +103,20 @@ namespace ege {
         enum class GizmoMode { translate, rotate, scale };
 
         void buildDefaultLayout(unsigned int dockspaceId);
-        void drawStatsPanel(const PbrRenderSystem::Stats& stats, float frameTime);
-        void drawViewportPanel(World& world, const Camera& camera);
+        void drawMainMenuBar(Context& context);
+        // Records a memento at the moment an interaction begins, and keeps it
+        // only if the interaction changed something.
+        void beginInteractionUndo(World& world);
+        void endInteractionUndo();
+        void applyUndo(World& world, bool redo);
+        void drawStatsPanel(const Context& context);
+        void drawViewportPanel(Context& context);
         void drawGizmo(World& world, const Camera& camera);
         void drawGizmoToolbar();
         void drawHierarchyPanel(World& world);
         void drawEntityNode(World& world, EntityId entity);
         void drawInspectorPanel(World& world);
+        void drawAssetBrowserPanel();
         void drawConsolePanel();
         void applyPendingEdit(World& world);
 
@@ -128,11 +144,20 @@ namespace ege {
         EntityId selected{};
         PendingEdit pending{};
 
+        UndoStack undo;
+        // A drag is one undo step, not one per frame, so the memento is taken
+        // when the interaction starts and committed when it ends - and only if
+        // anything actually changed in between.
+        bool interactingLastFrame = false;
+        bool interactionChangedSomething = false;
+        std::string interactionScene;
+
         // Console state. The severity floor is info by default because that is
         // where the level of the release build sits anyway; a debug build can
         // be dropped to trace from the panel.
         LogLevel consoleMinimumLevel = LogLevel::info;
         char consoleFilter[64]{};
+        char assetFilter[64]{};
         bool consoleFollowsTail = true;
         std::uint64_t lastSeenLogRevision = 0;
     };

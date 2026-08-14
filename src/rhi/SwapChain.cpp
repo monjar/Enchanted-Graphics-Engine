@@ -150,6 +150,18 @@ namespace ege {
         createInfo.imageExtent = extent;
         createInfo.imageArrayLayers = 1;
         createInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+        // Asked for so a frame can be read back and written to disk - what
+        // recording and, eventually, golden-image regression tests need.
+        // Every driver worth the name offers it, but it is optional in the
+        // specification, so the capability is checked rather than assumed and
+        // its absence costs only the ability to capture.
+        if ((swapChainSupport.capabilities.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) !=
+            0) {
+            createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            transferSourceSupported = true;
+        } else {
+            EGE_WARN("swapchain images cannot be copied from; frame capture is unavailable");
+        }
 
         QueueFamilyIndices indices = device.findPhysicalQueueFamilies();
         uint32_t queueFamilyIndices[] = {indices.graphicsFamily, indices.presentFamily};

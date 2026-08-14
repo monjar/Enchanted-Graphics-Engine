@@ -1,10 +1,12 @@
 #include "editor/EditorOverlay.hpp"
 
+#include "assets/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
+#include "scene/SceneSerializer.hpp"
 
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
@@ -21,7 +23,9 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace ege {
@@ -57,6 +61,83 @@ namespace ege {
 
         const TypeInfo* stringType() {
             return &TypeRegistry::of<std::string>();
+        }
+
+        const TypeInfo* meshRefType() {
+            return &TypeRegistry::of<MeshRef>();
+        }
+
+        const TypeInfo* materialRefType() {
+            return &TypeRegistry::of<MaterialRef>();
+        }
+
+        // One payload name per kind rather than one with a kind inside it, so
+        // ImGui highlights only the slots a dragged asset can actually go
+        // into. A target that lights up and then refuses the drop is worse
+        // than one that never lights up.
+        const char* assetPayloadName(AssetKind kind) {
+            switch (kind) {
+                case AssetKind::mesh:
+                    return "EGE_ASSET_MESH";
+                case AssetKind::material:
+                    return "EGE_ASSET_MATERIAL";
+                case AssetKind::texture:
+                    return "EGE_ASSET_TEXTURE";
+                case AssetKind::scene:
+                    return "EGE_ASSET_SCENE";
+                case AssetKind::unknown:
+                    break;
+            }
+            return "EGE_ASSET";
+        }
+
+        // A slot holding an asset of one kind: what it points at now, a drop
+        // target for the browser, and a way to empty it. Returns the id that
+        // was dropped, if any.
+        std::optional<Guid> drawAssetSlot(const char* label, AssetKind kind, Guid current) {
+            const AssetDatabase& database = AssetDatabase::instance();
+            const AssetRecord* record = database.find(current);
+
+            std::string display = "(none)";
+            if (record != nullptr) {
+                display = record->name;
+            } else if (!current.isNull()) {
+                // Named rather than blanked: an asset missing from this
+                // project is a different problem from a slot left empty, and
+                // the reference is still there to be repaired.
+                display = "missing " + current.toString().substr(0, 8);
+            }
+
+            std::optional<Guid> dropped;
+
+            ImGui::PushID(label);
+            ImGui::Button(display.c_str(), ImVec2{ImGui::CalcItemWidth(), 0.f});
+            if (ImGui::BeginDragDropTarget()) {
+                if (const ImGuiPayload* payload =
+                        ImGui::AcceptDragDropPayload(assetPayloadName(kind))) {
+                    Guid id{};
+                    std::memcpy(&id, payload->Data, sizeof(id));
+                    dropped = id;
+                }
+                ImGui::EndDragDropTarget();
+            }
+            if (ImGui::IsItemHovered() && record != nullptr) {
+                ImGui::SetTooltip(
+                    "%s\n%s",
+                    record->builtin ? "built in" : record->path.string().c_str(),
+                    record->id.toString().c_str());
+            }
+            if (!current.isNull()) {
+                ImGui::SameLine();
+                if (ImGui::SmallButton("x")) {
+                    dropped = Guid{};
+                }
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label);
+            ImGui::PopID();
+
+            return dropped;
         }
 
         // One field, drawn by its reflected description, reporting whether the
@@ -99,6 +180,20 @@ namespace ege {
                 } else {
                     changed = ImGui::DragFloat4(label.c_str(), static_cast<float*>(address), 0.05f);
                 }
+            } else if (type == meshRefType()) {
+                auto* ref = static_cast<MeshRef*>(address);
+                if (const std::optional<Guid> dropped =
+                        drawAssetSlot(label.c_str(), AssetKind::mesh, ref->id)) {
+                    *ref = MeshRef{*dropped, AssetDatabase::instance().mesh(*dropped)};
+                    changed = true;
+                }
+            } else if (type == materialRefType()) {
+                auto* ref = static_cast<MaterialRef*>(address);
+                if (const std::optional<Guid> dropped =
+                        drawAssetSlot(label.c_str(), AssetKind::material, ref->id)) {
+                    *ref = MaterialRef{*dropped, AssetDatabase::instance().material(*dropped)};
+                    changed = true;
+                }
             } else if (type == stringType()) {
                 ImGui::LabelText(label.c_str(), "%s", static_cast<std::string*>(address)->c_str());
             } else {
@@ -115,6 +210,10 @@ namespace ege {
 
             return changed;
         }
+
+        // Where Scene > Save and Scene > Load go. One well-known file until
+        // there is a project window to open scenes by id from.
+        constexpr const char* scenePath = "demo_scene.egescene";
 
         // The drag-and-drop payload the hierarchy moves entities with. Entity
         // handles are a packed integer, so the payload is the handle itself
@@ -264,17 +363,21 @@ namespace ege {
         return io.WantCaptureMouse || io.WantCaptureKeyboard;
     }
 
-    void EditorOverlay::buildUi(
-        World& world, const Camera& camera, const PbrRenderSystem::Stats& stats, float frameTime) {
+    void EditorOverlay::buildUi(Context& context) {
         if (!overlayVisible) {
             return;
         }
+
+        World& world = context.world;
 
         // Something under the cursor from the first frame: the panels are
         // the product here, and an empty inspector demonstrates nothing.
         if (selected.isNull() && !world.all().empty()) {
             selected = world.all().front().id();
         }
+
+        drawMainMenuBar(context);
+        beginInteractionUndo(world);
 
         // Panels dock into this rather than floating over the scene, which is
         // the difference between a debug overlay and an editor.
@@ -289,11 +392,55 @@ namespace ege {
             }
         }
 
-        drawViewportPanel(world, camera);
-        drawStatsPanel(stats, frameTime);
+        drawViewportPanel(context);
+        drawStatsPanel(context);
         drawHierarchyPanel(world);
         drawInspectorPanel(world);
+        drawAssetBrowserPanel();
         drawConsolePanel();
+
+        endInteractionUndo();
+    }
+
+    void EditorOverlay::beginInteractionUndo(World& world) {
+        // Taken when the interaction starts, not when the first change is
+        // seen: by then the widget has already written the new value, and the
+        // memento would contain one frame of the change it is meant to undo.
+        const bool interacting = ImGui::IsAnyItemActive() || ImGuizmo::IsUsing();
+        if (interacting && !interactingLastFrame) {
+            interactionScene = SceneSerializer::toString(world);
+            interactionChangedSomething = false;
+        }
+        interactingLastFrame = interacting;
+    }
+
+    void EditorOverlay::endInteractionUndo() {
+        const bool interacting = ImGui::IsAnyItemActive() || ImGuizmo::IsUsing();
+        if (interacting || !interactionChangedSomething) {
+            return;
+        }
+
+        // Pushed directly rather than through record(), which would capture
+        // the current - already changed - state instead of the one held since
+        // the interaction began.
+        undo.recordCaptured(std::move(interactionScene), "edit");
+        interactionScene.clear();
+        interactionChangedSomething = false;
+    }
+
+    void EditorOverlay::applyUndo(World& world, bool redo) {
+        // Restoring respawns everything, so the selection is re-found by name
+        // rather than kept: the handle it holds will not survive.
+        const std::string name = world.alive(selected) ? world.nameOf(selected) : std::string{};
+
+        if (redo) {
+            undo.redo(world);
+        } else {
+            undo.undo(world);
+        }
+
+        selected = name.empty() ? EntityId{} : world.findByName(name).id();
+        pending = PendingEdit{};
     }
 
     void EditorOverlay::buildDefaultLayout(unsigned int dockspaceId) {
@@ -316,17 +463,124 @@ namespace ege {
         const ImGuiID console =
             ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.28f, nullptr, &centre);
 
+        ImGuiID inspector = right;
+        const ImGuiID assets =
+            ImGui::DockBuilderSplitNode(inspector, ImGuiDir_Down, 0.4f, nullptr, &inspector);
+
         ImGui::DockBuilderDockWindow("Scene", centre);
         ImGui::DockBuilderDockWindow("Console", console);
         ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
         ImGui::DockBuilderDockWindow("Stats", stats);
-        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderDockWindow("Inspector", inspector);
+        ImGui::DockBuilderDockWindow("Assets", assets);
         ImGui::DockBuilderFinish(root);
 
         EGE_DEBUG("editor: built the default panel layout");
     }
 
-    void EditorOverlay::drawViewportPanel(World& world, const Camera& camera) {
+    void EditorOverlay::drawMainMenuBar(Context& context) {
+        if (!ImGui::BeginMainMenuBar()) {
+            return;
+        }
+
+        if (ImGui::BeginMenu("Scene")) {
+            // Disabled while playing: writing the running world over the file
+            // would make Stop restore something nobody authored.
+            ImGui::BeginDisabled(!context.playMode.isEditing());
+            if (ImGui::MenuItem("Save")) {
+                try {
+                    SceneSerializer::save(context.world, scenePath);
+                } catch (const std::exception& error) {
+                    EGE_ERROR("{}", error.what());
+                }
+            }
+            if (ImGui::MenuItem("Load")) {
+                try {
+                    SceneSerializer::load(context.world, scenePath);
+                    selected = EntityId{};
+                    // The history describes a world that no longer exists;
+                    // undoing into it would silently replace the one just
+                    // opened.
+                    undo.clear();
+                } catch (const std::exception& error) {
+                    EGE_ERROR("{}", error.what());
+                }
+            }
+            ImGui::EndDisabled();
+            ImGui::EndMenu();
+        }
+
+        // Undo is meaningless while playing: the world is running, and Stop is
+        // already the way back to what was authored.
+        const bool undoAvailable = context.playMode.isEditing();
+        if (ImGui::BeginMenu("Edit")) {
+            ImGui::BeginDisabled(!undoAvailable || !undo.canUndo());
+            if (ImGui::MenuItem(("Undo " + undo.undoLabel()).c_str(), "Ctrl+Z")) {
+                applyUndo(context.world, false);
+            }
+            ImGui::EndDisabled();
+            ImGui::BeginDisabled(!undoAvailable || !undo.canRedo());
+            if (ImGui::MenuItem(("Redo " + undo.redoLabel()).c_str(), "Ctrl+Shift+Z")) {
+                applyUndo(context.world, true);
+            }
+            ImGui::EndDisabled();
+            ImGui::EndMenu();
+        }
+
+        // The shortcuts, checked here rather than in the menu bodies, which
+        // only run while the menu is open.
+        if (undoAvailable && !ImGui::GetIO().WantTextInput) {
+            if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z) ||
+                ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y)) {
+                applyUndo(context.world, true);
+            } else if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z)) {
+                applyUndo(context.world, false);
+            }
+        }
+
+        // Play controls belong here rather than over the viewport: they change
+        // what the whole editor is doing, not what the scene view shows.
+        ImGui::Separator();
+        PlayMode& play = context.playMode;
+        if (play.isEditing()) {
+            if (ImGui::MenuItem("Play")) {
+                play.play(context.world);
+            }
+        } else if (play.isPlaying()) {
+            if (ImGui::MenuItem("Pause")) {
+                play.pause();
+            }
+        } else if (ImGui::MenuItem("Resume")) {
+            play.resume();
+        }
+
+        if (ImGui::MenuItem("Step")) {
+            play.step(context.world);
+        }
+
+        ImGui::BeginDisabled(play.isEditing());
+        if (ImGui::MenuItem("Stop")) {
+            play.stop(context.world);
+            // Restoring respawns everything, so whatever was selected is a
+            // stale handle now. The history survives: Stop returns the world
+            // to what it was when Play was pressed, which is the state the
+            // top of the undo stack was recorded against.
+            selected = EntityId{};
+        }
+        ImGui::EndDisabled();
+
+        if (!play.isEditing()) {
+            ImGui::Separator();
+            ImGui::TextColored(
+                ImVec4{1.f, 0.8f, 0.35f, 1.f}, "%s", play.isPaused() ? "paused" : "playing");
+        }
+
+        ImGui::EndMainMenuBar();
+    }
+
+    void EditorOverlay::drawViewportPanel(Context& context) {
+        World& world = context.world;
+        const Camera& camera = context.camera;
         // No padding: the image is the panel, and a strip of window background
         // around the scene reads as a rendering bug.
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.f, 0.f});
@@ -470,6 +724,7 @@ namespace ege {
 
         *transform = Transform::fromMatrix(glm::inverse(parentMatrix) * worldMatrix);
         hierarchy::markDirty(world, selected);
+        interactionChangedSomething = true;
     }
 
     void EditorOverlay::render(VkCommandBuffer commandBuffer) {
@@ -477,12 +732,13 @@ namespace ege {
         ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), commandBuffer);
     }
 
-    void EditorOverlay::drawStatsPanel(const PbrRenderSystem::Stats& stats, float frameTime) {
+    void EditorOverlay::drawStatsPanel(const Context& context) {
+        const PbrRenderSystem::Stats& stats = context.stats;
         ImGui::Begin("Stats");
         ImGui::Text(
             "%.2f ms  (%.0f fps)",
-            static_cast<double>(frameTime) * 1000.0,
-            1.0 / static_cast<double>(frameTime));
+            static_cast<double>(context.frameTime) * 1000.0,
+            1.0 / static_cast<double>(context.frameTime));
         ImGui::Separator();
         // Culling numbers describe the previous frame: the render that
         // produces them runs after the UI is declared.
@@ -490,6 +746,77 @@ namespace ege {
         ImGui::Text("culled      %zu", stats.culled);
         ImGui::Text("drawn       %zu", stats.drawn);
         ImGui::Text("mat binds   %zu", stats.materialBinds);
+        if (!context.playMode.isEditing()) {
+            ImGui::Separator();
+            ImGui::Text("snapshot    %zu B", context.playMode.snapshotSize());
+        }
+        ImGui::End();
+    }
+
+    void EditorOverlay::drawAssetBrowserPanel() {
+        ImGui::Begin("Assets");
+
+        const AssetDatabase& database = AssetDatabase::instance();
+
+        ImGui::SetNextItemWidth(-1.f);
+        ImGui::InputTextWithHint("##assetFilter", "filter", assetFilter, sizeof(assetFilter));
+        const std::string needle{assetFilter};
+        ImGui::Separator();
+
+        ImGui::BeginChild("assetList");
+        constexpr std::array<AssetKind, 4> kinds{
+            AssetKind::mesh, AssetKind::material, AssetKind::texture, AssetKind::scene};
+        for (const AssetKind kind : kinds) {
+            std::vector<const AssetRecord*> matching;
+            for (const AssetRecord& record : database.all()) {
+                if (record.kind != kind) {
+                    continue;
+                }
+                if (!needle.empty() && record.name.find(needle) == std::string::npos) {
+                    continue;
+                }
+                matching.push_back(&record);
+            }
+            if (matching.empty()) {
+                continue;
+            }
+
+            // Sorted by name rather than by discovery order: a browser whose
+            // contents move when an unrelated file is added is unusable.
+            std::sort(
+                matching.begin(), matching.end(), [](const AssetRecord* a, const AssetRecord* b) {
+                    return a->name < b->name;
+                });
+
+            const std::string header =
+                std::string{assetKindName(kind)} + " (" + std::to_string(matching.size()) + ")";
+            if (!ImGui::CollapsingHeader(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                continue;
+            }
+
+            for (const AssetRecord* record : matching) {
+                ImGui::PushID(static_cast<int>(record->id.low() & 0x7fffffff));
+                ImGui::Selectable(record->name.c_str());
+
+                // Dragging is what the browser is for: the inspector's slots
+                // are the other end of this.
+                if (ImGui::BeginDragDropSource()) {
+                    const Guid id = record->id;
+                    ImGui::SetDragDropPayload(assetPayloadName(record->kind), &id, sizeof(id));
+                    ImGui::TextUnformatted(record->name.c_str());
+                    ImGui::EndDragDropSource();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(
+                        "%s\n%s",
+                        record->builtin ? "built in" : record->path.string().c_str(),
+                        record->id.toString().c_str());
+                }
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+
         ImGui::End();
     }
 
@@ -593,6 +920,27 @@ namespace ege {
     void EditorOverlay::applyPendingEdit(World& world) {
         const PendingEdit edit = pending;
         pending = PendingEdit{};
+
+        if (edit.kind == PendingEdit::Kind::none) {
+            return;
+        }
+
+        const char* label = "edit";
+        switch (edit.kind) {
+            case PendingEdit::Kind::spawn:
+                label = "spawn";
+                break;
+            case PendingEdit::Kind::despawn:
+                label = "delete";
+                break;
+            case PendingEdit::Kind::reparent:
+                label = "reparent";
+                break;
+            case PendingEdit::Kind::none:
+                break;
+        }
+        // Before the change, so the memento holds the state to come back to.
+        undo.record(world, label);
 
         switch (edit.kind) {
             case PendingEdit::Kind::none:
@@ -802,12 +1150,14 @@ namespace ege {
         if (!adding.empty()) {
             if (const ComponentRegistry::Entry* entry =
                     ComponentRegistry::instance().find(adding)) {
+                undo.record(world, "add " + adding);
                 entry->attach(world, selected);
             }
         }
         if (!removing.empty()) {
             if (const ComponentRegistry::Entry* entry =
                     ComponentRegistry::instance().find(removing)) {
+                undo.record(world, "remove " + removing);
                 entry->detach(world, selected);
             }
         }
@@ -819,6 +1169,7 @@ namespace ege {
         if (edited || !adding.empty() || !removing.empty()) {
             hierarchy::markDirty(world, selected);
         }
+        interactionChangedSomething = interactionChangedSomething || edited;
     }
 
 }  // namespace ege
