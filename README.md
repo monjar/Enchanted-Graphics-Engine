@@ -35,15 +35,20 @@ The copper torus is a **glTF import**: any `.gltf`/`.glb` dropped into
 hierarchy spawned as entities at startup. The demo's torus is itself a
 self-contained text glTF, so the no-binary-assets rule still holds.
 
-![The editor overlay: hierarchy tree, reflection-driven inspector and stats panel over the scene](docs/images/editor-overlay.png)
+![The editor: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector, stats and console](docs/images/editor.png)
 
-Press **F1** for the editor overlay — a hierarchy tree, a stats panel, and an
-inspector generated entirely from the engine's reflection system: a component
-gets editable fields, sliders and colour pickers by declaring them with
+Press **F1** for the editor. The scene renders into an offscreen image the UI
+samples as a texture, so it is a **viewport** — a panel with its own aspect
+ratio, with the hierarchy, inspector, stats and console docked around it
+rather than floating over the picture they describe. Entities can be created,
+deleted and reparented by dragging, moved with translate/rotate/scale
+**gizmos**, and edited through an **inspector generated entirely from the
+engine's reflection system**: a component gets editable fields, sliders,
+colour pickers and an entry in the add-component list by declaring itself with
 `EGE_REFLECT`, with no inspector code written per type.
 
-Still to come: cascaded and point-light shadows, anti-aliasing, the
-standalone editor application, C++ scripting and physics.
+Still to come: cascaded and point-light shadows, anti-aliasing, play mode and
+undo, the standalone editor application, C++ scripting and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -94,6 +99,10 @@ validation layers enabled and fails on any validation message.
 | `Q` / `E` | Down / up |
 | Arrow keys | Look |
 | Hold right mouse | Mouse-look (captures the cursor) |
+| `F1` | Show or hide the editor |
+
+With the editor up, the camera answers only while the cursor is over the
+scene view; anywhere else the mouse and keyboard belong to the panels.
 
 ## Layout
 
@@ -104,7 +113,8 @@ src/
   reflect/      runtime type information
   platform/     window and input; everything touching GLFW
   assets/       glTF import (cgltf); grows into the asset database in Phase 6
-  editor/       the in-process overlay; grows into EnchantedEditor in Phase 5
+  editor/       in-process panels and the offscreen viewport; the panels move
+                into EnchantedEditor in Phase 5 rather than being rewritten
   rhi/          device, swapchain, pipeline, buffer, descriptors, textures, frame graph
   render/       renderer, model, camera, materials, lights, bounds,
                 environment lighting, PBR, shadows, skybox, bloom and post-process
@@ -141,6 +151,9 @@ reformat out of `git blame`.
 | [GLFW](https://www.glfw.org/) 3.4 | windowing and input | fetched or system |
 | [GLM](https://github.com/g-truc/glm) 1.0.1 | maths | fetched or system |
 | [tinyobjloader](https://github.com/tinyobjloader/tinyobjloader) | OBJ import | vendored |
+| [cgltf](https://github.com/jkuhlmann/cgltf) 1.14 | glTF 2.0 import | fetched |
+| [Dear ImGui](https://github.com/ocornut/imgui) 1.91.8 (docking) | editor UI | fetched |
+| [ImGuizmo](https://github.com/CedricGuillemet/ImGuizmo) | transform gizmos | fetched |
 | [spdlog](https://github.com/gabime/spdlog) 1.14.1 | logging | fetched or system |
 | [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) 3.1.0 | GPU memory | fetched |
 | [stb_image](https://github.com/nothings/stb) | image decoding | fetched |

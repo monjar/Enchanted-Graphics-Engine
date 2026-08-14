@@ -2,15 +2,15 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phase 4 partially complete. Phases 5 and 6 not started.**
+> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4 and 5 partially complete. Phase 6 not started.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import** with materials, textures and hierarchy. **Phase 5 has begun**: the in-process editor overlay — hierarchy tree, reflection-driven inspector, stats — is live behind F1. Next: growing the overlay's panels (add/remove components, asset-backed fields), the offscreen viewport that turns it into the standalone editor, and the **Phase 6 asset database** that gives imported content stable references.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import** with materials, textures and hierarchy. **Phase 5 is well underway**: the editor has an offscreen **viewport** with docked panels around it, a hierarchy that creates, deletes and reparents by dragging, a reflection-driven inspector with component add and remove, **transform gizmos**, and a console. Next: Play/Stop, undo/redo, the asset browser, and the **Phase 6 asset database** that gives imported content stable references — which is also what Play/Stop is waiting on, since a world snapshot cannot restore what a scene file cannot describe.
 
 ## 1. Where the project stands today
 
 Enchanted is a **Vulkan 1.3 forward renderer with a metallic-roughness PBR pipeline, image-based lighting and a frame graph**, an entity-component system, runtime reflection, VMA-backed GPU memory, textures with mip generation, a job system and a fixed-timestep clock. The scene renders linear HDR into a graph-managed float target and is tonemapped to the swapchain with the ACES fit; ambient light comes from a procedurally generated sky via irradiance and prefiltered-specular convolutions computed on the GPU at startup. It began as a port of Brendan Galea's Vulkan tutorial series and has since grown past it.
 
-Still absent, and tracked per phase in §6: glTF import, shadows, bloom and anti-aliasing, the editor, scripting and physics.
+Still absent, and tracked per phase in §6: anti-aliasing, cascaded and point-light shadows, the asset database, play mode, scripting and physics.
 
 The Vulkan foundations are idiomatic and are being kept:
 
@@ -27,7 +27,9 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::ShadowMapSystem` | Depth-only sun shadow pass; the map itself is a frame graph transient |
 | `ege::BloomSystem` | Half-resolution bright-pass and separable blur, composited before the tonemap |
 | `ege::PostProcessSystem` | Fullscreen ACES tonemap from the HDR scene target to the backbuffer |
-| `ege::EditorOverlay` | In-process ImGui overlay: hierarchy, reflection-driven inspector, stats |
+| `ege::EditorOverlay` | In-process editor: viewport, hierarchy, reflection-driven inspector, gizmos, console, stats |
+| `ege::EditorViewport` | The offscreen image the scene renders into and the UI samples |
+| `ege::LogBuffer` | The recent log, in memory, for the console to show |
 | `ege::Buffer` | Generic mapped/staged Vulkan buffer |
 | `ege::DescriptorSetLayout` / `Pool` / `Writer` | Fluent descriptor builders |
 | `ege::Model` | Vertex/index buffers, procedural primitives, tinyobj loading, vertex dedup |
@@ -345,7 +347,23 @@ One bug worth recording, found by looking at the output rather than by the build
 
 **Done when:** a scene can be built, arranged, saved, played and stopped entirely inside the editor without touching code.
 
-**Outcome — begun.** The in-process overlay landed first, as this phase's own sequencing note advises (thin and early beats complete and late): Dear ImGui (docking) drawn as the frame's last declared pass onto the backbuffer, with the **hierarchy tree** (parenting, selection), the **reflection-driven inspector** — fields, sliders, colour pickers and tooltips generated from `EGE_REFLECT` declarations with no per-type UI code — and a **stats panel** over the renderer's per-frame counters. F1 toggles it; the camera controller stands down while a panel owns the input. This is the Phase 3 "debug overlay" deferral repaid, and it is deliberately in-process: the panels exercise the ECS and reflection APIs now and move into the standalone `EnchantedEditor` application when it exists, rather than being rewritten. Still ahead here: the offscreen **viewport** (the piece that makes the standalone application worth building), component add/remove, asset-backed fields, gizmos, console, undo/redo, and Play/Stop.
+**Outcome — partial, and past the point where it is only an overlay.** It began as one, as this phase's own sequencing note advises (thin and early beats complete and late): Dear ImGui (docking) drawn as the frame's last declared pass, with a hierarchy tree, a reflection-driven inspector and a stats panel over the backbuffer. It is deliberately in-process — the panels exercise the ECS and reflection APIs now and move into the standalone `EnchantedEditor` application when it exists, rather than being rewritten.
+
+*Done:*
+
+**The viewport.** The scene renders into an offscreen image the UI samples as a texture instead of onto the backbuffer, and the panels dock around it. This is what separates an editor from a debug overlay: the view has its own aspect ratio independent of the window, the panels stop obscuring the thing they describe, and everything the editor eventually draws over the render has somewhere to live. The frame graph made the swap a change of declaration — the tonemap pass writes the viewport image, the UI pass declares a sampled read of it, every transition between them is derived, and with the editor hidden the tonemap targets the backbuffer again and the frame is byte-for-byte what it was before. The image carries the swapchain's sRGB format on purpose: the tonemap writes linear values the attachment encodes, ImGui's sampler decodes them, the sRGB backbuffer encodes them again, so the detour through a texture is an exact identity rather than a colour shift. Resizing a panel edge replaces the image and the descriptor set ImGui draws it with; both are retired and freed once the frames that could still reference them have gone, rather than stalling the device on every frame of a drag.
+
+**Editing.** Entities are created, deleted (with their subtree) and reparented by dragging in the hierarchy; components are added and removed in the inspector, both straight off the component registry's type-erased thunks, so a newly registered component appears in the add list with nothing written per type. Structural edits are recorded during the walk that asks for them and applied after it — spawning mid-walk invalidates the sibling links the traversal is following, and attaching mid-loop rearranges the pool the inspector is reading out of.
+
+**Gizmos** (ImGuizmo): translate, rotate and scale with a world/local toggle and snapping. Two conventions had to be got right and both fail quietly: ImGuizmo projects with OpenGL's clip space, where +Y is the top of the screen and Vulkan's is the bottom, so the projection handed to it is flipped in Y — without which the handles sit mirrored about the horizon, subtle enough near the centre of the view to pass for correct. And its habit of turning axes towards the camera is switched off, because in a scene whose up is -Y an arrow pointing up the screen could mean either sign. Manipulation happens in world space with the parent divided back out, since a gizmo moves the entity where it *appears* to be.
+
+**Console:** the log, in a bounded in-memory ring fed by a third spdlog sink alongside the terminal and the file, filterable by severity and substring. It sits in `core/` behind the engine's own severity enum rather than spdlog's, because the console is a consumer of the log, not of the logging library.
+
+**Layout** is built by the dock builder on first run and restored from `imgui.ini` after, so a fresh checkout opens arranged and an arranged editor stays that way.
+
+One bug worth recording, found because the viewport made it impossible to miss: editing a parented entity's `Transform` in the inspector changed the numbers and moved nothing. World matrices are cached behind a dirty flag on `Hierarchy`, and writing fields through reflection never set it. Fields now report whether they changed, and an edited entity and its descendants are marked dirty. This is the general shape of the problem reflection-driven editing has — a generic writer knows how to set a field but not what setting it invalidates.
+
+*Not done:* multi-select, an **asset browser** (waiting on Phase 6 — there is no asset database to browse), asset-backed inspector fields for the same reason, **undo/redo**, and **Play / Pause / Step / Stop**. Play/Stop is genuinely blocked rather than merely unscheduled: it snapshots the world on Play and restores it on Stop, and a scene file today cannot describe a `MeshRenderer`, whose model and material are runtime handles. Stopping would restore a scene with no geometry in it. Phase 6's stable asset references are the prerequisite.
 
 ### Phase 6 — Asset pipeline (~4 weeks)
 
