@@ -68,12 +68,25 @@ namespace ege {
         bool wantsInput() const;
 
     private:
+        // A structural change asked for while the hierarchy was being walked.
+        // Spawning or despawning mid-walk would invalidate the sibling links
+        // the walk is following, so the request is recorded and applied once
+        // the tree has been drawn.
+        struct PendingEdit {
+            enum class Kind { none, spawn, despawn, reparent };
+
+            Kind kind = Kind::none;
+            EntityId subject{};
+            EntityId target{};
+        };
+
         void buildDefaultLayout(unsigned int dockspaceId);
         void drawStatsPanel(const PbrRenderSystem::Stats& stats, float frameTime);
         void drawViewportPanel();
         void drawHierarchyPanel(World& world);
         void drawEntityNode(World& world, EntityId entity);
         void drawInspectorPanel(World& world);
+        void applyPendingEdit(World& world);
 
         Device& device;
         VkDescriptorPool imguiPool = VK_NULL_HANDLE;
@@ -92,6 +105,7 @@ namespace ege {
 
         bool overlayVisible = true;
         EntityId selected{};
+        PendingEdit pending{};
     };
 
 }  // namespace ege

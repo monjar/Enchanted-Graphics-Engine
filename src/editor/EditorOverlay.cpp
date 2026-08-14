@@ -4,6 +4,7 @@
 #include "reflect/BuiltinTypes.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
+#include "scene/Hierarchy.hpp"
 
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
@@ -53,13 +54,15 @@ namespace ege {
             return &TypeRegistry::of<std::string>();
         }
 
-        // One field, drawn by its reflected description. This function is the
-        // entire inspector "framework": a new component type gets an editor UI
-        // by being reflected, with nothing written here.
-        void drawField(const FieldInfo& field, void* instance) {
+        // One field, drawn by its reflected description, reporting whether the
+        // user changed it. This function is the entire inspector "framework":
+        // a new component type gets an editor UI by being reflected, with
+        // nothing written here.
+        bool drawField(const FieldInfo& field, void* instance) {
             void* address = field.addressIn(instance);
             const TypeInfo* type = &field.type();
             const std::string label{field.name()};
+            bool changed = false;
 
             if (field.isReadOnly()) {
                 ImGui::BeginDisabled();
@@ -68,27 +71,28 @@ namespace ege {
             if (type == floatType()) {
                 auto* value = static_cast<float*>(address);
                 if (field.hasRange()) {
-                    ImGui::SliderFloat(label.c_str(), value, field.range().min, field.range().max);
+                    changed = ImGui::SliderFloat(
+                        label.c_str(), value, field.range().min, field.range().max);
                 } else {
-                    ImGui::DragFloat(label.c_str(), value, 0.05f);
+                    changed = ImGui::DragFloat(label.c_str(), value, 0.05f);
                 }
             } else if (type == intType()) {
-                ImGui::DragInt(label.c_str(), static_cast<int*>(address));
+                changed = ImGui::DragInt(label.c_str(), static_cast<int*>(address));
             } else if (type == boolType()) {
-                ImGui::Checkbox(label.c_str(), static_cast<bool*>(address));
+                changed = ImGui::Checkbox(label.c_str(), static_cast<bool*>(address));
             } else if (type == vec2Type()) {
-                ImGui::DragFloat2(label.c_str(), static_cast<float*>(address), 0.05f);
+                changed = ImGui::DragFloat2(label.c_str(), static_cast<float*>(address), 0.05f);
             } else if (type == vec3Type()) {
                 if (field.isColor()) {
-                    ImGui::ColorEdit3(label.c_str(), static_cast<float*>(address));
+                    changed = ImGui::ColorEdit3(label.c_str(), static_cast<float*>(address));
                 } else {
-                    ImGui::DragFloat3(label.c_str(), static_cast<float*>(address), 0.05f);
+                    changed = ImGui::DragFloat3(label.c_str(), static_cast<float*>(address), 0.05f);
                 }
             } else if (type == vec4Type()) {
                 if (field.isColor()) {
-                    ImGui::ColorEdit4(label.c_str(), static_cast<float*>(address));
+                    changed = ImGui::ColorEdit4(label.c_str(), static_cast<float*>(address));
                 } else {
-                    ImGui::DragFloat4(label.c_str(), static_cast<float*>(address), 0.05f);
+                    changed = ImGui::DragFloat4(label.c_str(), static_cast<float*>(address), 0.05f);
                 }
             } else if (type == stringType()) {
                 ImGui::LabelText(label.c_str(), "%s", static_cast<std::string*>(address)->c_str());
@@ -103,7 +107,14 @@ namespace ege {
             if (field.tooltip() != nullptr && ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s", field.tooltip());
             }
+
+            return changed;
         }
+
+        // The drag-and-drop payload the hierarchy moves entities with. Entity
+        // handles are a packed integer, so the payload is the handle itself
+        // rather than a pointer into anything that could be reallocated.
+        constexpr const char* entityPayload = "EGE_ENTITY";
 
     }  // namespace
 
@@ -335,6 +346,21 @@ namespace ege {
     void EditorOverlay::drawHierarchyPanel(World& world) {
         ImGui::Begin("Hierarchy");
 
+        if (ImGui::Button("New")) {
+            pending = PendingEdit{PendingEdit::Kind::spawn, EntityId{}, EntityId{}};
+        }
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!world.alive(selected));
+        if (ImGui::Button("Delete")) {
+            pending = PendingEdit{PendingEdit::Kind::despawn, selected, EntityId{}};
+        }
+        ImGui::EndDisabled();
+        ImGui::Separator();
+
+        // The tree lives in a child filling the rest of the panel so that the
+        // empty space below the last node is still part of it: dropping there
+        // is how an entity is dragged back out to the root.
+        ImGui::BeginChild("tree");
         for (Entity entity : world.all()) {
             // Roots only; children are reached through their parent.
             const Hierarchy* links = world.find<Hierarchy>(entity.id());
@@ -343,8 +369,71 @@ namespace ege {
             }
             drawEntityNode(world, entity.id());
         }
+        ImGui::EndChild();
+
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(entityPayload)) {
+                EntityId dropped{};
+                std::memcpy(&dropped, payload->Data, sizeof(dropped));
+                pending = PendingEdit{PendingEdit::Kind::reparent, dropped, EntityId{}};
+            }
+            ImGui::EndDragDropTarget();
+        }
 
         ImGui::End();
+
+        applyPendingEdit(world);
+    }
+
+    void EditorOverlay::applyPendingEdit(World& world) {
+        const PendingEdit edit = pending;
+        pending = PendingEdit{};
+
+        switch (edit.kind) {
+            case PendingEdit::Kind::none:
+                return;
+
+            case PendingEdit::Kind::spawn: {
+                // A Transform from the start: an entity with no place in space
+                // is not what anyone means by "new entity", and the inspector
+                // would open on nothing.
+                Entity created = world.spawn("Entity");
+                created.attach<Transform>(Transform{});
+                if (world.alive(edit.subject)) {
+                    hierarchy::setParent(world, created.id(), edit.subject);
+                }
+                selected = created.id();
+                break;
+            }
+
+            case PendingEdit::Kind::despawn:
+                if (world.alive(edit.subject)) {
+                    // Subtree, not just the entity: children left behind would
+                    // be orphaned at the root, which is never what deleting a
+                    // parent in a scene tree is taken to mean.
+                    hierarchy::despawnSubtree(world, edit.subject);
+                }
+                break;
+
+            case PendingEdit::Kind::reparent:
+                if (!world.alive(edit.subject)) {
+                    break;
+                }
+                // A null target unparents. setParent refuses cycles rather
+                // than building a tree the next traversal would hang on, which
+                // dragging a parent onto its own child does constantly.
+                if (!hierarchy::setParent(world, edit.subject, edit.target)) {
+                    EGE_WARN(
+                        "cannot parent '{}' under '{}': it is already an ancestor",
+                        world.nameOf(edit.subject),
+                        world.nameOf(edit.target));
+                }
+                break;
+        }
+
+        if (!world.alive(selected)) {
+            selected = EntityId{};
+        }
     }
 
     void EditorOverlay::drawEntityNode(World& world, EntityId entity) {
@@ -371,6 +460,32 @@ namespace ege {
             name.empty() ? "(unnamed)" : name.c_str());
         if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
             selected = entity;
+        }
+
+        if (ImGui::BeginDragDropSource()) {
+            ImGui::SetDragDropPayload(entityPayload, &entity, sizeof(entity));
+            ImGui::TextUnformatted(name.empty() ? "(unnamed)" : name.c_str());
+            ImGui::EndDragDropSource();
+        }
+
+        if (ImGui::BeginDragDropTarget()) {
+            if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(entityPayload)) {
+                EntityId dropped{};
+                std::memcpy(&dropped, payload->Data, sizeof(dropped));
+                pending = PendingEdit{PendingEdit::Kind::reparent, dropped, entity};
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        if (ImGui::BeginPopupContextItem()) {
+            selected = entity;
+            if (ImGui::MenuItem("Add child")) {
+                pending = PendingEdit{PendingEdit::Kind::spawn, entity, EntityId{}};
+            }
+            if (ImGui::MenuItem("Delete")) {
+                pending = PendingEdit{PendingEdit::Kind::despawn, entity, EntityId{}};
+            }
+            ImGui::EndPopup();
         }
 
         if (open) {
@@ -412,11 +527,26 @@ namespace ege {
 
         // Every registered component the entity carries, drawn purely from
         // reflection. Nothing here knows what a Transform is.
+        bool edited = false;
+        std::string removing;
         for (const ComponentRegistry::Entry& entry : ComponentRegistry::instance().all()) {
             if (!entry.has(world, selected)) {
                 continue;
             }
-            if (!ImGui::CollapsingHeader(entry.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            const bool open =
+                ImGui::CollapsingHeader(entry.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen);
+
+            // Detaching is deferred past the loop for the same reason
+            // structural edits are deferred past the hierarchy walk: the
+            // component being drawn lives in the pool this would rearrange.
+            if (ImGui::BeginPopupContextItem(entry.name.c_str())) {
+                if (ImGui::MenuItem("Remove component")) {
+                    removing = entry.name;
+                }
+                ImGui::EndPopup();
+            }
+
+            if (!open) {
                 continue;
             }
 
@@ -431,13 +561,59 @@ namespace ege {
 
             ImGui::PushID(entry.name.c_str());
             for (const FieldInfo& field : entry.type->fields()) {
-                drawField(field, component);
+                edited = drawField(field, component) || edited;
             }
             ImGui::PopID();
         }
 
         ImGui::PopItemWidth();
+
+        // Attaching is deferred past the draw loop too, so that the list being
+        // iterated and the list being added to are never the same list mid-walk.
+        std::string adding;
+        ImGui::Separator();
+        if (ImGui::Button("Add Component")) {
+            ImGui::OpenPopup("addComponent");
+        }
+        if (ImGui::BeginPopup("addComponent")) {
+            bool anyAvailable = false;
+            for (const ComponentRegistry::Entry& entry : ComponentRegistry::instance().all()) {
+                if (entry.has(world, selected)) {
+                    continue;
+                }
+                anyAvailable = true;
+                if (ImGui::MenuItem(entry.name.c_str())) {
+                    adding = entry.name;
+                }
+            }
+            if (!anyAvailable) {
+                ImGui::TextDisabled("(nothing left to add)");
+            }
+            ImGui::EndPopup();
+        }
+
         ImGui::End();
+
+        if (!adding.empty()) {
+            if (const ComponentRegistry::Entry* entry =
+                    ComponentRegistry::instance().find(adding)) {
+                entry->attach(world, selected);
+            }
+        }
+        if (!removing.empty()) {
+            if (const ComponentRegistry::Entry* entry =
+                    ComponentRegistry::instance().find(removing)) {
+                entry->detach(world, selected);
+            }
+        }
+
+        // A transform edited here is a transform whose cached world matrix is
+        // now wrong - and, for a parent, so is every descendant's. Without
+        // this the numbers in the inspector change and nothing moves, which is
+        // the bug the viewport made impossible to miss.
+        if (edited || !adding.empty() || !removing.empty()) {
+            hierarchy::markDirty(world, selected);
+        }
     }
 
 }  // namespace ege
