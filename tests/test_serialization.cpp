@@ -6,10 +6,12 @@
 // silently - a component that failed to re-attach, a field the writer skipped,
 // an ordering that is not stable.
 
+#include "core/Guid.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "reflect/Serialization.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
+#include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
 #include "scene/World.hpp"
 
@@ -37,6 +39,11 @@ namespace {
         ege::registerBuiltinComponents();
     }
 
+    // Ids only, with nothing resolved: these tests run with no device, and
+    // what a scene file has to preserve is the reference, not the pointer.
+    const ege::Guid floorMesh = ege::Guid::fromName("mesh:plane");
+    const ege::Guid floorMaterial = ege::Guid::fromName("material:Floor");
+
     void buildScene(World& world) {
         Entity floor = world.spawn("Floor");
         Transform floorTransform{};
@@ -44,7 +51,10 @@ namespace {
         floorTransform.scale = {8.f, 1.f, 8.f};
         floorTransform.rotation = {3.14159f, 0.f, 0.f};
         floor.attach<Transform>(floorTransform);
-        floor.attach<MeshRenderer>(MeshRenderer{nullptr, nullptr, true});
+        MeshRenderer renderer{};
+        renderer.mesh.id = floorMesh;
+        renderer.material.id = floorMaterial;
+        floor.attach<MeshRenderer>(renderer);
 
         Entity light = world.spawn("KeyLight");
         Transform lightTransform{};
@@ -55,6 +65,16 @@ namespace {
         Entity hidden = world.spawn("HiddenThing");
         hidden.attach<Transform>();
         hidden.attach<ege::Hidden>();
+
+        // Parented, because parenting is part of what a scene file has to
+        // carry and used not to be.
+        Entity pivot = world.spawn("Pivot");
+        pivot.attach<Transform>();
+        Entity child = world.spawn("Child");
+        Transform childTransform{};
+        childTransform.translation = {1.f, 0.f, 0.f};
+        child.attach<Transform>(childTransform);
+        ege::hierarchy::setParent(world, child.id(), pivot.id());
     }
 
 }  // namespace
@@ -192,7 +212,7 @@ TEST_CASE("loading replaces the world's contents rather than merging") {
 
     SceneSerializer::fromString(destination, json);
 
-    CHECK(destination.entityCount() == 3);
+    CHECK(destination.entityCount() == 5);
     CHECK_FALSE(destination.findByName("Leftover").alive());
 }
 
@@ -260,4 +280,83 @@ TEST_CASE("every registered component is serializable") {
             REQUIRE(serializable);
         }
     }
+}
+
+TEST_CASE("asset references survive a save and load") {
+    // The property the asset database exists for, seen from the scene file's
+    // side: what a MeshRenderer points at is written down and comes back.
+    // Before ids it did not, and a reloaded scene had transforms, names and
+    // lights but nothing to draw.
+    ensureRegistered();
+
+    World original;
+    buildScene(original);
+
+    World reloaded;
+    SceneSerializer::fromString(reloaded, SceneSerializer::toString(original));
+
+    Entity floor = reloaded.findByName("Floor");
+    REQUIRE(floor.alive());
+    const MeshRenderer* renderer = floor.find<MeshRenderer>();
+    REQUIRE(renderer != nullptr);
+    CHECK(renderer->mesh.id == floorMesh);
+    CHECK(renderer->material.id == floorMaterial);
+    // Nothing resolved, because these tests have no device - and the reference
+    // still knows what it wants, so saving again does not drop it.
+    CHECK_FALSE(renderer->mesh.resolved());
+    CHECK(SceneSerializer::toString(reloaded) == SceneSerializer::toString(original));
+}
+
+TEST_CASE("an empty asset reference stays empty") {
+    ensureRegistered();
+
+    World world;
+    world.spawn("Blank").attach<Transform>();
+    world.findByName("Blank").attach<MeshRenderer>();
+
+    World reloaded;
+    SceneSerializer::fromString(reloaded, SceneSerializer::toString(world));
+
+    const MeshRenderer* renderer = reloaded.findByName("Blank").find<MeshRenderer>();
+    REQUIRE(renderer != nullptr);
+    CHECK(renderer->mesh.id.isNull());
+    CHECK(renderer->material.id.isNull());
+}
+
+TEST_CASE("parenting survives a save and load") {
+    ensureRegistered();
+
+    World original;
+    buildScene(original);
+
+    World reloaded;
+    SceneSerializer::fromString(reloaded, SceneSerializer::toString(original));
+
+    Entity pivot = reloaded.findByName("Pivot");
+    Entity child = reloaded.findByName("Child");
+    REQUIRE(pivot.alive());
+    REQUIRE(child.alive());
+    CHECK(ege::hierarchy::parentOf(reloaded, child.id()) == pivot.id());
+    // And the entities that were roots stay roots.
+    CHECK(ege::hierarchy::parentOf(reloaded, pivot.id()).isNull());
+}
+
+TEST_CASE("a parent index outside the file leaves the entity at the root") {
+    // A hand-edited or truncated scene must not index off the end of the
+    // array it was written against.
+    ensureRegistered();
+
+    const std::string json = R"({
+        "version": 1,
+        "entities": [
+            {"name": "Orphan", "parent": 7, "components": {}}
+        ]
+    })";
+
+    World world;
+    SceneSerializer::fromString(world, json);
+
+    Entity orphan = world.findByName("Orphan");
+    REQUIRE(orphan.alive());
+    CHECK(ege::hierarchy::parentOf(world, orphan.id()).isNull());
 }

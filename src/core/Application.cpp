@@ -1,5 +1,6 @@
 #include "core/Application.hpp"
 
+#include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
@@ -88,6 +89,13 @@ namespace ege {
                            .build();
         materialSetLayout = Material::createLayout(device);
         Material::createDefaults(device);
+
+        // Before the scene: loading one resolves asset references through the
+        // database, so it has to know where the project is and how to build
+        // GPU objects first.
+        AssetDatabase& assets = AssetDatabase::instance();
+        assets.attachDevice(device, *materialPool, *materialSetLayout);
+        assets.scan(assetRoot());
 
         loadScene();
     }
@@ -501,19 +509,29 @@ namespace ege {
         // clean checkout runs with no binary assets present. Note this scene
         // treats -Y as up, matching the camera and light placement inherited
         // from the tutorial code.
-        auto makeMaterial = [this](glm::vec3 albedo, float metallic, float roughness) {
-            auto material = std::make_shared<Material>(device, *materialPool, *materialSetLayout);
-            material->properties.baseColorFactor = glm::vec4{albedo, 1.f};
-            material->properties.metallicFactor = metallic;
-            material->properties.roughnessFactor = roughness;
-            materials.push_back(material);
-            return material;
-        };
+        //
+        // Everything here is catalogued in the asset database under a
+        // name-derived id, which is what lets a scene built from code rather
+        // than from files still be saved and loaded: the ids are the same in
+        // the next run because the names are.
+        AssetDatabase& assets = AssetDatabase::instance();
+
+        auto makeMaterial =
+            [this, &assets](
+                const std::string& name, glm::vec3 albedo, float metallic, float roughness) {
+                auto material =
+                    std::make_shared<Material>(device, *materialPool, *materialSetLayout);
+                material->properties.baseColorFactor = glm::vec4{albedo, 1.f};
+                material->properties.metallicFactor = metallic;
+                material->properties.roughnessFactor = roughness;
+                const Guid id = assets.addMaterial(name, material);
+                return MaterialRef{id, std::move(material)};
+            };
 
         auto addMesh = [this](
                            std::string name,
-                           std::shared_ptr<Model> model,
-                           std::shared_ptr<Material> material,
+                           MeshRef mesh,
+                           MaterialRef material,
                            glm::vec3 translation,
                            glm::vec3 scale,
                            glm::vec3 rotation = glm::vec3{0.f}) {
@@ -523,7 +541,7 @@ namespace ege {
             transform.scale = scale;
             transform.rotation = rotation;
             entity.attach<Transform>(transform);
-            entity.attach<MeshRenderer>(MeshRenderer{std::move(model), std::move(material), true});
+            entity.attach<MeshRenderer>(MeshRenderer{std::move(mesh), std::move(material), true});
             return entity;
         };
 
@@ -537,17 +555,22 @@ namespace ege {
                 return entity;
             };
 
-        std::shared_ptr<Model> plane = std::make_shared<Model>(device, Model::Builder::plane());
-        std::shared_ptr<Model> box = std::make_shared<Model>(device, Model::Builder::box());
-        std::shared_ptr<Model> sphere =
-            std::make_shared<Model>(device, Model::Builder::sphere(32, 64));
+        const auto primitive = [this, &assets](const std::string& name, Model::Builder builder) {
+            auto model = std::make_shared<Model>(device, builder);
+            const Guid id = assets.addMesh(name, model);
+            return MeshRef{id, std::move(model)};
+        };
+
+        const MeshRef plane = primitive("plane", Model::Builder::plane());
+        const MeshRef box = primitive("box", Model::Builder::box());
+        const MeshRef sphere = primitive("sphere", Model::Builder::sphere(32, 64));
 
         // Floor, rotated a half turn about X so its +Y normal points along -Y,
         // which is up in this scene and therefore towards the lights.
         addMesh(
             "Floor",
             plane,
-            makeMaterial(glm::vec3{0.35f}, 0.f, 0.85f),
+            makeMaterial("Floor", glm::vec3{0.35f}, 0.f, 0.85f),
             {0.f, .5f, 0.f},
             {8.f, 1.f, 8.f},
             {glm::pi<float>(), 0.f, 0.f});
@@ -555,7 +578,7 @@ namespace ege {
         addMesh(
             "RedBox",
             box,
-            makeMaterial(glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
+            makeMaterial("RedBox", glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
             {-.9f, .25f, 0.f},
             glm::vec3{.5f});
 
@@ -576,7 +599,8 @@ namespace ege {
             Entity ball = addMesh(
                 "MetalSphere" + std::to_string(i),
                 sphere,
-                makeMaterial(glm::vec3{0.95f, 0.8f, 0.35f}, 1.f, roughness),
+                makeMaterial(
+                    "Metal" + std::to_string(i), glm::vec3{0.95f, 0.8f, 0.35f}, 1.f, roughness),
                 {-1.2f + 0.6f * static_cast<float>(i), 0.f, 0.f},
                 glm::vec3{.45f});
             hierarchy::setParent(world, ball.id(), sphereRow.id());
@@ -585,7 +609,7 @@ namespace ege {
         addMesh(
             "BlueSphere",
             sphere,
-            makeMaterial(glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
+            makeMaterial("BlueSphere", glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
             glm::vec3{.5f});
 
@@ -612,45 +636,54 @@ namespace ege {
         importGltfModels();
 
         EGE_INFO(
-            "Scene loaded: {} entities, {} drawn, {} lights, {} materials",
+            "Scene loaded: {} entities, {} drawn, {} lights, {} assets",
             world.entityCount(),
             world.count<Transform, MeshRenderer>(),
             world.count<Transform, PointLight>(),
-            materials.size());
+            AssetDatabase::instance().all().size());
 
         verifySceneRoundTrip();
     }
 
-    void Application::importGltfModels() {
-        namespace fs = std::filesystem;
-
+    std::filesystem::path Application::assetRoot() {
 #ifdef EGE_ASSET_ROOT
-        const fs::path modelDirectory = fs::path{EGE_ASSET_ROOT} / "models";
+        return std::filesystem::path{EGE_ASSET_ROOT};
 #else
-        const fs::path modelDirectory = fs::path{"assets"} / "models";
+        return std::filesystem::path{"assets"};
 #endif
+    }
 
-        std::error_code errorCode;
-        if (!fs::is_directory(modelDirectory, errorCode)) {
-            return;
+    void Application::importGltfModels() {
+        // Driven by the database rather than by another directory walk: the
+        // scan has already found every model and given it an id, and that id
+        // is what the meshes and materials inside it are numbered from.
+        const AssetDatabase& assets = AssetDatabase::instance();
+
+        std::vector<AssetRecord> scenes;
+        for (const AssetRecord& record : assets.all()) {
+            if (record.kind == AssetKind::scene && !record.path.empty()) {
+                scenes.push_back(record);
+            }
         }
 
-        for (const fs::directory_entry& entry : fs::directory_iterator{modelDirectory}) {
-            const fs::path& path = entry.path();
-            const std::string extension = path.extension().string();
-            if (extension != ".gltf" && extension != ".glb") {
-                continue;
-            }
+        for (const AssetRecord& record : scenes) {
+            const std::filesystem::path path = assetRoot() / record.path;
 
             // One bad file should not take down the ones beside it, or the
             // procedural scene it would have joined.
             try {
                 const GltfSceneData scene = gltf::parseFile(path.string());
                 const gltf::ImportStats stats = gltf::instantiate(
-                    device, world, scene, *materialPool, *materialSetLayout, path.stem().string());
+                    device,
+                    world,
+                    scene,
+                    *materialPool,
+                    *materialSetLayout,
+                    record.name,
+                    record.id);
                 EGE_INFO(
                     "Imported {}: {} entities, {} meshes, {} materials, {} textures",
-                    path.filename().string(),
+                    record.path.string(),
                     stats.entities,
                     stats.meshes,
                     stats.materials,
@@ -667,11 +700,11 @@ namespace ege {
         // than leaving it to the tests - which matters because serialization
         // breaks quietly when a component gains a field nothing converts.
         //
-        // Note that MeshRenderer's model and material are not serialized: they
-        // are runtime handles, and turning them into asset references is what
-        // the asset database in Phase 6 is for. The reloaded scene therefore
-        // has geometry-less renderers, which is why this runs against a scratch
-        // world rather than replacing the live one.
+        // The reloaded world now comes back drawable. Until the asset database
+        // there was nothing to write down for a MeshRenderer but a pointer, so
+        // a reloaded scene had its transforms, names and lights and nothing
+        // visible in it; counting the renderers that resolved is what would
+        // notice that returning.
         try {
             const std::string written = SceneSerializer::toString(world);
 
@@ -679,13 +712,27 @@ namespace ege {
             SceneSerializer::fromString(scratch, written);
             const std::string rewritten = SceneSerializer::toString(scratch);
 
+            std::size_t restoredDraws = 0;
+            scratch.each<MeshRenderer>([&](Entity, MeshRenderer& restored) {
+                if (restored.mesh.resolved() && restored.material.resolved()) {
+                    restoredDraws++;
+                }
+            });
+
             if (written == rewritten) {
                 EGE_INFO(
-                    "Scene round-trip verified: {} bytes, {} entities restored",
+                    "Scene round-trip verified: {} bytes, {} entities and {} draws restored",
                     written.size(),
-                    scratch.entityCount());
+                    scratch.entityCount(),
+                    restoredDraws);
             } else {
                 EGE_WARN("scene round-trip is not stable; save and load disagree");
+            }
+            if (restoredDraws != world.count<Transform, MeshRenderer>()) {
+                EGE_WARN(
+                    "scene round-trip lost geometry: {} of {} renderers resolved",
+                    restoredDraws,
+                    world.count<Transform, MeshRenderer>());
             }
 
             SceneSerializer::save(world, "demo_scene.egescene");

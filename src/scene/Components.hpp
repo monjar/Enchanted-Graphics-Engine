@@ -1,5 +1,6 @@
 #pragma once
 
+#include "assets/AssetRef.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "render/Light.hpp"
 #include "render/Material.hpp"
@@ -41,9 +42,14 @@ namespace ege {
     };
 
     // Makes an entity drawable.
+    //
+    // Asset references rather than bare pointers, so that saving a scene
+    // records what to draw and loading one can find it again. Before the asset
+    // database this component was the reason a reloaded scene came back with
+    // its transforms, names and lights intact and nothing visible in it.
     struct MeshRenderer {
-        std::shared_ptr<Model> model;
-        std::shared_ptr<Material> material;
+        MeshRef mesh;
+        MaterialRef material;
         bool visible = true;
     };
 
@@ -82,6 +88,8 @@ EGE_FIELD(rotation).tooltip("Tait-Bryan angles in radians, applied Y then X then
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::MeshRenderer)
+EGE_FIELD(mesh).tooltip("Geometry to draw");
+EGE_FIELD(material).tooltip("How to shade it");
 EGE_FIELD(visible);
 EGE_REFLECT_END()
 

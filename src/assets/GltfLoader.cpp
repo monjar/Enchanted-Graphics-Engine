@@ -1,5 +1,6 @@
 #include "assets/GltfLoader.hpp"
 
+#include "assets/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "scene/Hierarchy.hpp"
 
@@ -383,8 +384,14 @@ namespace ege::gltf {
         const GltfSceneData& scene,
         DescriptorPool& materialPool,
         DescriptorSetLayout& materialLayout,
-        const std::string& rootName) {
+        const std::string& rootName,
+        Guid sourceId) {
         ImportStats stats{};
+
+        // An import with no file behind it - the tests, or anything parsed
+        // from memory - still needs stable sub-asset ids, and the root name is
+        // the only stable thing it has.
+        const Guid source = sourceId.isNull() ? Guid::fromName("gltf:" + rootName) : sourceId;
 
         std::vector<std::shared_ptr<Texture>> textures;
         textures.reserve(scene.images.size());
@@ -396,33 +403,64 @@ namespace ege::gltf {
         }
         stats.textures = textures.size();
 
+        // Everything this import creates is catalogued under an id derived
+        // from the file's own, so a scene saved afterwards can name it and a
+        // later run of the same import produces the same ids. That is what
+        // makes an imported model referenceable rather than a thing that only
+        // exists until the process ends.
+        AssetDatabase& database = AssetDatabase::instance();
+        for (size_t index = 0; index < textures.size(); index++) {
+            database.addTexture(
+                AssetDatabase::subAssetId(source, AssetKind::texture, index),
+                rootName + ":image" + std::to_string(index),
+                textures[index]);
+        }
+
         auto textureAt = [&](int index) -> std::shared_ptr<Texture> {
             return index >= 0 ? textures[static_cast<size_t>(index)] : nullptr;
         };
 
-        std::vector<std::shared_ptr<Material>> materials;
+        std::vector<MaterialRef> materials;
         materials.reserve(scene.materials.size());
-        for (const GltfMaterialData& source : scene.materials) {
+        for (size_t index = 0; index < scene.materials.size(); index++) {
+            const GltfMaterialData& data = scene.materials[index];
             auto material = std::make_shared<Material>(device, materialPool, materialLayout);
-            material->properties = source.properties;
-            material->setBaseColor(textureAt(source.baseColorImage));
-            material->setNormalMap(textureAt(source.normalImage));
-            material->setMetallicRoughness(textureAt(source.metallicRoughnessImage));
-            material->setEmissive(textureAt(source.emissiveImage));
+            material->properties = data.properties;
+            material->setBaseColor(textureAt(data.baseColorImage));
+            material->setNormalMap(textureAt(data.normalImage));
+            material->setMetallicRoughness(textureAt(data.metallicRoughnessImage));
+            material->setEmissive(textureAt(data.emissiveImage));
             material->updateDescriptorSet();
-            materials.push_back(std::move(material));
-        }
-        // Primitives without a material share one default.
-        std::shared_ptr<Material> defaultMaterial;
 
-        // Models per (mesh, primitive).
-        std::vector<std::vector<std::shared_ptr<Model>>> models(scene.meshes.size());
+            const Guid id = database.addMaterial(
+                AssetDatabase::subAssetId(source, AssetKind::material, index),
+                data.name.empty() ? rootName + ":material" + std::to_string(index) : data.name,
+                material);
+            materials.push_back(MaterialRef{id, std::move(material)});
+        }
+        // Primitives without a material share one default, catalogued after
+        // the file's own so its id cannot collide with them.
+        MaterialRef defaultMaterial{};
+
+        // Models per (mesh, primitive), indexed flat so that adding a
+        // primitive to one mesh does not renumber the ones after it.
+        std::vector<std::vector<MeshRef>> models(scene.meshes.size());
+        size_t modelIndex = 0;
         for (size_t m = 0; m < scene.meshes.size(); m++) {
             for (const GltfPrimitiveData& primitive : scene.meshes[m].primitives) {
                 Model::Builder builder{};
                 builder.vertices = primitive.vertices;
                 builder.indices = primitive.indices;
-                models[m].push_back(std::make_shared<Model>(device, builder));
+                auto model = std::make_shared<Model>(device, builder);
+
+                const Guid id = database.addMesh(
+                    AssetDatabase::subAssetId(source, AssetKind::mesh, modelIndex),
+                    scene.meshes[m].name.empty()
+                        ? rootName + ":mesh" + std::to_string(modelIndex)
+                        : scene.meshes[m].name + "." + std::to_string(models[m].size()),
+                    model);
+                models[m].push_back(MeshRef{id, std::move(model)});
+                modelIndex++;
                 stats.meshes++;
             }
         }
@@ -438,19 +476,24 @@ namespace ege::gltf {
 
         auto attachPrimitive = [&](Entity entity, size_t meshIndex, size_t primitiveIndex) {
             const GltfPrimitiveData& primitive = scene.meshes[meshIndex].primitives[primitiveIndex];
-            std::shared_ptr<Material> material;
+            MaterialRef material{};
             if (primitive.material >= 0) {
                 material = materials[static_cast<size_t>(primitive.material)];
             } else {
-                if (defaultMaterial == nullptr) {
-                    defaultMaterial =
-                        std::make_shared<Material>(device, materialPool, materialLayout);
-                    defaultMaterial->updateDescriptorSet();
+                if (!defaultMaterial.resolved()) {
+                    auto created = std::make_shared<Material>(device, materialPool, materialLayout);
+                    created->updateDescriptorSet();
+                    const Guid id = database.addMaterial(
+                        AssetDatabase::subAssetId(
+                            source, AssetKind::material, scene.materials.size()),
+                        rootName + ":default",
+                        created);
+                    defaultMaterial = MaterialRef{id, std::move(created)};
                 }
                 material = defaultMaterial;
             }
             MeshRenderer renderer{};
-            renderer.model = models[meshIndex][primitiveIndex];
+            renderer.mesh = models[meshIndex][primitiveIndex];
             renderer.material = std::move(material);
             renderer.visible = true;
             entity.attach<MeshRenderer>(renderer);
@@ -491,7 +534,7 @@ namespace ege::gltf {
             spawnNode(rootNode, root);
         }
 
-        stats.materials = materials.size() + (defaultMaterial != nullptr ? 1 : 0);
+        stats.materials = materials.size() + (defaultMaterial.resolved() ? 1 : 0);
         return stats;
     }
 

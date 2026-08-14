@@ -85,7 +85,7 @@ namespace ege {
 
         world.each<Transform, MeshRenderer>(
             Without<Hidden>{}, [&](Entity entity, Transform& transform, MeshRenderer& renderer) {
-                if (!renderer.visible || renderer.model == nullptr) {
+                if (!renderer.visible || !renderer.mesh.resolved()) {
                     return;
                 }
 
@@ -103,8 +103,8 @@ namespace ege {
                     sizeof(ShadowPush),
                     &push);
 
-                renderer.model->bind(commandBuffer);
-                renderer.model->draw(commandBuffer);
+                renderer.mesh.get()->bind(commandBuffer);
+                renderer.mesh.get()->draw(commandBuffer);
             });
     }
 

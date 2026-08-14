@@ -1,6 +1,7 @@
 #pragma once
 
 #include "assets/GltfData.hpp"
+#include "core/Guid.hpp"
 #include "rhi/Descriptors.hpp"
 #include "scene/World.hpp"
 
@@ -32,12 +33,20 @@ namespace ege::gltf {
     // roll: glTF scenes are +Y-up and this engine inherited -Y-up from its
     // tutorial ancestry, and rotating rather than mirroring preserves
     // winding.
+    //
+    // Every mesh, material and texture it creates is catalogued in the asset
+    // database under an id derived from `source` - the id of the file this
+    // data came from - so that a scene saved afterwards can name them and the
+    // next run of the same import produces the same ids. A null `source`
+    // derives one from the root name, which is what the tests and any
+    // in-memory import get.
     ImportStats instantiate(
         Device& device,
         World& world,
         const GltfSceneData& scene,
         DescriptorPool& materialPool,
         DescriptorSetLayout& materialLayout,
-        const std::string& rootName);
+        const std::string& rootName,
+        Guid source = Guid{});
 
 }  // namespace ege::gltf

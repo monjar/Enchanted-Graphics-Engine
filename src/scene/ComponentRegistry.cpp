@@ -1,5 +1,6 @@
 #include "scene/ComponentRegistry.hpp"
 
+#include "assets/AssetSerialization.hpp"
 #include "core/Log.hpp"
 #include "scene/Components.hpp"
 
@@ -17,6 +18,12 @@ namespace ege {
 
     void registerBuiltinComponents() {
         ComponentRegistry& registry = ComponentRegistry::instance();
+
+        // MeshRenderer carries asset references, which need a conversion the
+        // reflect layer cannot supply because reading one resolves it through
+        // the asset database. Registered here so that anything with the
+        // built-in components also has the converters they require.
+        registerAssetSerializers();
 
         registry.add<Transform>();
         registry.add<MeshRenderer>();

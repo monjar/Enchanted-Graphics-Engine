@@ -10,6 +10,7 @@
 #include "scene/Components.hpp"
 #include "scene/World.hpp"
 
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -29,6 +30,10 @@ namespace ege {
         void run();
 
     private:
+        // Where the project's assets live. EGE_ASSET_ROOT points at the source
+        // tree during development; a shipped build looks beside itself.
+        static std::filesystem::path assetRoot();
+
         void loadScene();
 
         // Imports every .gltf/.glb under assets/models, if the directory
@@ -51,6 +56,5 @@ namespace ege {
         std::unique_ptr<DescriptorSetLayout> materialSetLayout{};
         JobSystem jobs{};
         World world;
-        std::vector<std::shared_ptr<Material>> materials;
     };
 }  // namespace ege

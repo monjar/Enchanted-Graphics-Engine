@@ -107,8 +107,8 @@ namespace ege {
         // query callback where an early return would be easy to get wrong.
         frameInfo.world.each<Transform, MeshRenderer>(
             Without<Hidden>{}, [&](Entity entity, Transform& transform, MeshRenderer& renderer) {
-                if (!renderer.visible || renderer.model == nullptr ||
-                    renderer.material == nullptr) {
+                if (!renderer.visible || !renderer.mesh.resolved() ||
+                    !renderer.material.resolved()) {
                     return;
                 }
 
@@ -132,7 +132,8 @@ namespace ege {
                 }
 
                 if (cullingEnabled) {
-                    const Aabb worldBounds = renderer.model->bounds().transformed(item.modelMatrix);
+                    const Aabb worldBounds =
+                        renderer.mesh.get()->bounds().transformed(item.modelMatrix);
                     if (!frustum.intersects(worldBounds)) {
                         frameStats.culled++;
                         return;
@@ -140,8 +141,8 @@ namespace ege {
                 }
 
                 item.material = renderer.material.get();
-                item.materialSet = renderer.material->descriptorSet();
-                item.model = renderer.model.get();
+                item.materialSet = renderer.material.get()->descriptorSet();
+                item.model = renderer.mesh.get();
                 drawList.push_back(item);
             });
 
