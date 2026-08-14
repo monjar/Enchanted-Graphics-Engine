@@ -261,6 +261,13 @@ set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
 set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
 set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+# The engine compiles with RTTI; a library whose classes we derive from must
+# too, or every derived class's typeinfo references symbols Jolt never
+# emitted. The Release linker happens to tolerate the mismatch - the Debug
+# one does not, which is exactly the kind of works-on-one-configuration bug
+# the sanitizer presets exist to catch.
+set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
+set(CPP_EXCEPTIONS_ENABLED ON CACHE BOOL "" FORCE)
 
 CPMAddPackage(
   NAME JoltPhysics

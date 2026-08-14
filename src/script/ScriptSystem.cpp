@@ -32,6 +32,24 @@ namespace ege {
             return out;
         }
 
+        // One entity's spawned behaviours, collected for the same reason
+        // gather() collects everything: an onContact may spawn or despawn,
+        // and must not do so inside the walk that found it.
+        std::vector<std::shared_ptr<Behavior>> behaviorsOf(World& world, EntityId entity) {
+            std::vector<std::shared_ptr<Behavior>> out;
+            if (!world.alive(entity)) {
+                return out;
+            }
+            if (Script* script = world.find<Script>(entity)) {
+                for (Script::Slot& slot : script->behaviors) {
+                    if (slot.instance != nullptr && slot.spawned) {
+                        out.push_back(slot.instance);
+                    }
+                }
+            }
+            return out;
+        }
+
     }  // namespace
 
     void ScriptSystem::spawnPending(World& world) {
@@ -79,6 +97,33 @@ namespace ege {
         for (const Invocation& invocation : gather(world)) {
             if (world.alive(invocation.entity.id())) {
                 invocation.behavior->onFixedTick(deltaSeconds);
+            }
+        }
+    }
+
+    void ScriptSystem::deliverContacts(World& world, const std::vector<EntityContact>& contacts) {
+        for (const EntityContact& event : contacts) {
+            // Re-checked per event, not just per batch: an earlier onContact
+            // may have despawned either side, and the dead take no calls.
+            for (const std::shared_ptr<Behavior>& behavior : behaviorsOf(world, event.a.id())) {
+                if (world.alive(event.a.id()) && world.alive(event.b.id())) {
+                    Contact contact{};
+                    contact.other = event.b;
+                    contact.point = event.point;
+                    contact.normal = event.normal;
+                    behavior->onContact(contact);
+                }
+            }
+            for (const std::shared_ptr<Behavior>& behavior : behaviorsOf(world, event.b.id())) {
+                if (world.alive(event.a.id()) && world.alive(event.b.id())) {
+                    Contact contact{};
+                    contact.other = event.a;
+                    contact.point = event.point;
+                    // The physics system's normal points from a to b; from
+                    // b's side the other entity lies the opposite way.
+                    contact.normal = -event.normal;
+                    behavior->onContact(contact);
+                }
             }
         }
     }
