@@ -3,6 +3,7 @@
 #include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
 #include "core/DemoTour.hpp"
+#include "core/FileWatcher.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
 #include "editor/EditorOverlay.hpp"
@@ -13,6 +14,7 @@
 #include "reflect/Serialization.hpp"
 #include "render/BloomSystem.hpp"
 #include "render/Camera.hpp"
+#include "render/DynamicMesh.hpp"
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PostProcessSystem.hpp"
@@ -26,6 +28,10 @@
 #include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
 #include "scene/Systems.hpp"
+#include "script/BehaviorRegistry.hpp"
+#include "script/Behaviors.hpp"
+#include "script/Script.hpp"
+#include "script/ScriptSystem.hpp"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
@@ -204,6 +210,7 @@ namespace ege {
         Camera camera{};
 
         PlayMode playMode{};
+        ScriptSystem scripts{};
 
         // The viewer is a plain transform rather than an entity: it is the
         // editor camera, not part of the scene being edited.
@@ -247,7 +254,14 @@ namespace ege {
             }
         }
 
+        // Assets reload while the engine runs: edit a material file, save it,
+        // and the scene changes without a restart. Half a second is short
+        // enough to feel immediate and long enough that a directory walk per
+        // interval is free.
+        FileWatcher assetWatcher{assetRoot(), std::chrono::milliseconds{500}};
+
         bool running = true;
+        bool scriptsRunning = false;
         float sessionSeconds = 0.f;
 
         while (running && !window.shouldClose()) {
@@ -261,14 +275,28 @@ namespace ege {
 
             window.input().newFrame();
 
+            // Behaviours start when play does, not when they are attached:
+            // in the editor an entity carrying one is a description of what
+            // will happen, and Play is what makes it happen.
+            const bool wasPlaying = scriptsRunning;
+            scriptsRunning = !playMode.isEditing();
+            if (scriptsRunning) {
+                scripts.spawnPending(world);
+            } else if (wasPlaying) {
+                scripts.despawnAll(world);
+            }
+
             // Fixed-rate simulation, and only while the editor is playing.
             // Keeping edit mode and play mode distinct is what lets Stop put
             // the world back: nothing advances the scene unless Play asked
             // for it, so the snapshot stays the truth until then.
             while (time.consumeFixedStep()) {
                 if (playMode.consumeTick()) {
-                    systems::spin(world, time.fixedStep());
+                    scripts.fixedTick(world, time.fixedStep());
                 }
+            }
+            if (playMode.isPlaying()) {
+                scripts.tick(world, frameTime);
             }
 
             if (window.input().wasPressed(Key::F1)) {
@@ -296,6 +324,12 @@ namespace ege {
             if (options.exitAfterSeconds > 0.f && sessionSeconds >= options.exitAfterSeconds) {
                 running = false;
             }
+
+            reloadChangedAssets(assetWatcher);
+
+            // After the scripts, before anything reads geometry: a behaviour
+            // that rewrote a surface this tick wants it drawn this frame.
+            systems::uploadDynamicMeshes(world, device);
 
             // Composes world matrices for every parented entity once per frame,
             // rather than each consumer recomputing the same parent chain.
@@ -600,6 +634,21 @@ namespace ege {
                 return MaterialRef{id, std::move(material)};
             };
 
+        // The one material in the scene that comes from a file. Everything
+        // else is built in code, which is fine until you want to change
+        // something without rebuilding - so the floor is the surface that
+        // proves asset hot reload works: edit assets/materials/floor.egematerial
+        // while the engine is running and the floor changes.
+        auto fileMaterial = [&assets](const std::filesystem::path& relative) {
+            MaterialRef reference{};
+            if (const AssetRecord* record = assets.findByPath(relative)) {
+                if (std::shared_ptr<Material> material = assets.material(record->id)) {
+                    reference = MaterialRef{record->id, std::move(material)};
+                }
+            }
+            return reference;
+        };
+
         auto addMesh = [this](
                            std::string name,
                            MeshRef mesh,
@@ -639,10 +688,19 @@ namespace ege {
 
         // Floor, rotated a half turn about X so its +Y normal points along -Y,
         // which is up in this scene and therefore towards the lights.
+        MaterialRef floorMaterial =
+            fileMaterial(std::filesystem::path{"materials"} / "floor.egematerial");
+        if (floorMaterial.value == nullptr) {
+            // The file is missing or unreadable. The demo still runs, in the
+            // same grey it would have had - a broken asset should cost you
+            // that asset, not the scene.
+            EGE_WARN("floor material file unavailable; using the built-in floor material");
+            floorMaterial = makeMaterial("Floor", glm::vec3{0.35f}, 0.f, 0.85f);
+        }
         addMesh(
             "Floor",
             plane,
-            makeMaterial("Floor", glm::vec3{0.35f}, 0.f, 0.85f),
+            floorMaterial,
             {0.f, .5f, 0.f},
             {8.f, 1.f, 8.f},
             {glm::pi<float>(), 0.f, 0.f});
@@ -653,7 +711,18 @@ namespace ege {
             makeMaterial("RedBox", glm::vec3{0.9f, 0.25f, 0.2f}, 0.f, 0.4f),
             {-.9f, .25f, 0.f},
             glm::vec3{.5f});
-        redBox.attach<Spin>(Spin{{0.f, 1.2f, 0.f}});
+        {
+            // The behaviour, not a component with the same job: this is what
+            // `Spin` was standing in for.
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "ege::Spinner";
+            auto spinner = std::make_shared<Spinner>();
+            spinner->anglesPerSecond = {0.f, 1.2f, 0.f};
+            slot.instance = std::move(spinner);
+            script.behaviors.push_back(std::move(slot));
+            redBox.attach<Script>(std::move(script));
+        }
 
         // A row of metal spheres sweeping roughness, which is the clearest way
         // to see whether the GGX distribution and the geometry term behave: the
@@ -669,7 +738,16 @@ namespace ege {
         // Something for Play to do, and for Stop to undo. Turning the pivot
         // rather than the spheres also demonstrates that the hierarchy is
         // carrying the motion down to its children.
-        sphereRow.attach<Spin>(Spin{{0.f, 0.5f, 0.f}});
+        {
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "ege::Spinner";
+            auto spinner = std::make_shared<Spinner>();
+            spinner->anglesPerSecond = {0.f, 0.5f, 0.f};
+            slot.instance = std::move(spinner);
+            script.behaviors.push_back(std::move(slot));
+            sphereRow.attach<Script>(std::move(script));
+        }
 
         for (int i = 0; i < 5; i++) {
             const float roughness = 0.05f + 0.95f * static_cast<float>(i) / 4.f;
@@ -681,6 +759,45 @@ namespace ege {
                 {-1.2f + 0.6f * static_cast<float>(i), 0.f, 0.f},
                 glm::vec3{.45f});
             hierarchy::setParent(world, ball.id(), sphereRow.id());
+        }
+
+        // A surface a script owns: the mesh has no asset behind it, the
+        // vertices are rewritten every tick by the Ripple behaviour, and the
+        // upload happens once per frame rather than once per write.
+        {
+            Entity surface = world.spawn("RippleSurface");
+            Transform surfaceTransform{};
+            // Stood up like a banner rather than laid flat: a travelling wave
+            // in a horizontal sheet is nearly invisible from a low camera,
+            // and the point of this entity is to be seen moving. Set back
+            // behind the sphere row and off to one side, because the first
+            // placement put it between the camera and the roughness sweep -
+            // an exhibit that hides the other exhibits.
+            surfaceTransform.translation = {2.9f, -0.5f, 3.f};
+            surfaceTransform.rotation.x = -glm::half_pi<float>();
+            surfaceTransform.scale = glm::vec3{1.6f};
+            surface.attach<Transform>(surfaceTransform);
+            surface.attach<DynamicMesh>(DynamicMesh::grid(48));
+
+            MeshRenderer surfaceRenderer{};
+            surfaceRenderer.material =
+                makeMaterial("Ripple", glm::vec3{0.25f, 0.7f, 0.6f}, 0.25f, 0.25f);
+            surface.attach<MeshRenderer>(std::move(surfaceRenderer));
+
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "ege::Ripple";
+            auto ripple = std::make_shared<Ripple>();
+            // Shorter waves than the default, so several crests are in the
+            // sheet at once: one long swell reads as the surface being bent
+            // rather than as waves travelling through it. Shallow with it -
+            // a deep wave at this wavelength stops looking like a surface and
+            // starts looking like a blob.
+            ripple->amplitude = 0.07f;
+            ripple->wavelength = 0.5f;
+            slot.instance = std::move(ripple);
+            script.behaviors.push_back(std::move(slot));
+            surface.attach<Script>(std::move(script));
         }
 
         addMesh(
@@ -720,6 +837,51 @@ namespace ege {
             AssetDatabase::instance().all().size());
 
         verifySceneRoundTrip();
+    }
+
+    void Application::reloadChangedAssets(FileWatcher& watcher) {
+        const std::vector<FileWatcher::Event> changes = watcher.poll();
+        if (changes.empty()) {
+            return;
+        }
+
+        AssetDatabase& assets = AssetDatabase::instance();
+
+        // Rescan first: a file that has just appeared has no id yet, and a
+        // sidecar that has just appeared beside one is how an id arrives.
+        bool structural = false;
+        for (const FileWatcher::Event& change : changes) {
+            if (change.change != FileWatcher::Change::modified) {
+                structural = true;
+            }
+        }
+        if (structural) {
+            assets.scan(assetRoot());
+        }
+
+        // Reloading rewrites descriptor sets and frees images that frames
+        // still in flight are reading. Waiting is a stall, and a stall on the
+        // frame after someone saves a file is invisible - the alternative is
+        // versioning every asset for the sake of an event that happens when a
+        // human presses Ctrl+S.
+        vkDeviceWaitIdle(device.device());
+
+        std::error_code errorCode;
+        for (const FileWatcher::Event& change : changes) {
+            const std::filesystem::path relative =
+                std::filesystem::relative(change.path, assetRoot(), errorCode);
+            if (errorCode) {
+                errorCode.clear();
+                continue;
+            }
+            if (const AssetRecord* record = assets.findByPath(relative)) {
+                assets.reload(record->id);
+            }
+        }
+
+        // A mesh cannot be reloaded in place, so anything holding one has to
+        // be pointed at the rebuilt version.
+        systems::refreshAssetReferences(world);
     }
 
     std::filesystem::path Application::assetRoot() {
@@ -789,7 +951,16 @@ namespace ege {
             SceneSerializer::fromString(scratch, written);
             const std::string rewritten = SceneSerializer::toString(scratch);
 
+            // Only asset-backed renderers are counted. A dynamic mesh has no
+            // asset behind it by design - a script rebuilds its vertices - so
+            // its renderer comes back empty and correctly so.
+            std::size_t assetDraws = 0;
             std::size_t restoredDraws = 0;
+            world.each<MeshRenderer>([&](Entity, MeshRenderer& original) {
+                if (!original.mesh.id.isNull()) {
+                    assetDraws++;
+                }
+            });
             scratch.each<MeshRenderer>([&](Entity, MeshRenderer& restored) {
                 if (restored.mesh.resolved() && restored.material.resolved()) {
                     restoredDraws++;
@@ -805,11 +976,11 @@ namespace ege {
             } else {
                 EGE_WARN("scene round-trip is not stable; save and load disagree");
             }
-            if (restoredDraws != world.count<Transform, MeshRenderer>()) {
+            if (restoredDraws != assetDraws) {
                 EGE_WARN(
-                    "scene round-trip lost geometry: {} of {} renderers resolved",
+                    "scene round-trip lost geometry: {} of {} asset-backed renderers resolved",
                     restoredDraws,
-                    world.count<Transform, MeshRenderer>());
+                    assetDraws);
             }
 
             SceneSerializer::save(world, "demo_scene.egescene");

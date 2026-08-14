@@ -4,7 +4,7 @@
 ./build/default/bin/EnchantedEngine --demo
 ```
 
-A sixteen-second camera tour of the demo scene, with the editor hidden and the
+A nineteen-second camera tour of the demo scene, with the editor hidden and the
 scene playing. It exists because a renderer is hard to demonstrate in a still
 image and impossible to demonstrate in a paragraph: most of what this engine
 does only becomes visible when the camera moves. A mirror sphere is a coloured
@@ -21,16 +21,21 @@ and presses Play.
 
 | Shot | What to look at |
 |---|---|
-| Wide, on the whole set | The scene: five metal spheres, two dielectrics, a floor, an imported torus, under a procedurally generated evening sky |
+| Wide, on the whole set | The scene: five metal spheres, two dielectrics, a floor, an imported torus and a script-driven sheet, under a procedurally generated evening sky |
 | Down the row of spheres | The roughness sweep. The highlight broadens from near-mirror to fully rough — which only reads as a sweep when it travels |
+| Onto the rippling sheet | Geometry a **script** writes. 2 401 vertices are moved along their normals by a travelling wave every tick, their normals recomputed, and the result uploaded once per frame — there is no mesh file behind it |
 | Close on the smoothest sphere | Image-based lighting. It reflects a sky that exists only because the engine convolved one into an irradiance map and a prefiltered specular chain at start-up |
 | Low along the floor | The sun's shadows, filtered through a 3×3 PCF comparison sampler, and the red box turning — that motion is play mode running a component, and Stop puts it back |
 | Up and over | The copper torus, which is a **glTF import**: a self-contained text glTF in `assets/models/`, parsed and instantiated at start-up |
 
-Every material, mesh and light in that scene is either generated procedurally
-or imported from a text file. A clean checkout ships no binary assets, which
-is why the sky is computed rather than loaded and why the torus is a `.gltf`
-rather than a `.glb`.
+Every material, mesh and light in that scene is either generated procedurally,
+imported from a text file, or written by a script. A clean checkout ships no
+binary assets, which is why the sky is computed rather than loaded and why the
+torus is a `.gltf` rather than a `.glb`.
+
+The floor's material is a `.egematerial` file, and the engine watches for it
+changing: edit `assets/materials/floor.egematerial` while the tour is running
+and the floor changes colour mid-shot.
 
 ## Recording it
 

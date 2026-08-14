@@ -56,17 +56,6 @@ namespace ege {
     // Tag excluding an entity from rendering without detaching its renderer.
     struct Hidden {};
 
-    // Constant angular velocity, in radians per second, applied only while the
-    // editor is playing.
-    //
-    // A placeholder for the scripted behaviours of Phase 7, and an honest one:
-    // play mode has to be observable before it can be trusted, and nothing
-    // else in the engine changes the world over time yet. It is what makes
-    // pressing Play do something and pressing Stop demonstrably undo it.
-    struct Spin {
-        glm::vec3 anglesPerSecond{0.f, 1.f, 0.f};
-    };
-
     // Parent and child links.
     //
     // Stored as an intrusive linked list - first child plus next sibling -
@@ -107,10 +96,6 @@ EGE_REFLECT_END()
 // A tag has no fields. It is still reflected so that it has a name, which is
 // what serialization and the editor's component list key on.
 EGE_REFLECT(ege::Hidden)
-EGE_REFLECT_END()
-
-EGE_REFLECT(ege::Spin)
-EGE_FIELD(anglesPerSecond).tooltip("Radians per second, applied while playing");
 EGE_REFLECT_END()
 
 // Hierarchy is deliberately not reflected for serialization: the links are

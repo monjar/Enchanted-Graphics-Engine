@@ -98,9 +98,22 @@ namespace ege {
         std::shared_ptr<Material> material(Guid id);
         std::shared_ptr<Texture> texture(Guid id);
 
+        // Reloads an asset from disk after its file changed.
+        //
+        // A material is rewritten *inside* the object every holder already
+        // points at, so a live scene picks up the edit without anything
+        // re-resolving. Meshes and textures are immutable once built, so
+        // those are dropped from the cache and the next resolve rebuilds
+        // them - which is why the caller also refreshes the world's
+        // references. Reloading a texture reloads the materials too, since a
+        // material's texture slots are the only thing that knows it changed.
+        void reload(Guid id);
+
         // Forgets every record and every loaded asset. For tests, and for an
         // editor opening a different project.
         void clear();
+
+        const std::filesystem::path& root() const { return assetRoot; }
 
     private:
         AssetDatabase() = default;

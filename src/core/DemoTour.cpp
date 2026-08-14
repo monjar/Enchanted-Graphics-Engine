@@ -37,6 +37,11 @@ namespace ege {
             // a sweep when the highlight travels along it.
             Shot{{-2.3f, -0.55f, 0.2f}, {-0.12f, 0.55f, 0.f}, 2.0f, 0.6f},
             Shot{{2.3f, -0.55f, 0.2f}, {-0.12f, -0.55f, 0.f}, 2.8f, 0.6f},
+            // Round onto the rippling sheet, close enough that the crests
+            // travelling through it are unmistakably geometry moving rather
+            // than a texture scrolling. Held longer than the other shots for
+            // the same reason: one wave has to cross the frame.
+            Shot{{1.4f, -0.75f, 0.2f}, {-0.08f, 0.49f, 0.f}, 1.2f, 1.4f},
             // Close on the near-mirror sphere, which is the payoff of
             // image-based lighting: it is reflecting a sky that only exists
             // because the engine generated one at start-up.

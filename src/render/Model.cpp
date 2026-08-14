@@ -1,5 +1,6 @@
 #include "render/Model.hpp"
 
+#include "core/Assert.hpp"
 #include "core/Hash.hpp"
 // libs
 #define TINYOBJLOADER_IMPLEMENTATION
@@ -35,7 +36,7 @@ namespace ege {
             localBounds.expand(vertex.position);
         }
 
-        createVertexBuffers(builder.vertices);
+        createVertexBuffers(builder.vertices, builder.dynamic);
         createIndexBuffers(builder.indices);
     }
 
@@ -47,11 +48,27 @@ namespace ege {
         return std::make_unique<Model>(device, builder);
     }
 
-    void Model::createVertexBuffers(const std::vector<Vertex>& vertices) {
+    void Model::createVertexBuffers(const std::vector<Vertex>& vertices, bool dynamic) {
         vertexCount = static_cast<uint32_t>(vertices.size());
         assert(vertexCount >= 3 && "Vertex count must be at least 3");
         VkDeviceSize bufferSize = sizeof(vertices[0]) * vertexCount;
         uint32_t vertexSize = sizeof(vertices[0]);
+        dynamicVertices = dynamic;
+
+        if (dynamic) {
+            // Host-visible and permanently mapped: an update is a memcpy, with
+            // no staging buffer to allocate and no transfer to submit.
+            vertexBuffer = std::make_unique<Buffer>(
+                device,
+                vertexSize,
+                vertexCount,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            vertexBuffer->map();
+            vertexBuffer->writeToBuffer(
+                const_cast<void*>(static_cast<const void*>(vertices.data())));
+            return;
+        }
 
         Buffer stagingBuffer{
             device,
@@ -72,6 +89,26 @@ namespace ege {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         device.copyBuffer(stagingBuffer.getBuffer(), vertexBuffer->getBuffer(), bufferSize);
+    }
+
+    void Model::updateVertices(const std::vector<Vertex>& vertices) {
+        EGE_VERIFY(dynamicVertices, "updateVertices needs a model built with Builder::dynamic");
+        EGE_VERIFY(
+            vertices.size() <= vertexCount,
+            "a dynamic model cannot grow past the {} vertices it was built with",
+            vertexCount);
+        if (vertices.empty()) {
+            return;
+        }
+
+        vertexBuffer->writeToBuffer(
+            const_cast<void*>(static_cast<const void*>(vertices.data())),
+            sizeof(vertices[0]) * vertices.size());
+
+        localBounds = Aabb{};
+        for (const Vertex& vertex : vertices) {
+            localBounds.expand(vertex.position);
+        }
     }
 
     void Model::createIndexBuffers(const std::vector<uint32_t>& indices) {

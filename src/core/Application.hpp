@@ -10,6 +10,7 @@
 #include "scene/Components.hpp"
 #include "scene/World.hpp"
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -57,6 +58,8 @@ namespace ege {
         static std::filesystem::path assetRoot();
 
         void loadScene();
+        // Acts on whatever the project directory changed since the last look.
+        void reloadChangedAssets(class FileWatcher& watcher);
 
         // Imports every .gltf/.glb under assets/models, if the directory
         // exists. The demo ships none - dropping a file there is how content

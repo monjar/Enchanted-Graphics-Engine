@@ -31,6 +31,13 @@ namespace ege {
         struct Builder {
             std::vector<Vertex> vertices{};
             std::vector<uint32_t> indices{};
+            // Geometry that will be rewritten every frame. The vertex buffer
+            // is then host-visible and stays mapped, so an update is a memcpy
+            // rather than a staging copy and a queue submission. That is
+            // slower to *draw* on a discrete GPU, and exactly the right trade
+            // for something a script is changing continuously.
+            bool dynamic = false;
+
             void loadModel(const std::string& filepath);
 
             // Procedurally generated primitives. All are unit-sized and centred on
@@ -60,16 +67,26 @@ namespace ege {
         void bind(VkCommandBuffer commandBuffer);
         void draw(VkCommandBuffer commandBuffer);
 
+        bool isDynamic() const { return dynamicVertices; }
+
+        // Rewrites the vertices of a dynamic model in place, and with them the
+        // bounds, since geometry that moves is geometry whose extent moved.
+        // The count must not exceed what the model was built with: the buffer
+        // is not resized, because a resize is a new allocation and the caller
+        // would have no way to know it happened.
+        void updateVertices(const std::vector<Vertex>& vertices);
+
     private:
         Device& device;
         Aabb localBounds{};
         std::unique_ptr<Buffer> vertexBuffer;
         uint32_t vertexCount;
+        bool dynamicVertices = false;
         bool hasIndexBuffer = false;
         std::unique_ptr<Buffer> indexBuffer;
         uint32_t indexCount;
 
-        void createVertexBuffers(const std::vector<Vertex>& vertices);
+        void createVertexBuffers(const std::vector<Vertex>& vertices, bool dynamic);
         void createIndexBuffers(const std::vector<uint32_t>& indices);
     };
 }  // namespace ege
