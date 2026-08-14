@@ -30,6 +30,8 @@ namespace ege {
 
         float getAspectRatio() const { return egeSwapChain->extentAspectRatio(); }
 
+        bool canCaptureFrames() const { return egeSwapChain->canCaptureFrames(); }
+
         // The image acquired by beginFrame, for the frame graph to import as
         // this frame's backbuffer.
         VkImage currentSwapChainImage() const {

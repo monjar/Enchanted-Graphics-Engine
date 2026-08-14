@@ -12,6 +12,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace ege {
@@ -20,7 +21,28 @@ namespace ege {
     public:
         static constexpr int WIDTH = 800, HEIGHT = 600;
 
-        Application();
+        // How the application was asked to run.
+        struct Options {
+            // Runs the scripted camera tour with the editor hidden and the
+            // scene playing, then closes. What `--demo` selects, and what the
+            // recording in the documentation is made from.
+            bool demo = false;
+            // Closes after this many seconds regardless. Zero means run until
+            // the window is closed.
+            float exitAfterSeconds = 0.f;
+            // Writes every rendered frame here as a PNG. Empty records
+            // nothing.
+            std::string recordDirectory;
+            // While recording, time advances by exactly this much per frame
+            // rather than by the clock, so the result is the same however
+            // fast the machine renders it.
+            float recordFrameRate = 30.f;
+        };
+
+        Application() : Application(Options{}) {}
+
+        explicit Application(Options optionsRef);
+
         ~Application();
 
         // Delete copy constructor and operator1
@@ -45,7 +67,8 @@ namespace ege {
         // save and load exercised by every run rather than only by the tests.
         void verifySceneRoundTrip();
 
-        Window window{WIDTH, HEIGHT, "Hello World!"};
+        Options options{};
+        Window window{WIDTH, HEIGHT, "Enchanted Engine"};
         Device device{window};
         Renderer renderer{window, device};
 

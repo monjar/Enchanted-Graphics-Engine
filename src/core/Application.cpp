@@ -2,6 +2,7 @@
 
 #include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
+#include "core/DemoTour.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
 #include "editor/EditorOverlay.hpp"
@@ -19,6 +20,7 @@
 #include "render/SkyboxSystem.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/FrameGraph.hpp"
+#include "rhi/FrameRecorder.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
@@ -61,7 +63,7 @@ namespace ege {
 
     }  // namespace
 
-    Application::Application() {
+    Application::Application(Options optionsRef) : options{optionsRef} {
         Log::init();
         EGE_INFO("Enchanted Engine starting up");
 
@@ -103,6 +105,13 @@ namespace ege {
     }
 
     Application::~Application() {
+        // The asset database is a singleton, so it outlives this object and
+        // would otherwise release its meshes, textures and materials during
+        // static destruction - with the device already gone. That is a real
+        // crash on exit, and it stayed hidden for as long as the only way to
+        // stop the engine was to kill it.
+        AssetDatabase::instance().clear();
+
         // Shared fallback textures outlive every material, so they have to be
         // released before the device goes away.
         Material::destroyDefaults();
@@ -213,13 +222,42 @@ namespace ege {
 
         Time time{};
 
-        while (!window.shouldClose()) {
+        // The demo runs itself: no editor over the picture, the scene already
+        // playing, and the camera on rails. Everything else about the frame is
+        // identical, which is the point - it is the engine being shown, not a
+        // separate presentation mode.
+        DemoTour tour = DemoTour::demoScene();
+        if (options.demo) {
+            overlay.toggle();
+            playMode.play(world);
+            EGE_INFO("Demo tour: {:.1f} seconds", tour.duration());
+        }
+
+        // Recording replaces the clock as well as the output: a frame takes
+        // as long as it takes, and the tour has to advance by the same amount
+        // each time regardless, or the same recording made on two machines
+        // would not be the same recording.
+        std::unique_ptr<FrameRecorder> recorder;
+        if (!options.recordDirectory.empty()) {
+            if (renderer.canCaptureFrames()) {
+                recorder = std::make_unique<FrameRecorder>(
+                    device, options.recordDirectory, renderer.getSwapChainExtent());
+            } else {
+                EGE_ERROR("this driver cannot copy from swapchain images; not recording");
+            }
+        }
+
+        bool running = true;
+        float sessionSeconds = 0.f;
+
+        while (running && !window.shouldClose()) {
             Window::pollEvents();
 
             // After the poll, so that a pause spent inside it is measured as
             // part of the frame it belongs to.
             time.beginFrame();
-            const float frameTime = time.delta();
+            const float frameTime =
+                recorder == nullptr ? time.delta() : 1.f / options.recordFrameRate;
 
             window.input().newFrame();
 
@@ -242,10 +280,21 @@ namespace ege {
             // the input, in which case dragging a slider must not also fly
             // the camera. A captured cursor is not over anything, so a look
             // drag that began in the scene view keeps the camera regardless.
-            const bool cameraOwnsInput =
-                window.input().cursorMode() != CursorMode::Normal || !overlay.wantsInput();
-            if (cameraOwnsInput) {
-                cameraController.update(window.input(), frameTime, viewerTransform);
+            if (options.demo) {
+                if (!tour.advance(frameTime, viewerTransform)) {
+                    running = false;
+                }
+            } else {
+                const bool cameraOwnsInput =
+                    window.input().cursorMode() != CursorMode::Normal || !overlay.wantsInput();
+                if (cameraOwnsInput) {
+                    cameraController.update(window.input(), frameTime, viewerTransform);
+                }
+            }
+
+            sessionSeconds += frameTime;
+            if (options.exitAfterSeconds > 0.f && sessionSeconds >= options.exitAfterSeconds) {
+                running = false;
             }
 
             // Composes world matrices for every parented entity once per frame,
@@ -383,7 +432,13 @@ namespace ege {
                     // What the acquire semaphore is waited at, so the first
                     // backbuffer barrier chains after the acquire.
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                    // While recording, the graph hands the image over ready to
+                    // be copied and the recorder returns it to PRESENT_SRC.
+                    // Reading an image that has already been presented is the
+                    // kind of thing that works on one driver and corrupts on
+                    // another.
+                    recorder == nullptr ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+                                        : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
                 // Where the display transform lands. With the editor up that is
                 // the viewport image the Scene panel samples, and the UI pass
@@ -505,7 +560,16 @@ namespace ege {
 
                 graph.compile();
                 graph.execute(device, commandBuffer);
+                if (recorder != nullptr) {
+                    recorder->recordCopy(
+                        commandBuffer,
+                        renderer.currentSwapChainImage(),
+                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                }
                 renderer.endFrame();
+                if (recorder != nullptr) {
+                    recorder->writeFrame(renderer.getSwapChainColorFormat());
+                }
             }
         }
 

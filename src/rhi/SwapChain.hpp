@@ -37,6 +37,9 @@ namespace ege {
 
         size_t imageCount() const { return swapChainImages.size(); }
 
+        // Whether a rendered frame can be copied out of the swapchain.
+        bool canCaptureFrames() const { return transferSourceSupported; }
+
         VkFormat getSwapChainImageFormat() const { return swapChainImageFormat; }
 
         VkFormat getSwapChainDepthFormat() const { return swapChainDepthFormat; }
@@ -88,6 +91,7 @@ namespace ege {
         VkExtent2D windowExtent;
 
         VkSwapchainKHR swapChain;
+        bool transferSourceSupported = false;
         std::shared_ptr<SwapChain> oldSwapChain;
 
         std::vector<VkSemaphore> imageAvailableSemaphores;
