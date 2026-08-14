@@ -2,7 +2,7 @@
 
 A Vulkan game engine in C++17, built from the renderer up.
 
-![The demo scene: metal spheres sweeping roughness, two dielectrics and a plane, lit by three point lights](docs/images/demo-scene.png)
+![The demo scene: metal spheres sweeping roughness, two dielectrics, an imported torus and a script-driven sheet on a plane, lit by three point lights and a sun](docs/images/demo-scene.png)
 
 A Vulkan 1.3 forward renderer — dynamic rendering, a frame graph, a
 metallic-roughness PBR pipeline with image-based lighting, shading into a
@@ -35,6 +35,10 @@ The copper torus is a **glTF import**: any `.gltf`/`.glb` dropped into
 hierarchy spawned as entities at startup. The demo's torus is itself a
 self-contained text glTF, so the no-binary-assets rule still holds.
 
+The green sheet has no mesh file at all. Its 2 401 vertices are rewritten by a
+C++ behaviour every tick and uploaded once a frame — geometry as a script's
+output rather than as an asset.
+
 ## The demo
 
 ```sh
@@ -54,7 +58,7 @@ machine.
 
 ## The editor
 
-![The editor: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector, asset browser and console](docs/images/editor.png)
+![The editor: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector showing the selected entity's material reference, asset browser and console](docs/images/editor.png)
 
 Press **F1**. The scene renders into an offscreen image the UI samples as a
 texture, so it is a **viewport** — a panel with its own aspect ratio, with the
@@ -78,8 +82,67 @@ reference survives its file being moved, renamed or reimported — and a saved
 scene comes back with its geometry, which is what makes Play/Stop and undo
 possible at all.
 
+## Scripting
+
+Behaviour is a C++ class. Subclass `Behavior`, declare its fields with the
+same reflection macros a component uses, and register it:
+
+```cpp
+class Spinner : public Behavior {
+public:
+    glm::vec3 anglesPerSecond{0.f, 1.f, 0.f};
+
+    void onFixedTick(float deltaSeconds) override {
+        Transform* transform = self().find<Transform>();
+        if (transform == nullptr) {
+            return;
+        }
+        transform->rotation += anglesPerSecond * deltaSeconds;
+        hierarchy::markDirty(world(), self().id());
+    }
+};
+
+EGE_REFLECT(Spinner)
+EGE_FIELD(anglesPerSecond).tooltip("Radians per second about each axis");
+EGE_REFLECT_END()
+
+EGE_BEHAVIOR(Spinner)
+```
+
+`EGE_BEHAVIOR` puts it in the registry, so the editor can list it and attach
+it by name. `EGE_REFLECT` is what gets its fields into the inspector and into
+the scene file — the same reflection that drives component editing, with no
+per-behaviour UI or serialization code. Attach as many as you like to one
+entity through the `Script` component; `onSpawn`, `onFixedTick`, `onTick` and
+`onDespawn` run in the order they were attached, and Play/Stop spawns and
+despawns them along with the world snapshot.
+
+A behaviour whose type is not in the running build keeps its saved fields
+verbatim instead of dropping them, so opening a scene without the code that
+defines a behaviour and saving it again does not quietly erase the setup.
+
+Geometry can be written from a script too. A `DynamicMesh` holds CPU-side
+vertices and indices, `recalculateNormals()` rebuilds shading from whatever
+the script did to the positions, and `markDirty()` schedules exactly one
+upload for the frame however many times the vertices were touched. The demo's
+rippling sheet is a script rewriting 2 401 vertices every tick.
+
+**Asset hot reload.** The engine watches the project directory while it runs:
+save a change to `assets/materials/floor.egematerial` and the demo's floor
+changes without a restart. A material is rewritten inside the object every
+holder already points at, so nothing has to re-resolve a reference; meshes and
+textures are immutable once uploaded, so those are rebuilt and the world's
+references are repointed. A broken edit costs you the edit — the parse failure
+is logged and the previous version keeps drawing.
+
+Script hot reload is not here yet, and needs one specific thing:
+`Enchanted` is a static library, so a `dlopen`'d script module would get its
+own copies of the type, component and behaviour registries and nothing
+registered across the boundary would be visible. That is a build change to the
+whole project, and it is its own piece of work.
+
 Still to come: cascaded and point-light shadows, anti-aliasing, the standalone
-editor application, C++ scripting and physics.
+editor application, script hot reload and physics.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 

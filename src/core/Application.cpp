@@ -769,10 +769,13 @@ namespace ege {
             Transform surfaceTransform{};
             // Stood up like a banner rather than laid flat: a travelling wave
             // in a horizontal sheet is nearly invisible from a low camera,
-            // and the point of this entity is to be seen moving.
-            surfaceTransform.translation = {2.35f, -0.35f, 1.6f};
+            // and the point of this entity is to be seen moving. Set back
+            // behind the sphere row and off to one side, because the first
+            // placement put it between the camera and the roughness sweep -
+            // an exhibit that hides the other exhibits.
+            surfaceTransform.translation = {2.9f, -0.5f, 3.f};
             surfaceTransform.rotation.x = -glm::half_pi<float>();
-            surfaceTransform.scale = glm::vec3{1.3f};
+            surfaceTransform.scale = glm::vec3{1.6f};
             surface.attach<Transform>(surfaceTransform);
             surface.attach<DynamicMesh>(DynamicMesh::grid(48));
 
@@ -784,7 +787,15 @@ namespace ege {
             Script script{};
             Script::Slot slot{};
             slot.behavior = "ege::Ripple";
-            slot.instance = std::make_shared<Ripple>();
+            auto ripple = std::make_shared<Ripple>();
+            // Shorter waves than the default, so several crests are in the
+            // sheet at once: one long swell reads as the surface being bent
+            // rather than as waves travelling through it. Shallow with it -
+            // a deep wave at this wavelength stops looking like a surface and
+            // starts looking like a blob.
+            ripple->amplitude = 0.07f;
+            ripple->wavelength = 0.5f;
+            slot.instance = std::move(ripple);
             script.behaviors.push_back(std::move(slot));
             surface.attach<Script>(std::move(script));
         }

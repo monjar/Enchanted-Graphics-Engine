@@ -2,15 +2,17 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4, 5 and 6 substantially complete. Phase 7 next.**
+> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4, 5, 6 and 7 substantially complete. Phase 8 next.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import**. The **editor** now has an offscreen viewport with docked panels, hierarchy editing, a reflection-driven inspector, transform gizmos, a console, an asset browser, **Play/Pause/Step/Stop** and **undo/redo**. The **asset database** underneath it gives every asset a stable id in a `.egameta` sidecar, which is what finally lets a scene save what it draws — and what unblocked play mode and undo, both of which are world snapshots. A `--demo` camera tour and self-recorded frames make all of it demonstrable. Next: **Phase 7 scripting**, which is what the placeholder `Spin` component is standing in for.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import**. The **editor** now has an offscreen viewport with docked panels, hierarchy editing, a reflection-driven inspector, transform gizmos, a console, an asset browser, **Play/Pause/Step/Stop** and **undo/redo**. The **asset database** underneath it gives every asset a stable id in a `.egameta` sidecar, which is what finally lets a scene save what it draws — and what unblocked play mode and undo, both of which are world snapshots. A `--demo` camera tour and self-recorded frames make all of it demonstrable. **Scripting** landed on top of that: behaviours in C++ with reflected fields, editable in the inspector and saved into the scene, script-written geometry through `DynamicMesh`, and **asset hot reload** — edit a material file and the running scene changes. Script hot reload is the one thing Phase 7 asked for and did not get, for a stated reason: it needs the engine built as a shared library, which is its own change. Next: **Phase 8 physics**.
 
 ## 1. Where the project stands today
 
 Enchanted is a **Vulkan 1.3 forward renderer with a metallic-roughness PBR pipeline, image-based lighting and a frame graph**, an entity-component system, runtime reflection, VMA-backed GPU memory, textures with mip generation, a job system and a fixed-timestep clock. The scene renders linear HDR into a graph-managed float target and is tonemapped to the swapchain with the ACES fit; ambient light comes from a procedurally generated sky via irradiance and prefiltered-specular convolutions computed on the GPU at startup. It began as a port of Brendan Galea's Vulkan tutorial series and has since grown past it.
 
-Still absent, and tracked per phase in §6: anti-aliasing, cascaded and point-light shadows, cooked asset packaging, hot reload, scripting and physics.
+Behaviour is written in C++ against the same reflection the components use, and both assets and their edits reload while the engine runs.
+
+Still absent, and tracked per phase in §6: anti-aliasing, cascaded and point-light shadows, cooked asset packaging, script hot reload and physics.
 
 The Vulkan foundations are idiomatic and are being kept:
 
@@ -31,7 +33,11 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::EditorViewport` | The offscreen image the scene renders into and the UI samples |
 | `ege::PlayMode` | Snapshots the world on Play, restores it on Stop |
 | `ege::UndoStack` | Whole-scene mementos, bounded, with labels |
-| `ege::AssetDatabase` | Stable ids to assets; `.egameta` sidecars, cataloguing, loading |
+| `ege::AssetDatabase` | Stable ids to assets; `.egameta` sidecars, cataloguing, loading, reloading |
+| `ege::FileWatcher` | Notices when a file under the project directory changes |
+| `ege::Behavior` / `ege::ScriptSystem` | C++ behaviours and the callbacks that drive them |
+| `ege::BehaviorRegistry` | Behaviours by name, so the editor can attach one |
+| `ege::DynamicMesh` | CPU-side geometry a script rewrites, uploaded once a frame |
 | `ege::Guid` | The 128-bit identifier an asset reference is made of |
 | `ege::FrameRecorder` | Writes rendered frames to disk, one PNG per frame |
 | `ege::DemoTour` | The scripted camera move `--demo` runs |
@@ -96,9 +102,10 @@ Target directory layout. The modules marked *exists* landed in Phase 0; the rest
 cmake/          Dependencies, CompilerWarnings, Shaders modules          [exists]
 app/            entry point                                             [exists]
 src/
-  core/         Application; + Log, Time, JobSystem, VFS, Profiler       [exists]
+  core/         Application, Log, Time, JobSystem, FileWatcher;
+                + VFS, Profiler                                         [exists]
   reflect/      TypeRegistry, FieldInfo, EGE_REFLECT macros              [Phase 1]
-  platform/     Window, KeyboardMovementController; + Input, FileWatcher [exists]
+  platform/     Window, KeyboardMovementController; + Input             [exists]
   rhi/          Device, SwapChain, Pipeline, Buffer, Descriptors;
                 + Texture, FrameGraph                                    [exists]
   render/       Renderer, Model, Camera, SimpleRenderSystem;
@@ -106,7 +113,8 @@ src/
   scene/        GameObject; replaced by World, Entity, ComponentPool     [exists]
   assets/       AssetDatabase, importers, loaders                        [Phase 6]
   physics/      PhysicsWorld + Jolt backend, colliders                   [Phase 8]
-  script/       Behavior, ScriptModule, hot-reload                       [Phase 7]
+  script/       Behavior, Script, ScriptSystem, BehaviorRegistry;
+                + ScriptModule and its reload                           [exists]
   audio/ ui/ anim/                                                       [Phase 10]
 editor/         EnchantedEditor sources + panels                         [Phase 5]
 runtime/        EnchantedPlayer                                          [Phase 10]
@@ -416,6 +424,32 @@ The database is split at the device boundary on purpose: cataloguing, sidecars a
 - Sandbox project demonstrating a player controller, a spinning object and a procedurally deformed mesh.
 
 **Done when:** editing a `.cpp` script and saving it updates behaviour in a running editor play session within a couple of seconds, without losing entity state.
+
+**Outcome — substantially complete, and explicitly short of its "done when".** Scripting works: behaviours run, are editable, serialize, and drive geometry. Reloading them at runtime does not, and the reason is a build-system change the whole project shares rather than anything about scripting.
+
+**Behaviours.** `Behavior` is a base class with `onSpawn` / `onTick` / `onFixedTick` / `onDespawn`, and two accessors — `self()` for the entity it is on and `world()` for the scene it is in. Nothing else: a behaviour reaches everything through the same public API a system does, which is what makes the demo's behaviours portable into a project later by moving the file.
+
+The sketch's `Script<T>` is a plain `Script` component holding a list of slots instead. A template would have made "two behaviours on one entity" a different component type per combination, and every query over scripted entities would have had to name it. The list also gives the inspector something to add to.
+
+`EGE_BEHAVIOR(Type)` registers a factory at static-init time, keyed by name, and re-registering a name **replaces** rather than duplicates. That is not tidiness — it is what a reloaded module needs, and building it in now means the reload does not have to fight the registry when it arrives.
+
+`ScriptSystem` gathers the behaviours to call into a vector before calling any of them. A callback that spawns or despawns an entity would otherwise be mutating the storage it is being iterated from, and "a script may spawn things" is not a caveat worth shipping.
+
+**Fields, in the inspector and in the scene.** Through the same reflection the components use: declare a behaviour with `EGE_REFLECT` and its fields get sliders, colour pickers and tooltips, and are written into the scene file, with no per-behaviour code in either the inspector or the serializer. A behaviour whose type is not in the running build keeps its saved JSON **verbatim** rather than dropping it, so opening a scene without the code that defines a behaviour and saving it back does not silently erase the setup — which is the failure mode that makes people stop trusting a scene format.
+
+**Mesh manipulation.** `DynamicMesh` holds CPU-side vertices and indices with `recalculateNormals()` and `markDirty()`; the upload happens once per frame in a system rather than once per write, because a behaviour deforming a surface writes every vertex and uploading per write would upload per vertex. The buffer behind it is host-visible and permanently mapped rather than staged, since the whole point is that it changes every frame. The demo's rippling sheet is a script rewriting 2 401 vertices per tick.
+
+**Asset hot reload — the piece Phase 6 deferred to here.** `FileWatcher` polls modification times on an interval rather than subscribing to inotify, `ReadDirectoryChangesW` and FSEvents: three platform APIs with three sets of quirks, against one loop costing a stat per file every half second. A material is reloaded **in place**, so every holder sees the edit and no reference re-resolves; meshes and textures are immutable once uploaded, so those are dropped and the world's references are repointed. The device is idled first — rewriting a descriptor set that frames in flight are reading is undefined, and a stall on the frame after someone presses Ctrl+S is invisible. A broken edit costs the edit, not the run.
+
+For this to be demonstrable at all, the demo's floor is now a real `.egematerial` file rather than a material built in code. Hot reload with nothing in the repository to edit is a claim, not a feature.
+
+*Not done, each for a stated reason:*
+
+- **Script hot reload**, and therefore the phase's "done when". `Enchanted` is a **static** library. A `dlopen`'d script module linked against it would get its own copies of `TypeRegistry`, `ComponentRegistry`, `Serializer` and `BehaviorRegistry`, so nothing the module registered would be visible to the engine and nothing the engine registered would be visible to the module — every behaviour would look unknown, and every component the module touched would look unreflected. Making it work means building the engine as a **shared** library, with `CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS` on Windows and a version-stamped ABI check at load. That is a change to how the whole project is built and linked, on every platform, and it belongs in its own commit rather than smuggled in behind a scripting feature. The watcher that will drive it is built and working; what is missing is the thing it would drive.
+- **`onContact`** — there are no contacts. It arrives with Jolt in Phase 8, where something can actually raise it.
+- **`Physics::Raycast`** — the same.
+- **Prefab instantiation and coroutine-style timers** — neither has a caller yet. `Time`, `World::spawn`/`despawn` and `findByName` are all reachable from a behaviour today, which covers what the demo behaviours need; the rest is API surface written against nothing.
+- **A `sandbox/` project** — it needs the standalone editor to open it, which is Phase 10. The behaviours that would live there live in `src/script/Behaviors.cpp` instead, written against nothing but the public API, so moving them out later is a file move rather than a rewrite.
 
 ### Phase 8 — Physics via Jolt (~5–6 weeks)
 
