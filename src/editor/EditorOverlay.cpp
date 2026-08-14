@@ -14,6 +14,9 @@
 // internal header, which is where ImGui keeps things that are stable enough
 // to use but not frozen as public API.
 #include <imgui_internal.h>
+// After imgui.h, and not sorted with it: ImGuizmo uses ImGui's types without
+// including the header that declares them.
+#include <ImGuizmo.h>
 
 #include <algorithm>
 #include <array>
@@ -240,6 +243,7 @@ namespace ege {
         ImGui_ImplVulkan_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        ImGuizmo::BeginFrame();
     }
 
     bool EditorOverlay::wantsInput() const {
@@ -261,7 +265,7 @@ namespace ege {
     }
 
     void EditorOverlay::buildUi(
-        World& world, const PbrRenderSystem::Stats& stats, float frameTime) {
+        World& world, const Camera& camera, const PbrRenderSystem::Stats& stats, float frameTime) {
         if (!overlayVisible) {
             return;
         }
@@ -285,7 +289,7 @@ namespace ege {
             }
         }
 
-        drawViewportPanel();
+        drawViewportPanel(world, camera);
         drawStatsPanel(stats, frameTime);
         drawHierarchyPanel(world);
         drawInspectorPanel(world);
@@ -322,13 +326,14 @@ namespace ege {
         EGE_DEBUG("editor: built the default panel layout");
     }
 
-    void EditorOverlay::drawViewportPanel() {
+    void EditorOverlay::drawViewportPanel(World& world, const Camera& camera) {
         // No padding: the image is the panel, and a strip of window background
         // around the scene reads as a rendering bug.
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.f, 0.f});
         ImGui::Begin("Scene");
 
         const ImVec2 available = ImGui::GetContentRegionAvail();
+        const ImVec2 imageOrigin = ImGui::GetCursorScreenPos();
         // ImGui lays out in points; the target is allocated in pixels, and on
         // a scaled display those are not the same number.
         const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
@@ -340,12 +345,131 @@ namespace ege {
             ImGui::Image(reinterpret_cast<ImTextureID>(viewport->textureSet()), available);
         }
 
+        // Onto the scene window's own draw list, in the image's rectangle, so
+        // the handles land over the render rather than over the whole window.
+        ImGuizmo::SetOrthographic(false);
+        // Off, so an arrow always points along the positive axis. Left on,
+        // ImGuizmo turns axes towards the camera to make them easier to grab -
+        // which is a reasonable default, and a poor one for a scene whose up
+        // is -Y, where an arrow pointing up could mean either sign.
+        ImGuizmo::AllowAxisFlip(false);
+        ImGuizmo::SetDrawlist();
+        ImGuizmo::SetRect(imageOrigin.x, imageOrigin.y, available.x, available.y);
+        drawGizmo(world, camera);
+
+        // Floating over the top-left of the image rather than above it: a
+        // toolbar in the layout would take a strip out of the render.
+        ImGui::SetCursorScreenPos(ImVec2{imageOrigin.x + 8.f, imageOrigin.y + 8.f});
+        drawGizmoToolbar();
+
         // Whether the camera flies. Child windows count so that anything drawn
-        // over the scene later - a gizmo, a stats readout - does not steal it.
+        // over the scene - the toolbar, a future stats readout - is still the
+        // scene as far as this is concerned.
         viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
 
         ImGui::End();
         ImGui::PopStyleVar();
+    }
+
+    void EditorOverlay::drawGizmoToolbar() {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{6.f, 4.f});
+        ImGui::BeginChild(
+            "gizmoToolbar",
+            ImVec2{0.f, 0.f},
+            ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_FrameStyle);
+
+        const auto modeButton = [this](const char* label, GizmoMode mode) {
+            const bool active = gizmoMode == mode;
+            if (active) {
+                ImGui::PushStyleColor(
+                    ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+            }
+            if (ImGui::Button(label)) {
+                gizmoMode = mode;
+            }
+            if (active) {
+                ImGui::PopStyleColor();
+            }
+            ImGui::SameLine();
+        };
+
+        modeButton("Move", GizmoMode::translate);
+        modeButton("Rotate", GizmoMode::rotate);
+        modeButton("Scale", GizmoMode::scale);
+
+        // Local space is meaningless for a non-uniform scale gizmo's own axes,
+        // and ImGuizmo forces world there anyway; saying so beats a control
+        // that silently does nothing.
+        ImGui::BeginDisabled(gizmoMode == GizmoMode::scale);
+        bool worldSpace = gizmoWorldSpace;
+        if (ImGui::Checkbox("world", &worldSpace)) {
+            gizmoWorldSpace = worldSpace;
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::Checkbox("snap", &gizmoSnaps);
+
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
+    }
+
+    void EditorOverlay::drawGizmo(World& world, const Camera& camera) {
+        if (!world.alive(selected) || world.find<Transform>(selected) == nullptr) {
+            return;
+        }
+
+        glm::mat4 view = camera.getView();
+        // ImGuizmo projects with OpenGL's convention, where clip-space +Y is
+        // the top of the screen; Vulkan's is the bottom. Without the flip the
+        // handles are drawn mirrored about the horizon and drag the wrong way.
+        glm::mat4 projection = camera.getProjection();
+        projection[1][1] *= -1.f;
+
+        // A gizmo moves the entity where it appears to be, which under a
+        // parent is not what its own transform says. Manipulate in world space
+        // and divide the parent back out afterwards.
+        const EntityId parent = hierarchy::parentOf(world, selected);
+        const glm::mat4 parentMatrix =
+            parent.isNull() ? glm::mat4{1.f} : hierarchy::worldMatrix(world, parent);
+
+        // Re-found after worldMatrix, which may attach a Hierarchy and grow a
+        // pool; the earlier pointer could no longer be valid.
+        Transform* transform = world.find<Transform>(selected);
+        if (transform == nullptr) {
+            return;
+        }
+        glm::mat4 worldMatrix = parentMatrix * transform->mat4();
+
+        ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
+        glm::vec3 snap{0.25f};
+        switch (gizmoMode) {
+            case GizmoMode::translate:
+                break;
+            case GizmoMode::rotate:
+                operation = ImGuizmo::ROTATE;
+                snap = glm::vec3{15.f};
+                break;
+            case GizmoMode::scale:
+                operation = ImGuizmo::SCALE;
+                snap = glm::vec3{0.1f};
+                break;
+        }
+
+        const bool moved = ImGuizmo::Manipulate(
+            &view[0][0],
+            &projection[0][0],
+            operation,
+            gizmoWorldSpace ? ImGuizmo::WORLD : ImGuizmo::LOCAL,
+            &worldMatrix[0][0],
+            nullptr,
+            gizmoSnaps ? &snap[0] : nullptr);
+
+        if (!moved) {
+            return;
+        }
+
+        *transform = Transform::fromMatrix(glm::inverse(parentMatrix) * worldMatrix);
+        hierarchy::markDirty(world, selected);
     }
 
     void EditorOverlay::render(VkCommandBuffer commandBuffer) {

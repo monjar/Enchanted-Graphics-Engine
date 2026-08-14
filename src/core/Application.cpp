@@ -247,20 +247,22 @@ namespace ege {
                 overlay.prepareFrame(swapExtent);
                 const EditorOverlay::SceneTarget sceneTarget = overlay.sceneTarget(swapExtent);
 
-                // The ImGui frame opens with the render frame: NewFrame and
-                // Render must pair, and a frame skipped for resize renders
-                // no UI either.
-                overlay.beginFrame();
-                overlay.buildUi(world, pbrRenderSystem.stats(), frameTime);
-
                 // The scene is framed by whatever it renders into - the editor's
                 // viewport panel while that is up, the window itself when it is
                 // not - so the aspect ratio follows the target, not the display.
+                // Settled before the UI is built, because the scene view's
+                // gizmo projects through these very matrices.
                 const VkExtent2D renderExtent = sceneTarget.extent;
                 camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
                 const float aspectRatio = static_cast<float>(renderExtent.width) /
                                           static_cast<float>(std::max(renderExtent.height, 1u));
                 camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
+
+                // The ImGui frame opens with the render frame: NewFrame and
+                // Render must pair, and a frame skipped for resize renders
+                // no UI either.
+                overlay.beginFrame();
+                overlay.buildUi(world, camera, pbrRenderSystem.stats(), frameTime);
 
                 const uint32_t frameIndex = renderer.getFrameIndex();
                 FrameInfo frameInfo{

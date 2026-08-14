@@ -1,5 +1,7 @@
 #include "scene/Components.hpp"
 
+#include <glm/gtx/euler_angles.hpp>
+
 namespace ege {
 
     glm::mat4 Transform::mat4() const {
@@ -29,6 +31,31 @@ namespace ege {
                 0.0f,
             },
             {translation.x, translation.y, translation.z, 1.0f}};
+    }
+
+    Transform Transform::fromMatrix(const glm::mat4& matrix) {
+        Transform out{};
+        out.translation = glm::vec3{matrix[3]};
+        out.scale = glm::vec3{
+            glm::length(glm::vec3{matrix[0]}),
+            glm::length(glm::vec3{matrix[1]}),
+            glm::length(glm::vec3{matrix[2]})};
+
+        // Dividing each basis vector by its length leaves the rotation. A
+        // degenerate axis has no direction to recover, so it keeps identity
+        // rather than producing NaNs that would spread through the scene.
+        glm::mat4 rotation{1.f};
+        for (int column = 0; column < 3; column++) {
+            const float length = out.scale[column];
+            if (length > 1e-8f) {
+                rotation[column] = matrix[column] / length;
+            }
+        }
+
+        // extractEulerAngleYXZ decomposes M = Ry * Rx * Rz, which is exactly
+        // the composition mat4() builds.
+        glm::extractEulerAngleYXZ(rotation, out.rotation.y, out.rotation.x, out.rotation.z);
+        return out;
     }
 
     // The upper 3x3 of mat4() is M = R * S, with R orthonormal and S a positive

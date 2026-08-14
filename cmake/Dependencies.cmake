@@ -143,6 +143,26 @@ target_link_libraries(ege_imgui PUBLIC ege::glfw Vulkan::Vulkan)
 add_library(ege::imgui ALIAS ege_imgui)
 
 # ---------------------------------------------------------------------------
+# ImGuizmo - the viewport's translate/rotate/scale handles.
+#
+# Pinned to a commit rather than a tag: the last release predates the ImGui
+# version above by several years, and building against a tag that does not
+# compile is not the reproducibility anyone wanted.
+# ---------------------------------------------------------------------------
+CPMAddPackage(
+  NAME imguizmo
+  GITHUB_REPOSITORY CedricGuillemet/ImGuizmo
+  GIT_TAG 18cef5e031d8c6973d80284c67f60549fafd78c1
+  EXCLUDE_FROM_ALL YES
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_imguizmo STATIC ${imguizmo_SOURCE_DIR}/src/ImGuizmo.cpp)
+target_include_directories(ege_imguizmo SYSTEM PUBLIC ${imguizmo_SOURCE_DIR}/src)
+target_link_libraries(ege_imguizmo PUBLIC ege::imgui)
+add_library(ege::imguizmo ALIAS ege_imguizmo)
+
+# ---------------------------------------------------------------------------
 # cgltf - glTF 2.0 import. Single header, implementation compiled in
 # assets/GltfLoader.cpp.
 # ---------------------------------------------------------------------------

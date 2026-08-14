@@ -25,6 +25,16 @@ namespace ege {
 
         glm::mat4 mat4() const;
 
+        // The inverse of mat4(): the fields that would compose this matrix.
+        // Exact for a translation, rotation and positive scale; shear has no
+        // representation here and is silently dropped, which is the same
+        // constraint mat4() imposes going the other way.
+        //
+        // Needed wherever a matrix arrives from outside - a glTF node, a
+        // gizmo drag - and has to become something an inspector can show as
+        // nine numbers.
+        static Transform fromMatrix(const glm::mat4& matrix);
+
         // Exact for this strict T*R*S composition - see the derivation at the
         // definition. Must be revisited if shear is ever introduced.
         glm::mat3 normalMatrix() const;

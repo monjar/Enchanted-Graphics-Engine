@@ -3,6 +3,7 @@
 #include "core/LogBuffer.hpp"
 #include "editor/EditorViewport.hpp"
 #include "platform/Window.hpp"
+#include "render/Camera.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "rhi/Device.hpp"
 #include "scene/World.hpp"
@@ -52,8 +53,14 @@ namespace ege {
         // NewFrame and Render must pair even when the overlay is hidden.
         void beginFrame();
 
-        // Declares the panels. Skipped entirely while hidden.
-        void buildUi(World& world, const PbrRenderSystem::Stats& stats, float frameTime);
+        // Declares the panels. Skipped entirely while hidden. The camera is
+        // needed by the scene view, whose gizmo has to agree with the picture
+        // it is drawn over.
+        void buildUi(
+            World& world,
+            const Camera& camera,
+            const PbrRenderSystem::Stats& stats,
+            float frameTime);
 
         // Finalises the frame and records the draw data.
         void render(VkCommandBuffer commandBuffer);
@@ -81,9 +88,16 @@ namespace ege {
             EntityId target{};
         };
 
+        // Which handle the scene view's gizmo offers. Named here rather than
+        // reusing ImGuizmo's enum so the editor's own header does not drag a
+        // third-party one along with it.
+        enum class GizmoMode { translate, rotate, scale };
+
         void buildDefaultLayout(unsigned int dockspaceId);
         void drawStatsPanel(const PbrRenderSystem::Stats& stats, float frameTime);
-        void drawViewportPanel();
+        void drawViewportPanel(World& world, const Camera& camera);
+        void drawGizmo(World& world, const Camera& camera);
+        void drawGizmoToolbar();
         void drawHierarchyPanel(World& world);
         void drawEntityNode(World& world, EntityId entity);
         void drawInspectorPanel(World& world);
@@ -101,6 +115,11 @@ namespace ege {
         // been laid out once, which is why prepareFrame takes a fallback.
         VkExtent2D requestedViewportExtent{0, 0};
         bool viewportHovered = false;
+        GizmoMode gizmoMode = GizmoMode::translate;
+        // World space by default: it is the frame the inspector's numbers are
+        // in for an unparented entity, so the two agree until told otherwise.
+        bool gizmoWorldSpace = true;
+        bool gizmoSnaps = false;
         // Only ever built once, and only when no saved layout was restored -
         // a user who has arranged their panels keeps that arrangement.
         bool layoutChecked = false;

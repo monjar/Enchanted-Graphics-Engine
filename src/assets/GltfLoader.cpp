@@ -214,27 +214,7 @@ namespace ege::gltf {
         Transform toTransform(const cgltf_node& node) {
             float local[16];
             cgltf_node_transform_local(&node, local);
-            const glm::mat4 matrix = glm::make_mat4(local);
-
-            Transform out{};
-            out.translation = glm::vec3{matrix[3]};
-            out.scale = glm::vec3{
-                glm::length(glm::vec3{matrix[0]}),
-                glm::length(glm::vec3{matrix[1]}),
-                glm::length(glm::vec3{matrix[2]})};
-
-            glm::mat4 rotation{1.f};
-            for (int column = 0; column < 3; column++) {
-                const float length = out.scale[column];
-                if (length > 1e-8f) {
-                    rotation[column] = matrix[column] / length;
-                }
-            }
-
-            // extractEulerAngleYXZ decomposes M = Ry * Rx * Rz, which is
-            // exactly the composition Transform::mat4 builds.
-            glm::extractEulerAngleYXZ(rotation, out.rotation.y, out.rotation.x, out.rotation.z);
-            return out;
+            return Transform::fromMatrix(glm::make_mat4(local));
         }
 
         GltfSceneData buildSceneData(
