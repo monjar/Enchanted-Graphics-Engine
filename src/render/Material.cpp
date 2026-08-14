@@ -85,6 +85,15 @@ namespace ege {
         emissive = texture ? std::move(texture) : defaultEmissive;
     }
 
+    void Material::adoptFrom(const Material& other) {
+        properties = other.properties;
+        baseColor = other.baseColor;
+        normalMap = other.normalMap;
+        metallicRoughness = other.metallicRoughness;
+        emissive = other.emissive;
+        updateDescriptorSet();
+    }
+
     void Material::updateDescriptorSet() {
         VkDescriptorImageInfo baseInfo = baseColor->descriptorInfo();
         VkDescriptorImageInfo normalInfo = normalMap->descriptorInfo();

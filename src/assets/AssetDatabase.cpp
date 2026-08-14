@@ -367,6 +367,55 @@ namespace ege {
         return loaded;
     }
 
+    void AssetDatabase::reload(Guid id) {
+        const AssetRecord* record = find(id);
+        if (record == nullptr || record->path.empty() || !canLoad()) {
+            return;
+        }
+
+        switch (record->kind) {
+            case AssetKind::material: {
+                const auto cached = materials.find(id);
+                if (cached == materials.end() || cached->second == nullptr) {
+                    // Never loaded, or last load failed: dropping the entry is
+                    // enough, and the next resolve tries again.
+                    materials.erase(id);
+                    return;
+                }
+                try {
+                    // Read into a scratch material, then move the parts across
+                    // into the live one. Reading straight into it would leave
+                    // a half-updated material visible if the file is broken.
+                    const std::shared_ptr<Material> fresh = loadMaterialFile(*record);
+                    cached->second->adoptFrom(*fresh);
+                    EGE_INFO("Reloaded material {}", record->path.string());
+                } catch (const std::exception& error) {
+                    EGE_ERROR("reloading {} failed: {}", record->path.string(), error.what());
+                }
+                return;
+            }
+            case AssetKind::texture:
+                textures.erase(id);
+                // Nothing holds a texture except the materials that sample it,
+                // and a material only learns of the new one by being read
+                // again. There are few of them and they are cheap.
+                for (const AssetRecord& other : records) {
+                    if (other.kind == AssetKind::material) {
+                        reload(other.id);
+                    }
+                }
+                EGE_INFO("Reloaded texture {}", record->path.string());
+                return;
+            case AssetKind::mesh:
+                meshes.erase(id);
+                EGE_INFO("Reloaded mesh {}", record->path.string());
+                return;
+            case AssetKind::scene:
+            case AssetKind::unknown:
+                return;
+        }
+    }
+
     void AssetDatabase::clear() {
         records.clear();
         byId.clear();

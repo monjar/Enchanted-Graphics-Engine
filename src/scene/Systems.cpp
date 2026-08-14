@@ -1,5 +1,6 @@
 #include "scene/Systems.hpp"
 
+#include "assets/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "render/DynamicMesh.hpp"
 #include "scene/Components.hpp"
@@ -34,6 +35,18 @@ namespace ege::systems {
                 // mesh, and the script rebuilds the vertices.
                 renderer.mesh.value = mesh.gpu;
             });
+    }
+
+    void refreshAssetReferences(World& world) {
+        AssetDatabase& assets = AssetDatabase::instance();
+        world.each<MeshRenderer>([&](Entity, MeshRenderer& renderer) {
+            if (!renderer.mesh.id.isNull()) {
+                renderer.mesh.value = assets.mesh(renderer.mesh.id);
+            }
+            if (!renderer.material.id.isNull()) {
+                renderer.material.value = assets.material(renderer.material.id);
+            }
+        });
     }
 
 }  // namespace ege::systems

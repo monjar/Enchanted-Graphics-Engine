@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "properties": {
+    "baseColorFactor": [0.35, 0.35, 0.35, 1.0],
+    "emissiveFactor": [0.0, 0.0, 0.0],
+    "metallicFactor": 0.0,
+    "roughnessFactor": 0.85,
+    "normalScale": 1.0,
+    "occlusionStrength": 1.0,
+    "alphaCutoff": 0.5
+  }
+}

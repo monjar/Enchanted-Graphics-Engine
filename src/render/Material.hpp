@@ -49,6 +49,12 @@ namespace ege {
         // Rebuilds the descriptor set. Call after changing any slot.
         void updateDescriptorSet();
 
+        // Takes on another material's properties and texture slots, keeping
+        // this object's identity. What hot reload needs: everything already
+        // pointing at this material sees the new values, with no reference to
+        // re-resolve and no descriptor set to rebind anywhere else.
+        void adoptFrom(const Material& other);
+
         VkDescriptorSet descriptorSet() const { return set; }
 
         MaterialProperties properties{};

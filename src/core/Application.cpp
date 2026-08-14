@@ -3,6 +3,7 @@
 #include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
 #include "core/DemoTour.hpp"
+#include "core/FileWatcher.hpp"
 #include "core/Log.hpp"
 #include "core/Time.hpp"
 #include "editor/EditorOverlay.hpp"
@@ -253,6 +254,12 @@ namespace ege {
             }
         }
 
+        // Assets reload while the engine runs: edit a material file, save it,
+        // and the scene changes without a restart. Half a second is short
+        // enough to feel immediate and long enough that a directory walk per
+        // interval is free.
+        FileWatcher assetWatcher{assetRoot(), std::chrono::milliseconds{500}};
+
         bool running = true;
         bool scriptsRunning = false;
         float sessionSeconds = 0.f;
@@ -317,6 +324,8 @@ namespace ege {
             if (options.exitAfterSeconds > 0.f && sessionSeconds >= options.exitAfterSeconds) {
                 running = false;
             }
+
+            reloadChangedAssets(assetWatcher);
 
             // After the scripts, before anything reads geometry: a behaviour
             // that rewrote a surface this tick wants it drawn this frame.
@@ -625,6 +634,21 @@ namespace ege {
                 return MaterialRef{id, std::move(material)};
             };
 
+        // The one material in the scene that comes from a file. Everything
+        // else is built in code, which is fine until you want to change
+        // something without rebuilding - so the floor is the surface that
+        // proves asset hot reload works: edit assets/materials/floor.egematerial
+        // while the engine is running and the floor changes.
+        auto fileMaterial = [&assets](const std::filesystem::path& relative) {
+            MaterialRef reference{};
+            if (const AssetRecord* record = assets.findByPath(relative)) {
+                if (std::shared_ptr<Material> material = assets.material(record->id)) {
+                    reference = MaterialRef{record->id, std::move(material)};
+                }
+            }
+            return reference;
+        };
+
         auto addMesh = [this](
                            std::string name,
                            MeshRef mesh,
@@ -664,10 +688,19 @@ namespace ege {
 
         // Floor, rotated a half turn about X so its +Y normal points along -Y,
         // which is up in this scene and therefore towards the lights.
+        MaterialRef floorMaterial =
+            fileMaterial(std::filesystem::path{"materials"} / "floor.egematerial");
+        if (floorMaterial.value == nullptr) {
+            // The file is missing or unreadable. The demo still runs, in the
+            // same grey it would have had - a broken asset should cost you
+            // that asset, not the scene.
+            EGE_WARN("floor material file unavailable; using the built-in floor material");
+            floorMaterial = makeMaterial("Floor", glm::vec3{0.35f}, 0.f, 0.85f);
+        }
         addMesh(
             "Floor",
             plane,
-            makeMaterial("Floor", glm::vec3{0.35f}, 0.f, 0.85f),
+            floorMaterial,
             {0.f, .5f, 0.f},
             {8.f, 1.f, 8.f},
             {glm::pi<float>(), 0.f, 0.f});
@@ -793,6 +826,51 @@ namespace ege {
             AssetDatabase::instance().all().size());
 
         verifySceneRoundTrip();
+    }
+
+    void Application::reloadChangedAssets(FileWatcher& watcher) {
+        const std::vector<FileWatcher::Event> changes = watcher.poll();
+        if (changes.empty()) {
+            return;
+        }
+
+        AssetDatabase& assets = AssetDatabase::instance();
+
+        // Rescan first: a file that has just appeared has no id yet, and a
+        // sidecar that has just appeared beside one is how an id arrives.
+        bool structural = false;
+        for (const FileWatcher::Event& change : changes) {
+            if (change.change != FileWatcher::Change::modified) {
+                structural = true;
+            }
+        }
+        if (structural) {
+            assets.scan(assetRoot());
+        }
+
+        // Reloading rewrites descriptor sets and frees images that frames
+        // still in flight are reading. Waiting is a stall, and a stall on the
+        // frame after someone saves a file is invisible - the alternative is
+        // versioning every asset for the sake of an event that happens when a
+        // human presses Ctrl+S.
+        vkDeviceWaitIdle(device.device());
+
+        std::error_code errorCode;
+        for (const FileWatcher::Event& change : changes) {
+            const std::filesystem::path relative =
+                std::filesystem::relative(change.path, assetRoot(), errorCode);
+            if (errorCode) {
+                errorCode.clear();
+                continue;
+            }
+            if (const AssetRecord* record = assets.findByPath(relative)) {
+                assets.reload(record->id);
+            }
+        }
+
+        // A mesh cannot be reloaded in place, so anything holding one has to
+        // be pointed at the rebuilt version.
+        systems::refreshAssetReferences(world);
     }
 
     std::filesystem::path Application::assetRoot() {

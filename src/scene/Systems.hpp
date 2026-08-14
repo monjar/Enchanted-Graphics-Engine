@@ -22,4 +22,12 @@ namespace ege::systems {
     // needs one upload".
     void uploadDynamicMeshes(World& world, Device& device);
 
+    // Re-resolves every asset reference in the world against the database.
+    //
+    // What hot reload needs for the assets that cannot be reloaded in place:
+    // a mesh is immutable once uploaded, so reloading one means building a new
+    // Model and pointing the references at it. References with no id are left
+    // alone - those are dynamic meshes, whose geometry has no file behind it.
+    void refreshAssetReferences(World& world);
+
 }  // namespace ege::systems
