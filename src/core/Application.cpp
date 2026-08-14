@@ -226,27 +226,41 @@ namespace ege {
             // Rendering and camera control stay on the variable delta: they
             // should run as often as the display allows - unless a panel owns
             // the input, in which case dragging a slider must not also fly
-            // the camera.
-            if (!overlay.wantsInput()) {
+            // the camera. A captured cursor is not over anything, so a look
+            // drag that began in the scene view keeps the camera regardless.
+            const bool cameraOwnsInput =
+                window.input().cursorMode() != CursorMode::Normal || !overlay.wantsInput();
+            if (cameraOwnsInput) {
                 cameraController.update(window.input(), frameTime, viewerTransform);
             }
 
             // Composes world matrices for every parented entity once per frame,
             // rather than each consumer recomputing the same parent chain.
             hierarchy::resolveTransforms(world);
-            camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
-            float aspectRatio = renderer.getAspectRatio();
-
-            // camera.setOrthographicProjection(-aspectRatio, aspectRatio, -1, 1, -1, 1);
-
-            camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
 
             if (auto commandBuffer = renderer.beginFrame()) {
+                const VkExtent2D swapExtent = renderer.getSwapChainExtent();
+
+                // Before any UI is declared: the scene view hands ImGui a
+                // descriptor set for the image below, and resizing it after
+                // the draw list has referenced it would free the set in use.
+                overlay.prepareFrame(swapExtent);
+                const EditorOverlay::SceneTarget sceneTarget = overlay.sceneTarget(swapExtent);
+
                 // The ImGui frame opens with the render frame: NewFrame and
                 // Render must pair, and a frame skipped for resize renders
                 // no UI either.
                 overlay.beginFrame();
                 overlay.buildUi(world, pbrRenderSystem.stats(), frameTime);
+
+                // The scene is framed by whatever it renders into - the editor's
+                // viewport panel while that is up, the window itself when it is
+                // not - so the aspect ratio follows the target, not the display.
+                const VkExtent2D renderExtent = sceneTarget.extent;
+                camera.setViewYXZ(viewerTransform.translation, viewerTransform.rotation);
+                const float aspectRatio = static_cast<float>(renderExtent.width) /
+                                          static_cast<float>(std::max(renderExtent.height, 1u));
+                camera.setPerspectiveProjection(glm::radians(50.f), aspectRatio, 0.1f, 100.f);
 
                 const uint32_t frameIndex = renderer.getFrameIndex();
                 FrameInfo frameInfo{
@@ -307,15 +321,17 @@ namespace ege {
                 // render: declare the frame, then let the graph run it. The
                 // declarations are cheap enough to restate every frame, and
                 // doing so is what lets passes appear and disappear freely.
-                graph.beginFrame(renderer.getSwapChainExtent());
+                graph.beginFrame(swapExtent);
 
                 TransientImageDesc sceneColorDesc{};
                 sceneColorDesc.format = hdrFormat;
+                sceneColorDesc.extent = renderExtent;
                 sceneColorDesc.clearValue.color = {{0.01f, 0.01f, 0.01f, 1.0f}};
                 FrameGraphResource sceneColor = graph.createTransient("sceneColor", sceneColorDesc);
 
                 TransientImageDesc sceneDepthDesc{};
                 sceneDepthDesc.format = renderer.getSwapChainDepthFormat();
+                sceneDepthDesc.extent = renderExtent;
                 sceneDepthDesc.clearValue.depthStencil = {1.0f, 0};
                 FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", sceneDepthDesc);
 
@@ -329,9 +345,8 @@ namespace ege {
 
                 // Bloom works at half resolution: it is blurred anyway, and
                 // half the pixels means a quarter of the blur cost.
-                const VkExtent2D swapExtent = renderer.getSwapChainExtent();
                 const VkExtent2D halfExtent{
-                    std::max(swapExtent.width / 2, 1u), std::max(swapExtent.height / 2, 1u)};
+                    std::max(renderExtent.width / 2, 1u), std::max(renderExtent.height / 2, 1u)};
 
                 TransientImageDesc bloomDesc{};
                 bloomDesc.format = hdrFormat;
@@ -351,6 +366,26 @@ namespace ege {
                     // backbuffer barrier chains after the acquire.
                     VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
                     VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+                // Where the display transform lands. With the editor up that is
+                // the viewport image the Scene panel samples, and the UI pass
+                // becomes the only thing writing the window; with the editor
+                // hidden the tonemap goes straight to the backbuffer and the
+                // frame is exactly what it was before the editor existed.
+                FrameGraphResource displayTarget = backbuffer;
+                if (sceneTarget.offscreen) {
+                    displayTarget = graph.importImage(
+                        "viewport",
+                        sceneTarget.image,
+                        sceneTarget.view,
+                        renderer.getSwapChainColorFormat(),
+                        sceneTarget.extent,
+                        VkClearValue{},
+                        // Last frame's UI sampled this image; writing over it
+                        // has to wait for that read to have finished.
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                }
 
                 const glm::mat4 sunViewProjection = ubo.sunViewProjection;
 
@@ -429,19 +464,23 @@ namespace ege {
                     [&](FrameGraph::PassBuilder& pass) {
                         pass.read(sceneColor, ResourceAccess::sampled);
                         pass.read(bloomFinal, ResourceAccess::sampled);
-                        pass.write(backbuffer, ResourceAccess::colorWrite);
+                        pass.write(displayTarget, ResourceAccess::colorWrite);
                     },
                     [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
                         postProcess.render(
                             cmd, frameIndex, resolved.view(sceneColor), resolved.view(bloomFinal));
                     });
 
-                // UI last, straight onto the backbuffer: the second writer
-                // loads what the tonemap stored, and the graph inserts the
-                // write-after-write barrier between them.
+                // UI last, onto the backbuffer. Whether it loads what the
+                // tonemap left there or samples the viewport image and paints
+                // the window itself is one declared read either way; the
+                // render-to-sample transition is the graph's problem.
                 graph.addPass(
                     "ui",
                     [&](FrameGraph::PassBuilder& pass) {
+                        if (sceneTarget.offscreen) {
+                            pass.read(displayTarget, ResourceAccess::sampled);
+                        }
                         pass.write(backbuffer, ResourceAccess::colorWrite);
                     },
                     [&](VkCommandBuffer cmd, const FrameGraphResources&) { overlay.render(cmd); });

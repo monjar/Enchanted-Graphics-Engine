@@ -8,7 +8,13 @@
 #include <backends/imgui_impl_glfw.h>
 #include <backends/imgui_impl_vulkan.h>
 #include <imgui.h>
+// The dock builder is the only way to lay panels out from code rather than
+// making every new user drag four windows into place. It lives in the
+// internal header, which is where ImGui keeps things that are stable enough
+// to use but not frozen as public API.
+#include <imgui_internal.h>
 
+#include <algorithm>
 #include <cstring>
 #include <stdexcept>
 
@@ -105,12 +111,15 @@ namespace ege {
         Window& window, Device& deviceRef, VkFormat outputFormat, uint32_t swapchainImageCount)
         : device{deviceRef} {
         // ImGui allocates and frees descriptor sets for the textures it
-        // draws; the pool must allow freeing.
-        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 16};
+        // draws; the pool must allow freeing. Room for the font atlas, the
+        // viewport target, and the handful of viewport targets still retired
+        // while a panel edge is being dragged.
+        constexpr uint32_t maxTextures = 64;
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, maxTextures};
         VkDescriptorPoolCreateInfo poolInfo{};
         poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-        poolInfo.maxSets = 16;
+        poolInfo.maxSets = maxTextures;
         poolInfo.poolSizeCount = 1;
         poolInfo.pPoolSizes = &poolSize;
         if (vkCreateDescriptorPool(device.device(), &poolInfo, nullptr, &imguiPool) != VK_SUCCESS) {
@@ -156,14 +165,43 @@ namespace ege {
             throw std::runtime_error{"failed to initialise the ImGui Vulkan backend"};
         }
 
+        // After the backend: the viewport's texture handle is a descriptor set
+        // allocated through it.
+        viewport = std::make_unique<EditorViewport>(device, outputFormat, swapchainImageCount);
+
         EGE_INFO("Editor overlay ready (F1 toggles)");
     }
 
     EditorOverlay::~EditorOverlay() {
+        // Before the backend goes away: releasing the viewport's texture
+        // handle goes back through it.
+        viewport.reset();
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
         vkDestroyDescriptorPool(device.device(), imguiPool, nullptr);
+    }
+
+    void EditorOverlay::prepareFrame(VkExtent2D windowExtent) {
+        // Until the panel has been laid out once there is nothing to go on, so
+        // the window's own size stands in - which is also what a hidden editor
+        // would want the moment F1 brings it back.
+        const bool laidOut =
+            requestedViewportExtent.width != 0 && requestedViewportExtent.height != 0;
+        viewport->resize(laidOut ? requestedViewportExtent : windowExtent);
+    }
+
+    EditorOverlay::SceneTarget EditorOverlay::sceneTarget(VkExtent2D windowExtent) const {
+        SceneTarget target{};
+        if (!overlayVisible || !viewport->valid()) {
+            target.extent = windowExtent;
+            return target;
+        }
+        target.offscreen = true;
+        target.image = viewport->imageHandle();
+        target.view = viewport->viewHandle();
+        target.extent = viewport->extent();
+        return target;
     }
 
     void EditorOverlay::beginFrame() {
@@ -173,8 +211,21 @@ namespace ege {
     }
 
     bool EditorOverlay::wantsInput() const {
+        if (!overlayVisible) {
+            return false;
+        }
         const ImGuiIO& io = ImGui::GetIO();
-        return overlayVisible && (io.WantCaptureMouse || io.WantCaptureKeyboard);
+        // A text field being edited outranks everything: the cursor may well be
+        // sitting over the scene while the typing is meant for the field.
+        if (io.WantTextInput) {
+            return true;
+        }
+        // The scene view is the one place where the mouse belongs to the
+        // camera rather than the UI - that is what makes it a viewport.
+        if (viewportHovered) {
+            return false;
+        }
+        return io.WantCaptureMouse || io.WantCaptureKeyboard;
     }
 
     void EditorOverlay::buildUi(
@@ -189,9 +240,75 @@ namespace ege {
             selected = world.all().front().id();
         }
 
+        // Panels dock into this rather than floating over the scene, which is
+        // the difference between a debug overlay and an editor.
+        const ImGuiID dockspaceId = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
+        if (!layoutChecked) {
+            layoutChecked = true;
+            const ImGuiDockNode* node = ImGui::DockBuilderGetNode(dockspaceId);
+            // A restored imgui.ini has already populated the node tree; only an
+            // editor that has never been arranged gets the built-in layout.
+            if (node == nullptr || (!node->IsSplitNode() && node->Windows.Size == 0)) {
+                buildDefaultLayout(dockspaceId);
+            }
+        }
+
+        drawViewportPanel();
         drawStatsPanel(stats, frameTime);
         drawHierarchyPanel(world);
         drawInspectorPanel(world);
+    }
+
+    void EditorOverlay::buildDefaultLayout(unsigned int dockspaceId) {
+        const ImGuiID root = dockspaceId;
+        ImGui::DockBuilderRemoveNode(root);
+        ImGui::DockBuilderAddNode(root, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(root, ImGui::GetMainViewport()->WorkSize);
+
+        // Splitting the centre repeatedly leaves the scene with whatever the
+        // panels did not claim, which is what a viewport should get.
+        ImGuiID centre = root;
+        const ImGuiID left =
+            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Left, 0.20f, nullptr, &centre);
+        const ImGuiID right =
+            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Right, 0.28f, nullptr, &centre);
+        ImGuiID hierarchy = left;
+        const ImGuiID stats =
+            ImGui::DockBuilderSplitNode(hierarchy, ImGuiDir_Down, 0.35f, nullptr, &hierarchy);
+
+        ImGui::DockBuilderDockWindow("Scene", centre);
+        ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
+        ImGui::DockBuilderDockWindow("Stats", stats);
+        ImGui::DockBuilderDockWindow("Inspector", right);
+        ImGui::DockBuilderFinish(root);
+
+        EGE_DEBUG("editor: built the default panel layout");
+    }
+
+    void EditorOverlay::drawViewportPanel() {
+        // No padding: the image is the panel, and a strip of window background
+        // around the scene reads as a rendering bug.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.f, 0.f});
+        ImGui::Begin("Scene");
+
+        const ImVec2 available = ImGui::GetContentRegionAvail();
+        // ImGui lays out in points; the target is allocated in pixels, and on
+        // a scaled display those are not the same number.
+        const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+        requestedViewportExtent = {
+            static_cast<uint32_t>(std::max(available.x * scale.x, 1.f)),
+            static_cast<uint32_t>(std::max(available.y * scale.y, 1.f))};
+
+        if (viewport->valid()) {
+            ImGui::Image(reinterpret_cast<ImTextureID>(viewport->textureSet()), available);
+        }
+
+        // Whether the camera flies. Child windows count so that anything drawn
+        // over the scene later - a gizmo, a stats readout - does not steal it.
+        viewportHovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
+
+        ImGui::End();
+        ImGui::PopStyleVar();
     }
 
     void EditorOverlay::render(VkCommandBuffer commandBuffer) {
@@ -200,10 +317,6 @@ namespace ege {
     }
 
     void EditorOverlay::drawStatsPanel(const PbrRenderSystem::Stats& stats, float frameTime) {
-        // Sensible places on a fresh machine; once the user drags anything,
-        // imgui.ini remembers and these stop applying.
-        ImGui::SetNextWindowPos(ImVec2{10.f, 420.f}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2{170.f, 130.f}, ImGuiCond_FirstUseEver);
         ImGui::Begin("Stats");
         ImGui::Text(
             "%.2f ms  (%.0f fps)",
@@ -220,8 +333,6 @@ namespace ege {
     }
 
     void EditorOverlay::drawHierarchyPanel(World& world) {
-        ImGui::SetNextWindowPos(ImVec2{10.f, 10.f}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2{190.f, 400.f}, ImGuiCond_FirstUseEver);
         ImGui::Begin("Hierarchy");
 
         for (Entity entity : world.all()) {
@@ -278,8 +389,6 @@ namespace ege {
     }
 
     void EditorOverlay::drawInspectorPanel(World& world) {
-        ImGui::SetNextWindowPos(ImVec2{540.f, 10.f}, ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2{250.f, 320.f}, ImGuiCond_FirstUseEver);
         ImGui::Begin("Inspector");
 
         if (selected.isNull() || !world.alive(selected)) {
@@ -287,6 +396,11 @@ namespace ege {
             ImGui::End();
             return;
         }
+
+        // A docked panel is narrower than the floating window this started as,
+        // and ImGui puts field labels after the widget - so without a cap the
+        // widgets push every label off the right edge.
+        ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.55f);
 
         // The name lives on the entity itself, not in a component.
         char nameBuffer[128];
@@ -322,6 +436,7 @@ namespace ege {
             ImGui::PopID();
         }
 
+        ImGui::PopItemWidth();
         ImGui::End();
     }
 
