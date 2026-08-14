@@ -73,25 +73,6 @@ jobs:
           version: 1.4.304.1
           cache: true
 
-      # The action extracts the SDK tree but does not install the loader into
-      # System32 the way the real installer would, and the runner has no GPU
-      # driver to provide one either. Everything that links vulkan-1.lib -
-      # including the test runner, which never calls Vulkan but still imports
-      # the DLL - dies at process start with STATUS_DLL_NOT_FOUND unless the
-      # loader is findable, so the copy the SDK ships is put on PATH.
-      - name: Put the Vulkan loader on PATH (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $dll = Get-ChildItem -Path $env:VULKAN_SDK -Recurse -Filter vulkan-1.dll |
-            Where-Object { $_.FullName -notmatch '32' } | Select-Object -First 1
-          if (-not $dll) {
-            Write-Error "no vulkan-1.dll anywhere in the extracted SDK"
-            exit 1
-          }
-          Write-Host "loader: $($dll.FullName)"
-          Add-Content $env:GITHUB_PATH $dll.DirectoryName
-
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 

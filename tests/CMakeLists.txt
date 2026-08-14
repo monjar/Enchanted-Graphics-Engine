@@ -29,5 +29,11 @@ target_compile_definitions(EnchantedTests PRIVATE DOCTEST_CONFIG_USE_STD_HEADERS
 
 ege_set_target_warnings(EnchantedTests WARNINGS_AS_ERRORS)
 
+# The tests never call Vulkan, but linking the engine imports the loader
+# DLL, and a Windows machine without one refuses to even start the runner.
+# Delay-loading means the DLL is looked for only at the first Vulkan call,
+# which the tests never make.
+ege_delay_load_vulkan(EnchantedTests)
+
 include("${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake")
 doctest_discover_tests(EnchantedTests)

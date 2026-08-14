@@ -81,6 +81,21 @@ add_executable(EnchantedEngine app/main.cpp)
 target_link_libraries(EnchantedEngine PRIVATE ege::engine)
 ege_set_target_warnings(EnchantedEngine WARNINGS_AS_ERRORS)
 
+# On Windows the Vulkan loader is delay-loaded rather than bound at process
+# start. A machine without the loader - a CI runner with no GPU driver, say -
+# can then still start the binary and run everything up to the first actual
+# Vulkan call, which is what lets the test suite run on such a machine at
+# all: LunarG ships the loader DLL through the SDK installer's runtime
+# component, and CI only extracts the SDK tree.
+function(ege_delay_load_vulkan target)
+  if(MSVC)
+    target_link_options(${target} PRIVATE "/DELAYLOAD:vulkan-1.dll")
+    target_link_libraries(${target} PRIVATE delayimp)
+  endif()
+endfunction()
+
+ege_delay_load_vulkan(EnchantedEngine)
+
 set_property(TARGET EnchantedEngine
   PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
