@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/LogBuffer.hpp"
 #include "editor/EditorViewport.hpp"
 #include "platform/Window.hpp"
 #include "render/PbrRenderSystem.hpp"
@@ -86,6 +87,7 @@ namespace ege {
         void drawHierarchyPanel(World& world);
         void drawEntityNode(World& world, EntityId entity);
         void drawInspectorPanel(World& world);
+        void drawConsolePanel();
         void applyPendingEdit(World& world);
 
         Device& device;
@@ -106,6 +108,14 @@ namespace ege {
         bool overlayVisible = true;
         EntityId selected{};
         PendingEdit pending{};
+
+        // Console state. The severity floor is info by default because that is
+        // where the level of the release build sits anyway; a debug build can
+        // be dropped to trace from the panel.
+        LogLevel consoleMinimumLevel = LogLevel::info;
+        char consoleFilter[64]{};
+        bool consoleFollowsTail = true;
+        std::uint64_t lastSeenLogRevision = 0;
     };
 
 }  // namespace ege

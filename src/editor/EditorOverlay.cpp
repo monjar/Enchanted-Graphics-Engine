@@ -16,8 +16,10 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <stdexcept>
+#include <vector>
 
 namespace ege {
 
@@ -115,6 +117,25 @@ namespace ege {
         // handles are a packed integer, so the payload is the handle itself
         // rather than a pointer into anything that could be reallocated.
         constexpr const char* entityPayload = "EGE_ENTITY";
+
+        // Severity by colour, so a warning is findable in a wall of info
+        // without reading any of it.
+        ImVec4 colorForLevel(LogLevel level) {
+            switch (level) {
+                case LogLevel::trace:
+                    return ImVec4{0.50f, 0.50f, 0.55f, 1.f};
+                case LogLevel::debug:
+                    return ImVec4{0.60f, 0.70f, 0.85f, 1.f};
+                case LogLevel::warn:
+                    return ImVec4{1.00f, 0.80f, 0.35f, 1.f};
+                case LogLevel::error:
+                case LogLevel::critical:
+                    return ImVec4{1.00f, 0.45f, 0.40f, 1.f};
+                case LogLevel::info:
+                    break;
+            }
+            return ImGui::GetStyleColorVec4(ImGuiCol_Text);
+        }
 
     }  // namespace
 
@@ -268,6 +289,7 @@ namespace ege {
         drawStatsPanel(stats, frameTime);
         drawHierarchyPanel(world);
         drawInspectorPanel(world);
+        drawConsolePanel();
     }
 
     void EditorOverlay::buildDefaultLayout(unsigned int dockspaceId) {
@@ -287,7 +309,11 @@ namespace ege {
         const ImGuiID stats =
             ImGui::DockBuilderSplitNode(hierarchy, ImGuiDir_Down, 0.35f, nullptr, &hierarchy);
 
+        const ImGuiID console =
+            ImGui::DockBuilderSplitNode(centre, ImGuiDir_Down, 0.28f, nullptr, &centre);
+
         ImGui::DockBuilderDockWindow("Scene", centre);
+        ImGui::DockBuilderDockWindow("Console", console);
         ImGui::DockBuilderDockWindow("Hierarchy", hierarchy);
         ImGui::DockBuilderDockWindow("Stats", stats);
         ImGui::DockBuilderDockWindow("Inspector", right);
@@ -340,6 +366,61 @@ namespace ege {
         ImGui::Text("culled      %zu", stats.culled);
         ImGui::Text("drawn       %zu", stats.drawn);
         ImGui::Text("mat binds   %zu", stats.materialBinds);
+        ImGui::End();
+    }
+
+    void EditorOverlay::drawConsolePanel() {
+        ImGui::Begin("Console");
+
+        if (ImGui::Button("Clear")) {
+            LogBuffer::instance().clear();
+        }
+        ImGui::SameLine();
+
+        constexpr std::array<LogLevel, 5> selectableLevels{
+            LogLevel::trace, LogLevel::debug, LogLevel::info, LogLevel::warn, LogLevel::error};
+        ImGui::SetNextItemWidth(90.f);
+        if (ImGui::BeginCombo("##level", logLevelName(consoleMinimumLevel))) {
+            for (LogLevel level : selectableLevels) {
+                if (ImGui::Selectable(logLevelName(level), level == consoleMinimumLevel)) {
+                    consoleMinimumLevel = level;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-110.f);
+        ImGui::InputTextWithHint("##filter", "filter", consoleFilter, sizeof(consoleFilter));
+        ImGui::SameLine();
+        ImGui::Checkbox("follow", &consoleFollowsTail);
+        ImGui::Separator();
+
+        const std::vector<LogBuffer::Record> records = LogBuffer::instance().snapshot();
+        const std::string needle{consoleFilter};
+
+        ImGui::BeginChild(
+            "log", ImVec2{0.f, 0.f}, ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+        for (const LogBuffer::Record& record : records) {
+            if (record.level < consoleMinimumLevel) {
+                continue;
+            }
+            if (!needle.empty() && record.message.find(needle) == std::string::npos) {
+                continue;
+            }
+            ImGui::PushStyleColor(ImGuiCol_Text, colorForLevel(record.level));
+            ImGui::TextUnformatted(record.message.c_str());
+            ImGui::PopStyleColor();
+        }
+
+        // Only while already at the bottom, so scrolling back to read
+        // something is not undone by the next line that arrives.
+        const std::uint64_t revision = LogBuffer::instance().revision();
+        if (consoleFollowsTail && revision != lastSeenLogRevision) {
+            ImGui::SetScrollHereY(1.f);
+        }
+        lastSeenLogRevision = revision;
+        ImGui::EndChild();
+
         ImGui::End();
     }
 
