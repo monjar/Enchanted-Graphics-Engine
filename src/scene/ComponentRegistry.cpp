@@ -2,6 +2,7 @@
 
 #include "assets/AssetSerialization.hpp"
 #include "core/Log.hpp"
+#include "physics/PhysicsComponents.hpp"
 #include "render/DynamicMesh.hpp"
 #include "scene/Components.hpp"
 #include "script/Script.hpp"
@@ -38,6 +39,10 @@ namespace ege {
         registry.add<Hidden>();
         registry.add<Script>();
         registry.add<DynamicMesh>();
+        registry.add<RigidBody>();
+        registry.add<BoxCollider>();
+        registry.add<SphereCollider>();
+        registry.add<CapsuleCollider>();
 
         EGE_DEBUG("Component registry: {} component types", registry.all().size());
     }
