@@ -144,11 +144,15 @@ namespace ege {
         graph.passes[passIndex].accesses.push_back({resource, access, false});
     }
 
-    void FrameGraph::PassBuilder::write(FrameGraphResource resource, ResourceAccess access) {
+    void FrameGraph::PassBuilder::write(
+        FrameGraphResource resource, ResourceAccess access, uint32_t layer) {
         if (!resource.valid() || resource.index >= graph.resources.size()) {
             throw std::logic_error{"pass declared a write of an invalid resource handle"};
         }
-        graph.passes[passIndex].accesses.push_back({resource, access, true});
+        if (layer >= graph.resources[resource.index].desc.layers) {
+            throw std::logic_error{"pass declared a write of a layer the image does not have"};
+        }
+        graph.passes[passIndex].accesses.push_back({resource, access, true, layer});
     }
 
     void FrameGraph::addPass(
@@ -206,6 +210,7 @@ namespace ege {
             resource.state = ResourceState{};
             resource.usage = 0;
             resource.written = false;
+            resource.writtenLayers.assign(resource.desc.layers, false);
             resource.physicalIndex = UINT32_MAX;
             if (resource.imported) {
                 resource.state.stage = resource.importSrcStage;
@@ -258,8 +263,10 @@ namespace ege {
                 if (passAccess.isWrite) {
                     PlannedAttachment attachment{};
                     attachment.resourceIndex = passAccess.resource.index;
-                    attachment.loadOp =
-                        resource.written ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    attachment.layer = passAccess.layer;
+                    attachment.loadOp = resource.writtenLayers[passAccess.layer]
+                                            ? VK_ATTACHMENT_LOAD_OP_LOAD
+                                            : VK_ATTACHMENT_LOAD_OP_CLEAR;
                     attachment.storeOp = (resource.imported || needed[passAccess.resource.index])
                                              ? VK_ATTACHMENT_STORE_OP_STORE
                                              : VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -276,6 +283,7 @@ namespace ege {
                         compiledPass.depthAttachment = attachment;
                     }
                     resource.written = true;
+                    resource.writtenLayers[passAccess.layer] = true;
                 }
 
                 resource.state = {target.layout, target.stage, target.access};
@@ -324,7 +332,7 @@ namespace ege {
             PhysicalImage& physical = physicalImages[i];
             if (!physical.usedThisFrame && physical.format == resource.desc.format &&
                 physical.extent.width == extent.width && physical.extent.height == extent.height &&
-                physical.usage == resource.usage) {
+                physical.layers == resource.desc.layers && physical.usage == resource.usage) {
                 physical.usedThisFrame = true;
                 physical.lastFrameUsed = frameCounter;
                 return i;
@@ -334,6 +342,7 @@ namespace ege {
         PhysicalImage physical{};
         physical.format = resource.desc.format;
         physical.extent = extent;
+        physical.layers = resource.desc.layers;
         physical.usage = resource.usage;
         physical.usedThisFrame = true;
         physical.lastFrameUsed = frameCounter;
@@ -343,7 +352,7 @@ namespace ege {
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
         imageInfo.extent = {extent.width, extent.height, 1};
         imageInfo.mipLevels = 1;
-        imageInfo.arrayLayers = 1;
+        imageInfo.arrayLayers = physical.layers;
         imageInfo.format = resource.desc.format;
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -354,12 +363,15 @@ namespace ege {
         deviceRef.createImageWithInfo(
             imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, physical.image, physical.allocation);
 
+        // The whole-image view, which is what a shader samples through: 2D for
+        // one layer, 2D_ARRAY for several.
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = physical.image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.viewType =
+            physical.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
         viewInfo.format = resource.desc.format;
-        viewInfo.subresourceRange = {aspectFor(resource.desc.format), 0, 1, 0, 1};
+        viewInfo.subresourceRange = {aspectFor(resource.desc.format), 0, 1, 0, physical.layers};
 
         if (vkCreateImageView(deviceRef.device(), &viewInfo, nullptr, &physical.view) !=
             VK_SUCCESS) {
@@ -367,10 +379,33 @@ namespace ege {
             throw std::runtime_error{"failed to create a frame graph image view"};
         }
 
+        // One view per layer, because rendering targets a single layer at a
+        // time. Only worth making when there is more than one.
+        if (physical.layers > 1) {
+            for (uint32_t layer = 0; layer < physical.layers; layer++) {
+                VkImageViewCreateInfo layerViewInfo = viewInfo;
+                layerViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                layerViewInfo.subresourceRange = {aspectFor(resource.desc.format), 0, 1, layer, 1};
+
+                VkImageView layerView = VK_NULL_HANDLE;
+                if (vkCreateImageView(deviceRef.device(), &layerViewInfo, nullptr, &layerView) !=
+                    VK_SUCCESS) {
+                    for (VkImageView made : physical.layerViews) {
+                        vkDestroyImageView(deviceRef.device(), made, nullptr);
+                    }
+                    vkDestroyImageView(deviceRef.device(), physical.view, nullptr);
+                    deviceRef.destroyImage(physical.image, physical.allocation);
+                    throw std::runtime_error{"failed to create a frame graph layer view"};
+                }
+                physical.layerViews.push_back(layerView);
+            }
+        }
+
         EGE_DEBUG(
-            "frame graph allocated {}x{} transient for '{}'",
+            "frame graph allocated {}x{}x{} transient for '{}'",
             extent.width,
             extent.height,
+            physical.layers,
             resource.name);
 
         physicalImages.push_back(physical);
@@ -378,6 +413,10 @@ namespace ege {
     }
 
     void FrameGraph::destroyPhysicalImage(PhysicalImage& physical) {
+        for (VkImageView layerView : physical.layerViews) {
+            vkDestroyImageView(device->device(), layerView, nullptr);
+        }
+        physical.layerViews.clear();
         vkDestroyImageView(device->device(), physical.view, nullptr);
         device->destroyImage(physical.image, physical.allocation);
         physical.view = VK_NULL_HANDLE;
@@ -422,7 +461,11 @@ namespace ege {
                 barrier.newLayout = plan.newLayout;
                 barrier.image = resource.imported ? resource.importedImage
                                                   : physicalImages[resource.physicalIndex].image;
-                barrier.subresourceRange = {aspectFor(resource.desc.format), 0, 1, 0, 1};
+                // Every layer at once. Layout is tracked per image rather than
+                // per layer, so a barrier that moved only one layer would
+                // leave the tracked state a lie about the others.
+                barrier.subresourceRange = {
+                    aspectFor(resource.desc.format), 0, 1, 0, resource.desc.layers};
 
                 // A transient's first use discards content from UNDEFINED, but
                 // execution still has to wait for whatever the previous frame
@@ -454,15 +497,25 @@ namespace ege {
                 colorAttachments.reserve(compiledPass.colorAttachments.size());
                 VkExtent2D renderArea = outputExtent;
 
+                // Which view a pass renders through: the image's own for the
+                // ordinary case, the selected layer's for an array.
+                auto attachmentView = [&](const PlannedAttachment& attachment) {
+                    const Resource& resource = resources[attachment.resourceIndex];
+                    if (resource.imported) {
+                        return resource.importedView;
+                    }
+                    const PhysicalImage& physical = physicalImages[resource.physicalIndex];
+                    return physical.layerViews.empty() ? physical.view
+                                                       : physical.layerViews[attachment.layer];
+                };
+
                 for (const PlannedAttachment& attachment : compiledPass.colorAttachments) {
                     const Resource& resource = resources[attachment.resourceIndex];
                     renderArea = resolveExtent(resource);
 
                     VkRenderingAttachmentInfo info{};
                     info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                    info.imageView = resource.imported
-                                         ? resource.importedView
-                                         : physicalImages[resource.physicalIndex].view;
+                    info.imageView = attachmentView(attachment);
                     info.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
                     info.loadOp = attachment.loadOp;
                     info.storeOp = attachment.storeOp;
@@ -477,9 +530,7 @@ namespace ege {
                     renderArea = resolveExtent(resource);
 
                     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-                    depthAttachment.imageView = resource.imported
-                                                    ? resource.importedView
-                                                    : physicalImages[resource.physicalIndex].view;
+                    depthAttachment.imageView = attachmentView(attachment);
                     depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
                     depthAttachment.loadOp = attachment.loadOp;
                     depthAttachment.storeOp = attachment.storeOp;

@@ -52,6 +52,11 @@ namespace ege {
         VkFormat format = VK_FORMAT_R16G16B16A16_SFLOAT;
         VkExtent2D extent{0, 0};
         VkClearValue clearValue{};
+        // More than one makes the image a 2D array: sampled through a single
+        // array view, rendered into one layer at a time by passes that say
+        // which layer they write. Shadow cascades are the first caller; cube
+        // shadows for point lights are the obvious second.
+        uint32_t layers = 1;
     };
 
     class FrameGraph;
@@ -100,7 +105,13 @@ namespace ege {
         class PassBuilder {
         public:
             void read(FrameGraphResource resource, ResourceAccess access);
-            void write(FrameGraphResource resource, ResourceAccess access);
+
+            // `layer` selects which layer of an array image this pass renders
+            // into; it is ignored for single-layer images. Layout is tracked
+            // for the whole image rather than per layer, which is exactly
+            // right while the layers of an array are written by consecutive
+            // passes and then sampled together - the case cascades are.
+            void write(FrameGraphResource resource, ResourceAccess access, uint32_t layer = 0);
 
         private:
             friend class FrameGraph;
@@ -136,6 +147,9 @@ namespace ege {
 
         struct PlannedAttachment {
             uint32_t resourceIndex = 0;
+            // Which layer of an array image is attached. Always 0 for the
+            // ordinary single-layer case.
+            uint32_t layer = 0;
             VkAttachmentLoadOp loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
             // STORE only when something will read the result - a later pass,
             // or whoever the image was imported from. A depth buffer nobody
@@ -192,7 +206,12 @@ namespace ege {
             std::string name;
             TransientImageDesc desc;
             bool imported = false;
+            // Any layer written yet, which is what makes a read legal.
             bool written = false;
+            // Written per layer, which is what decides clear versus load: the
+            // second cascade's layer has never been touched this frame even
+            // though the image it lives in has.
+            std::vector<bool> writtenLayers;
 
             // Imported-only fields.
             VkImage importedImage = VK_NULL_HANDLE;
@@ -210,6 +229,7 @@ namespace ege {
             FrameGraphResource resource;
             ResourceAccess access;
             bool isWrite = false;
+            uint32_t layer = 0;
         };
 
         struct Pass {
@@ -223,9 +243,14 @@ namespace ege {
         struct PhysicalImage {
             VkImage image = VK_NULL_HANDLE;
             VmaAllocation allocation = VK_NULL_HANDLE;
+            // Covers every layer: what a shader samples the image through.
             VkImageView view = VK_NULL_HANDLE;
+            // One single-layer view per layer, for attaching. Empty for a
+            // single-layer image, which attaches through `view`.
+            std::vector<VkImageView> layerViews;
             VkFormat format = VK_FORMAT_UNDEFINED;
             VkExtent2D extent{0, 0};
+            uint32_t layers = 1;
             VkImageUsageFlags usage = 0;
             uint64_t lastFrameUsed = 0;
             bool usedThisFrame = false;
