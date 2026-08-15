@@ -168,6 +168,18 @@ namespace ege {
             return componentPools;
         }
 
+        // ---- Physics -------------------------------------------------------
+
+        // The physics world the scene's bodies live in while it simulates;
+        // null in edit mode. The scene neither owns nor understands it - a
+        // forward-declared pointer, carried so gameplay code can reach
+        // queries as world().physics()->raycast(...) without the ECS growing
+        // a physics dependency. The PhysicsSystem sets it when play begins
+        // and clears it when play stops.
+        class PhysicsWorld* physics() const { return physicsBackend; }
+
+        void setPhysics(class PhysicsWorld* backend) { physicsBackend = backend; }
+
     private:
         template<typename T>
         ComponentPool<T>& poolFor();
@@ -193,6 +205,8 @@ namespace ege {
         std::size_t liveCount = 0;
 
         std::unordered_map<std::type_index, std::unique_ptr<ComponentPoolBase>> componentPools;
+
+        class PhysicsWorld* physicsBackend = nullptr;
     };
 
 }  // namespace ege

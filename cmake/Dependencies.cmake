@@ -240,6 +240,48 @@ target_include_directories(ege_stb SYSTEM INTERFACE ${stb_SOURCE_DIR})
 add_library(ege::stb ALIAS ege_stb)
 
 # ---------------------------------------------------------------------------
+# Jolt Physics - rigid-body simulation
+#
+# Always built from source: distributions do not package it, and the library
+# bakes instruction-set and determinism assumptions in at compile time, so it
+# should be compiled exactly the way this project is. Only the simulation
+# library is built - no samples, viewers or tests.
+#
+# OVERRIDE_CXX_FLAGS is forced off because Jolt's build otherwise rewrites
+# the global CMAKE_CXX_FLAGS_* variables, which would silently change how
+# every target after it compiles. The MSVC runtime stays the dynamic one the
+# rest of the project uses, or the final link fails with two CRTs.
+# ---------------------------------------------------------------------------
+set(TARGET_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(TARGET_HELLO_WORLD OFF CACHE BOOL "" FORCE)
+set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
+set(TARGET_SAMPLES OFF CACHE BOOL "" FORCE)
+set(TARGET_VIEWER OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+# The engine compiles with RTTI; a library whose classes we derive from must
+# too, or every derived class's typeinfo references symbols Jolt never
+# emitted. The Release linker happens to tolerate the mismatch - the Debug
+# one does not, which is exactly the kind of works-on-one-configuration bug
+# the sanitizer presets exist to catch.
+set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
+set(CPP_EXCEPTIONS_ENABLED ON CACHE BOOL "" FORCE)
+
+CPMAddPackage(
+  NAME JoltPhysics
+  GITHUB_REPOSITORY jrouwe/JoltPhysics
+  GIT_TAG v5.2.0
+  VERSION 5.2.0
+  SOURCE_SUBDIR Build
+  EXCLUDE_FROM_ALL YES
+)
+
+ege_make_includes_system(Jolt)
+add_library(ege::jolt ALIAS Jolt)
+
+# ---------------------------------------------------------------------------
 # nlohmann/json - scene and asset serialization
 # ---------------------------------------------------------------------------
 set(JSON_BuildTests OFF CACHE INTERNAL "")

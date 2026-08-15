@@ -4,8 +4,8 @@
 ./build/default/bin/EnchantedEngine --demo
 ```
 
-A nineteen-second camera tour of the demo scene, with the editor hidden and the
-scene playing. It exists because a renderer is hard to demonstrate in a still
+A twenty-four-second camera tour of the demo scene, with the editor hidden and
+the scene playing. It exists because a renderer is hard to demonstrate in a still
 image and impossible to demonstrate in a paragraph: most of what this engine
 does only becomes visible when the camera moves. A mirror sphere is a coloured
 ball until its reflection slides across it, a shadow is a dark patch until it
@@ -21,12 +21,13 @@ and presses Play.
 
 | Shot | What to look at |
 |---|---|
-| Wide, on the whole set | The scene: five metal spheres, two dielectrics, a floor, an imported torus and a script-driven sheet, under a procedurally generated evening sky |
+| Wide, on the whole set | The scene under its procedurally generated evening sky — and **physics** opening the show: a steel boulder drops onto a plank, rolls down it, and takes out the crate tower at the base. Play is what dropped it; Stop would put the tower back |
 | Down the row of spheres | The roughness sweep. The highlight broadens from near-mirror to fully rough — which only reads as a sweep when it travels |
 | Onto the rippling sheet | Geometry a **script** writes. 2 401 vertices are moved along their normals by a travelling wave every tick, their normals recomputed, and the result uploaded once per frame — there is no mesh file behind it |
 | Close on the smoothest sphere | Image-based lighting. It reflects a sky that exists only because the engine convolved one into an irradiance map and a prefiltered specular chain at start-up |
 | Low along the floor | The sun's shadows, filtered through a 3×3 PCF comparison sampler, and the red box turning — that motion is play mode running a component, and Stop puts it back |
 | Up and over | The copper torus, which is a **glTF import**: a self-contained text glTF in `assets/models/`, parsed and instantiated at start-up |
+| Down onto the wreckage | Where the crates came to rest. Every pose is the simulation's answer, not an authored one — the same fixed-step run twice lands them identically, which a test pins bitwise |
 
 Every material, mesh and light in that scene is either generated procedurally,
 imported from a text file, or written by a script. A clean checkout ships no

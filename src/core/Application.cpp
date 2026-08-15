@@ -8,6 +8,8 @@
 #include "core/Time.hpp"
 #include "editor/EditorOverlay.hpp"
 #include "editor/PlayMode.hpp"
+#include "physics/PhysicsComponents.hpp"
+#include "physics/PhysicsSystem.hpp"
 #include "platform/CameraController.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
@@ -211,6 +213,7 @@ namespace ege {
 
         PlayMode playMode{};
         ScriptSystem scripts{};
+        PhysicsSystem physics{};
 
         // The viewer is a plain transform rather than an entity: it is the
         // editor camera, not part of the scene being edited.
@@ -286,13 +289,36 @@ namespace ege {
                 scripts.despawnAll(world);
             }
 
+            // Physics lives and dies with play, exactly as behaviours do: in
+            // edit mode a RigidBody is a description of what will fall, and
+            // Play is what drops it. Stop throws the physics world away and
+            // the snapshot restore puts the transforms back, so simulation
+            // can never leak into the scene being authored.
+            if (scriptsRunning && !physics.running()) {
+                PhysicsWorld::Settings physicsSettings{};
+                // This scene treats -Y as up, so down - the way things
+                // fall - is +Y.
+                physicsSettings.gravity = {0.f, 9.81f, 0.f};
+                physics.start(world, physicsSettings);
+            } else if (!scriptsRunning && physics.running()) {
+                physics.stop(world);
+            }
+
             // Fixed-rate simulation, and only while the editor is playing.
             // Keeping edit mode and play mode distinct is what lets Stop put
             // the world back: nothing advances the scene unless Play asked
             // for it, so the snapshot stays the truth until then.
+            //
+            // Scripts run before the physics step so that what they wrote
+            // this tick - a kinematic platform's transform, an impulse - is
+            // what the step integrates; contacts are delivered after it,
+            // when the poses they describe are the poses the world shows.
             while (time.consumeFixedStep()) {
                 if (playMode.consumeTick()) {
                     scripts.fixedTick(world, time.fixedStep());
+                    const std::vector<EntityContact> contacts =
+                        physics.fixedTick(world, time.fixedStep());
+                    scripts.deliverContacts(world, contacts);
                 }
             }
             if (playMode.isPlaying()) {
@@ -697,13 +723,18 @@ namespace ege {
             EGE_WARN("floor material file unavailable; using the built-in floor material");
             floorMaterial = makeMaterial("Floor", glm::vec3{0.35f}, 0.f, 0.85f);
         }
-        addMesh(
+        Entity floor = addMesh(
             "Floor",
             plane,
             floorMaterial,
             {0.f, .5f, 0.f},
             {8.f, 1.f, 8.f},
             {glm::pi<float>(), 0.f, 0.f});
+        // A collider and no RigidBody: scenery, landed on and never moved.
+        // A box rather than the plane it draws as, buried so its upper face
+        // lies exactly in the rendered surface - a body with no thickness is
+        // a body fast things tunnel through.
+        floor.attach<BoxCollider>(BoxCollider{{.5f, .1f, .5f}, {0.f, -.1f, 0.f}});
 
         Entity redBox = addMesh(
             "RedBox",
@@ -806,6 +837,78 @@ namespace ege {
             makeMaterial("BlueSphere", glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
             glm::vec3{.5f});
+
+        // The physics exhibit: a tower of crates with a steel boulder hanging
+        // over it. Nothing is scripted - the components are the whole
+        // description, and Play (which the demo presses) is what drops the
+        // boulder. Stop restores the tower, which is play mode's contract
+        // doing its job on simulation state. Remember -Y is up: the boulder's
+        // negative y is a height, and it falls towards +Y.
+        {
+            const MaterialRef crateMaterial =
+                makeMaterial("Crate", glm::vec3{0.62f, 0.40f, 0.22f}, 0.f, 0.75f);
+            auto addCrate = [&](std::string name, glm::vec3 position, float yaw) {
+                Entity crate = addMesh(
+                    std::move(name),
+                    box,
+                    crateMaterial,
+                    position,
+                    glm::vec3{.35f},
+                    {0.f, yaw, 0.f});
+                // The unit box's own half extents; the entity's scale is
+                // applied when the body is built.
+                crate.attach<BoxCollider>();
+                RigidBody body{};
+                body.mass = 2.f;
+                body.friction = 0.35f;
+                body.restitution = 0.05f;
+                crate.attach<RigidBody>(body);
+            };
+            // Stacked on the floor surface at y = .5, each crate .35 tall,
+            // slightly misaligned so the tower reads as stacked objects
+            // rather than one drawn tower. Four high: tall enough to fall
+            // over rather than merely be dented.
+            addCrate("CrateBottom", {-2.3f, .325f, .6f}, 0.f);
+            addCrate("CrateLower", {-2.3f, -.025f, .6f}, 0.22f);
+            addCrate("CrateUpper", {-2.3f, -.375f, .6f}, -0.14f);
+            addCrate("CrateTop", {-2.3f, -.725f, .6f}, 0.09f);
+            addCrate("CrateSpare", {-1.9f, .325f, .78f}, 0.45f);
+
+            // A plank ramp behind the tower, aimed at its base. Dropping the
+            // boulder straight onto the tower was tried first and taught the
+            // obvious-in-hindsight lesson: a stack is strong straight down,
+            // which is exactly the direction a dropped ball pushes. Rolling
+            // the ball down a ramp turns the same fall into a horizontal
+            // blow at the base, which no tower survives. The plank is a
+            // collider with no RigidBody - scenery, like the floor, only
+            // tilted.
+            // Aimed a little past the tower's centre line: a dead-centre hit
+            // at the base lets the crates above drop back into a pile where
+            // they stood - the tablecloth trick, uninvited. Off-axis, the
+            // strike turns the stack as it breaks it, and the crates go
+            // sideways instead of straight down.
+            Entity plank = addMesh(
+                "Plank",
+                box,
+                makeMaterial("Plank", glm::vec3{0.42f, 0.28f, 0.16f}, 0.f, 0.8f),
+                {-2.44f, .21f, 1.55f},
+                {.5f, .06f, 1.3f},
+                {0.42f, 0.f, 0.f});
+            plank.attach<BoxCollider>();
+
+            Entity boulder = addMesh(
+                "Boulder",
+                sphere,
+                makeMaterial("Boulder", glm::vec3{0.55f, 0.55f, 0.6f}, 1.f, 0.3f),
+                {-2.44f, -.75f, 2.05f},
+                glm::vec3{.7f});
+            boulder.attach<SphereCollider>();
+            RigidBody heavy{};
+            heavy.mass = 12.f;
+            heavy.friction = 0.5f;
+            heavy.restitution = 0.1f;
+            boulder.attach<RigidBody>(heavy);
+        }
 
         // Lights are entities too. Remember -Y is up, so a negative Y is above
         // the floor.

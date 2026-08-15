@@ -53,12 +53,24 @@ target_link_libraries(Enchanted PUBLIC
   ege::spdlog
   ege::vma
   ege::stb
-  ege::json)
+  ege::json
+  ege::jolt)
 
 target_compile_definitions(Enchanted PRIVATE
   EGE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets")
 
 ege_set_target_warnings(Enchanted WARNINGS_AS_ERRORS)
+
+# GCC's -Wtsan flags Jolt's fence-based reference counting when it is inlined
+# into this one translation unit, and SYSTEM include suppression does not
+# reach warnings raised at inlining time. The warning is about Jolt's idiom,
+# not our code, so it is switched off for exactly that file - everywhere,
+# not only under TSan, because the flag is harmless when TSan is off and the
+# preset must not change which warnings exist.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  set_source_files_properties(src/physics/JoltPhysicsWorld.cpp
+    PROPERTIES COMPILE_OPTIONS "-Wno-tsan")
+endif()
 
 ege_add_shaders(Enchanted "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 
@@ -68,6 +80,21 @@ ege_add_shaders(Enchanted "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 add_executable(EnchantedEngine app/main.cpp)
 target_link_libraries(EnchantedEngine PRIVATE ege::engine)
 ege_set_target_warnings(EnchantedEngine WARNINGS_AS_ERRORS)
+
+# On Windows the Vulkan loader is delay-loaded rather than bound at process
+# start. A machine without the loader - a CI runner with no GPU driver, say -
+# can then still start the binary and run everything up to the first actual
+# Vulkan call, which is what lets the test suite run on such a machine at
+# all: LunarG ships the loader DLL through the SDK installer's runtime
+# component, and CI only extracts the SDK tree.
+function(ege_delay_load_vulkan target)
+  if(MSVC)
+    target_link_options(${target} PRIVATE "/DELAYLOAD:vulkan-1.dll")
+    target_link_libraries(${target} PRIVATE delayimp)
+  endif()
+endfunction()
+
+ege_delay_load_vulkan(EnchantedEngine)
 
 set_property(TARGET EnchantedEngine
   PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")

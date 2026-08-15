@@ -31,8 +31,11 @@ namespace ege {
         // negative and looking down is a negative pitch.
         return DemoTour{{
             // Open wide, on the whole set, so there is something to orient by
-            // before anything moves.
-            Shot{{0.f, -1.f, -3.6f}, {-0.30f, 0.f, 0.f}, 0.f, 1.2f},
+            // before anything moves. Held long enough for the boulder to land
+            // and the crate tower to go over - the first thing the tour shows
+            // is the simulation doing something irreversible, which is what
+            // makes the closing shot of the wreckage mean something.
+            Shot{{0.f, -1.f, -3.6f}, {-0.30f, 0.f, 0.f}, 0.f, 2.4f},
             // Down the row of metal spheres. The roughness sweep only reads as
             // a sweep when the highlight travels along it.
             Shot{{-2.3f, -0.55f, 0.2f}, {-0.12f, 0.55f, 0.f}, 2.0f, 0.6f},
@@ -48,8 +51,14 @@ namespace ege {
             Shot{{-1.15f, -0.42f, 0.35f}, {-0.10f, 0.15f, 0.f}, 1.8f, 0.9f},
             // Low and along the floor, where the sun's shadows are longest.
             Shot{{-1.9f, -0.35f, -1.5f}, {-0.05f, 0.75f, 0.f}, 2.0f, 0.8f},
-            // Up and over, ending on the imported glTF torus against the sky.
+            // Up and over, onto the imported glTF torus against the sky.
             Shot{{0.9f, -1.6f, -1.4f}, {-0.42f, -0.25f, 0.f}, 2.4f, 1.4f},
+            // Down onto what physics left behind. The boulder that rolled
+            // through during the opening wide shot has had the whole tour to
+            // finish its work, and where every crate lies is the simulation's
+            // answer, not an authored pose. Framed wide enough to take in the
+            // plank and the boulder too, so the shot explains itself.
+            Shot{{-0.85f, -1.2f, -1.8f}, {-0.42f, -0.5f, 0.f}, 2.2f, 1.6f},
         }};
     }
 

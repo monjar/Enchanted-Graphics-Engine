@@ -2,7 +2,20 @@
 
 #include "scene/World.hpp"
 
+#include <glm/glm.hpp>
+
 namespace ege {
+
+    // A touch that began this fixed step, as one entity experiences it: the
+    // physics system reports each new contact pair once, and the script
+    // system hands each side its own view of it.
+    struct Contact {
+        Entity other{};
+        // Where the bodies met, in world space.
+        glm::vec3 point{0.f};
+        // From this entity towards the other.
+        glm::vec3 normal{0.f};
+    };
 
     // Gameplay code attached to an entity.
     //
@@ -32,8 +45,15 @@ namespace ege {
         virtual void onTick(float deltaSeconds) { (void)deltaSeconds; }
 
         // Every fixed simulation step. For anything that must be
-        // frame-rate-independent - which, once physics arrives, is most of it.
+        // frame-rate-independent - which, now that physics exists, is most
+        // of it.
         virtual void onFixedTick(float deltaSeconds) { (void)deltaSeconds; }
+
+        // When this entity's body begins touching another, after the fixed
+        // step that detected it. Both entities are told, each from its own
+        // side. Requires a collider, since without one there is no body to
+        // be touched.
+        virtual void onContact(const Contact& contact) { (void)contact; }
 
         // When play stops, or the entity is despawned while playing.
         virtual void onDespawn() {}

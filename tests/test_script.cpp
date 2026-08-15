@@ -5,6 +5,8 @@
 // survive a save and load, and a callback that spawns or despawns entities
 // does not corrupt the iteration it was called from.
 
+#include "physics/PhysicsComponents.hpp"
+#include "physics/PhysicsSystem.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "reflect/Serialization.hpp"
 #include "scene/ComponentRegistry.hpp"
@@ -328,4 +330,68 @@ TEST_CASE("several behaviours can share one entity") {
     CHECK(counters().fixedTicked == 2);
     // And the engine behaviour among them ran too.
     CHECK(entity.fetch<Transform>().rotation.y > 0.f);
+}
+
+TEST_CASE("contacts reach the behaviours on both sides, each from its own side") {
+    // Driven end to end: a real falling body, a real floor, the physics
+    // system stepping and the script system delivering - because the
+    // property being pinned is the wiring, not any one piece of it.
+    World world;
+
+    // A behaviour that remembers what it was told it touched.
+    class TouchLog : public ege::Behavior {
+    public:
+        std::vector<ege::Contact> touches;
+
+        void onContact(const ege::Contact& contact) override { touches.push_back(contact); }
+    };
+
+    auto attachLog = [&](Entity entity) {
+        Script script{};
+        Script::Slot slot{};
+        slot.behavior = "TouchLog";
+        auto log = std::make_shared<TouchLog>();
+        slot.instance = log;
+        script.behaviors.push_back(std::move(slot));
+        entity.attach<Script>(std::move(script));
+        return log;
+    };
+
+    Entity floor = world.spawn("Floor");
+    Transform floorTransform{};
+    floorTransform.translation = {0.f, -0.5f, 0.f};
+    floor.attach<Transform>(floorTransform);
+    floor.attach<ege::BoxCollider>(ege::BoxCollider{{10.f, 0.5f, 10.f}, {0.f, 0.f, 0.f}});
+    auto floorLog = attachLog(floor);
+
+    Entity ball = world.spawn("Ball");
+    Transform ballTransform{};
+    ballTransform.translation = {0.f, 2.f, 0.f};
+    ball.attach<Transform>(ballTransform);
+    ball.attach<ege::SphereCollider>();
+    ball.attach<ege::RigidBody>();
+    auto ballLog = attachLog(ball);
+
+    ScriptSystem scripts;
+    ege::PhysicsSystem physics{};
+    scripts.spawnPending(world);
+    physics.start(world);
+
+    for (int i = 0; i < 180; i++) {
+        scripts.fixedTick(world, 1.f / 60.f);
+        scripts.deliverContacts(world, physics.fixedTick(world, 1.f / 60.f));
+    }
+    physics.stop(world);
+
+    // Both sides heard about the same touch.
+    REQUIRE(!ballLog->touches.empty());
+    REQUIRE(!floorLog->touches.empty());
+    CHECK(ballLog->touches.front().other == floor);
+    CHECK(floorLog->touches.front().other == ball);
+
+    // Each side's normal points at the other: the ball fell onto the floor,
+    // so the floor lies towards -Y of the ball and the ball towards +Y of
+    // the floor. Opposite views of one touch, not two copies of one datum.
+    CHECK(ballLog->touches.front().normal.y < 0.f);
+    CHECK(floorLog->touches.front().normal.y > 0.f);
 }

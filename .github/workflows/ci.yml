@@ -60,11 +60,17 @@ jobs:
             mesa-vulkan-drivers xorg-dev libwayland-dev libxkbcommon-dev \
             xvfb
 
+      # Pinned, not latest: every dependency this project builds against is
+      # pinned, and the SDK was the one thing left floating. It broke exactly
+      # the way floating versions do - a new SDK release changed the layout
+      # the action extracts, find_package(Vulkan) stopped finding the library
+      # and headers, and the Windows job went red on a commit that changed
+      # nothing about Windows or Vulkan.
       - name: Install Vulkan SDK (Windows)
         if: runner.os == 'Windows'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
-          version: latest
+          version: 1.4.304.1
           cache: true
 
       - name: Configure

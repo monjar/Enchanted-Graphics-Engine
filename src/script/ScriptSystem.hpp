@@ -1,6 +1,9 @@
 #pragma once
 
+#include "physics/PhysicsSystem.hpp"
 #include "scene/World.hpp"
+
+#include <vector>
 
 namespace ege {
 
@@ -20,6 +23,12 @@ namespace ege {
         void tick(World& world, float deltaSeconds);
 
         void fixedTick(World& world, float deltaSeconds);
+
+        // Tells each side of every contact about the touch, through
+        // Behavior::onContact. The physics system reports a pair once; each
+        // entity's behaviours receive it from their own side, with the other
+        // entity named and the normal pointing away from themselves.
+        void deliverContacts(World& world, const std::vector<EntityContact>& contacts);
 
         // Calls onDespawn on everything that has spawned and forgets the
         // instances. Called when play stops - the world is about to be replaced

@@ -2,9 +2,9 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4, 5, 6 and 7 substantially complete. Phase 8 next.**
+> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4, 5, 6, 7 and 8 substantially complete. Phase 9 next, alongside the debts earlier phases recorded.**
 >
-> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import**. The **editor** now has an offscreen viewport with docked panels, hierarchy editing, a reflection-driven inspector, transform gizmos, a console, an asset browser, **Play/Pause/Step/Stop** and **undo/redo**. The **asset database** underneath it gives every asset a stable id in a `.egameta` sidecar, which is what finally lets a scene save what it draws — and what unblocked play mode and undo, both of which are world snapshots. A `--demo` camera tour and self-recorded frames make all of it demonstrable. **Scripting** landed on top of that: behaviours in C++ with reflected fields, editable in the inspector and saved into the scene, script-written geometry through `DynamicMesh`, and **asset hot reload** — edit a material file and the running scene changes. Script hot reload is the one thing Phase 7 asked for and did not get, for a stated reason: it needs the engine built as a shared library, which is its own change. Next: **Phase 8 physics**.
+> Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import**. The **editor** now has an offscreen viewport with docked panels, hierarchy editing, a reflection-driven inspector, transform gizmos, a console, an asset browser, **Play/Pause/Step/Stop** and **undo/redo**. The **asset database** underneath it gives every asset a stable id in a `.egameta` sidecar, which is what finally lets a scene save what it draws — and what unblocked play mode and undo, both of which are world snapshots. A `--demo` camera tour and self-recorded frames make all of it demonstrable. **Scripting** landed on top of that: behaviours in C++ with reflected fields, editable in the inspector and saved into the scene, script-written geometry through `DynamicMesh`, and **asset hot reload** — edit a material file and the running scene changes. Script hot reload is the one thing Phase 7 asked for and did not get, for a stated reason: it needs the engine built as a shared library, which is its own change. **Phase 8 physics** landed next: Jolt behind an engine-owned `PhysicsWorld` confined to one translation unit, `RigidBody` and box/sphere/capsule colliders that are scenery without a body and simulated with one, two-way transform sync through the hierarchy, contacts delivered to `Behavior::onContact`, raycasts reachable from gameplay, and bitwise-pinned determinism — the demo opens with a boulder rolling down a plank into a crate tower. Next: **Phase 9**, or the recorded debts (cascaded shadows, MSAA, script hot reload) as need dictates.
 
 ## 1. Where the project stands today
 
@@ -12,7 +12,7 @@ Enchanted is a **Vulkan 1.3 forward renderer with a metallic-roughness PBR pipel
 
 Behaviour is written in C++ against the same reflection the components use, and both assets and their edits reload while the engine runs.
 
-Still absent, and tracked per phase in §6: anti-aliasing, cascaded and point-light shadows, cooked asset packaging, script hot reload and physics.
+Still absent, and tracked per phase in §6: anti-aliasing, cascaded and point-light shadows, cooked asset packaging, script hot reload, character controllers and physics constraints.
 
 The Vulkan foundations are idiomatic and are being kept:
 
@@ -38,6 +38,8 @@ The Vulkan foundations are idiomatic and are being kept:
 | `ege::Behavior` / `ege::ScriptSystem` | C++ behaviours and the callbacks that drive them |
 | `ege::BehaviorRegistry` | Behaviours by name, so the editor can attach one |
 | `ege::DynamicMesh` | CPU-side geometry a script rewrites, uploaded once a frame |
+| `ege::PhysicsWorld` | Rigid-body simulation behind an engine-owned interface; Jolt lives in one TU behind it |
+| `ege::PhysicsSystem` | Keeps the ECS and the physics world agreeing: bodies from colliders, poses back to transforms |
 | `ege::Guid` | The 128-bit identifier an asset reference is made of |
 | `ege::FrameRecorder` | Writes rendered frames to disk, one PNG per frame |
 | `ege::DemoTour` | The scripted camera move `--demo` runs |
@@ -112,7 +114,7 @@ src/
                 + Material, Lights, Shadows, IBL, PostFX                 [exists]
   scene/        GameObject; replaced by World, Entity, ComponentPool     [exists]
   assets/       AssetDatabase, importers, loaders                        [Phase 6]
-  physics/      PhysicsWorld + Jolt backend, colliders                   [Phase 8]
+  physics/      PhysicsWorld + Jolt backend, colliders                   [exists]
   script/       Behavior, Script, ScriptSystem, BehaviorRegistry;
                 + ScriptModule and its reload                           [exists]
   audio/ ui/ anim/                                                       [Phase 10]
@@ -463,6 +465,30 @@ For this to be demonstrable at all, the demo's floor is now a real `.egematerial
 - Editor: collider gizmos, physics debug draw, per-body inspector.
 
 **Done when:** the sandbox has a character controller walking on physics geometry and pushing dynamic boxes, with colliders visualised in-editor.
+
+**Outcome — substantially complete.** Rigid bodies simulate, collide, sleep, wake, report their touches to behaviours and answer raycasts, all through an engine-owned interface; the demo drops a boulder on a crate tower to prove it. The "done when" names a character controller in the sandbox, and the sandbox is a Phase 10 dependency - what exists is the simulation that controller will stand on.
+
+**The interface, then the backend.** `PhysicsWorld` is the engine's own: bodies created whole from plain `BodySettings`, stepped at a fixed delta, queried by pose, raycast and drained contact events. Jolt sits behind it in exactly one translation unit, and no Jolt header is reachable from anywhere else - the roadmap's replaceability constraint enforced by the compiler rather than by discipline. The interface tests are deliberately backend-blind for the same reason: they are the contract a hand-written backend would have to meet.
+
+**Components divide the labour by what the words mean.** A *collider* (box, sphere or capsule) says what shape an entity presents; a *RigidBody* says the simulation may move it. A collider alone is scenery - the demo floor is landed on without ever being simulated - and `kinematic` on the RigidBody makes the entity the caller's to move: it is handed its Transform as a target each tick with the velocity the move implies, so what it sweeps through is pushed rather than skipped. All of it is reflected, so the inspector and the scene file got physics for free, except the cached body handle, which is deliberately unreflected: a handle is this simulation's answer to this component and means nothing in the next run.
+
+**The sync reconciles rather than listens.** Each fixed tick, entities that gained colliders get bodies at their current world pose, despawned ones lose them, and a RigidBody that changed its mind about how it moves is rebuilt - the same declare-cheaply-every-frame trade the frame graph makes, and it spares the ECS growing attach/detach hooks. Dynamic bodies write back through the parent's inverse matrix, because a Transform's fields are local and physics does not know what a parent is. Scale is applied to the shape when the body is built, since a rigid body cannot change size.
+
+**Physics lives and dies with play.** Play builds the physics world, Stop throws it away, and the snapshot restore puts the transforms back - so simulation can never leak into the scene being authored, for the same reason behaviours cannot: nothing advances the world unless Play asked for it.
+
+**Contacts reach gameplay deterministically.** Jolt raises them from its worker threads mid-step; they are buffered under a lock, drained after the step, sorted - job scheduling reports the same touches in a different order run to run, and sorting extends the determinism guarantee to gameplay - and delivered to `Behavior::onContact`, each side hearing about the touch from its own side with the normal pointing away from itself. Whole-scene determinism is pinned by a test that runs eight bouncing spheres twice and compares positions *bitwise*: approximate equality would not be determinism. Sensors landed as a RigidBody flag: a trigger volume is a body that reports and stops nothing.
+
+**Queries.** `raycast` is reachable from gameplay as `world().physics()->raycast(...)` - the scene carries a forward-declared pointer to the physics world while it simulates, published on start and retracted on stop, so behaviours reach physics without the ECS growing a dependency on it.
+
+*Not done, each for a stated reason:*
+
+- **CharacterController** - it belongs to the sandbox project, which is what the "done when" says and Phase 10 owns. Nothing about the body interface blocks it.
+- **ConvexHullCollider / MeshCollider** - both want an asset-derived hull or triangle soup, which is the asset pipeline's cooked-data story; a hand-authored primitive covers everything the engine currently draws.
+- **Constraints** (hinge, slider, distance, fixed, 6-DOF) - API surface with no caller yet; the backend supports them whenever something needs a door.
+- **Collision layers and filter masks** - the two layers that exist (moving, non-moving) are a broad-phase optimisation, not a gameplay feature. Named layers arrive when two things exist that must not collide.
+- **Shapecast and overlap queries** - raycast has a caller-shaped hole today; the others do not.
+- **Render-transform interpolation** - `Time::fixedAlpha()` has existed since Phase 1 for exactly this, but nothing else in the engine interpolates and physics should not be the odd one out. It lands as one change when rendering learns to interpolate everything the simulation moves.
+- **Collider gizmos and physics debug draw** - editor work, worth doing when colliders are being authored in the editor rather than in code.
 
 ### Phase 9 — Advanced rendering (~8+ weeks)
 
