@@ -20,6 +20,7 @@
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PostProcessSystem.hpp"
+#include "render/ShadowCascades.hpp"
 #include "render/ShadowMapSystem.hpp"
 #include "render/SkyboxSystem.hpp"
 #include "rhi/Buffer.hpp"
@@ -57,9 +58,14 @@ namespace ege {
             glm::mat4 inverseView{1.f};
             // The skybox unprojects pixels back into rays with this.
             glm::mat4 inverseProjection{1.f};
-            // The sun: the shadow pass renders through this matrix and the
-            // lighting pass projects fragments back through it for the test.
-            glm::mat4 sunViewProjection{1.f};
+            // The sun, one entry per cascade: each shadow map is rendered
+            // through its matrix and the lighting pass projects fragments
+            // back through whichever cascade covers them.
+            glm::mat4 sunViewProjection[maxShadowCascades]{};
+            // Where each cascade ends, in view depth. A vec4 because that is
+            // how std140 would pad four floats anyway, and the shader indexes
+            // it as one.
+            glm::vec4 cascadeSplits{0.f};
             glm::vec4 sunDirection{0.f, 1.f, 0.f, 0.f};
             glm::vec4 sunColor{1.f, 1.f, 1.f, 0.f};  // w is intensity, 0 = off
             // A tint and scale on the image-based ambient, which is already
@@ -67,6 +73,7 @@ namespace ege {
             glm::vec4 ambientLightColor{1.f, 1.f, 1.f, 1.f};  // w is intensity
             GpuPointLight pointLights[maxPointLights]{};
             alignas(16) int numLights = 0;
+            int cascadeCount = 0;
         };
 
     }  // namespace
@@ -198,6 +205,15 @@ namespace ege {
             globalSetLayout->getDescriptorSetLayout()};
 
         ShadowMapSystem shadowSystem{device, renderer.getSwapChainDepthFormat()};
+
+        // How the sun's cascades are cut. Shadows stop well short of the
+        // camera's far plane on purpose: stretching four cascades over a
+        // hundred units would spend the near map's texels on distance where
+        // no one can resolve a shadow edge anyway.
+        constexpr uint32_t shadowCascadeCount = 4;
+        constexpr float shadowNearPlane = 0.1f;
+        constexpr float shadowDistance = 40.f;
+        ShadowCascadeSet cascades{};
 
         BloomSystem bloom{device, hdrFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
@@ -417,14 +433,28 @@ namespace ege {
                     ubo.sunDirection = glm::vec4{direction, 0.f};
                     ubo.sunColor = glm::vec4{sun.color, sun.intensity};
 
-                    // An orthographic frustum sized to the demo floor, looking
-                    // along the light. Fitting it to the view frustum - and
-                    // splitting it into cascades - is what replaces this once
-                    // scenes outgrow a single fixed box.
-                    Camera sunCamera{};
-                    sunCamera.setViewTarget(-direction * 20.f, glm::vec3{0.f});
-                    sunCamera.setOrthographicProjection(-12.f, 12.f, -12.f, 12.f, 1.f, 40.f);
-                    ubo.sunViewProjection = sunCamera.getProjection() * sunCamera.getView();
+                    // Fitted to what the camera can actually see, split by
+                    // depth so texel density follows the viewer rather than
+                    // the scene's bounding box.
+                    CascadeSettings cascadeSettings{};
+                    cascadeSettings.count = shadowCascadeCount;
+                    cascadeSettings.resolution = ShadowMapSystem::resolution;
+                    cascades = fitShadowCascades(
+                        glm::inverse(camera.getProjection() * camera.getView()),
+                        direction,
+                        shadowNearPlane,
+                        // Shadows stop well short of the camera's far plane.
+                        // Stretching cascades to a hundred units would spend
+                        // the near map's texels on distance nobody can
+                        // resolve a shadow edge at anyway.
+                        shadowDistance,
+                        cascadeSettings);
+
+                    for (uint32_t i = 0; i < cascades.count; i++) {
+                        ubo.sunViewProjection[i] = cascades.cascades[i].viewProjection;
+                        ubo.cascadeSplits[static_cast<int>(i)] = cascades.cascades[i].splitDepth;
+                    }
+                    ubo.cascadeCount = static_cast<int>(cascades.count);
                 });
                 // Lights are entities now, gathered per frame rather than
                 // held in a parallel list. The cap is the shader's array size;
@@ -468,6 +498,11 @@ namespace ege {
                 shadowMapDesc.format = renderer.getSwapChainDepthFormat();
                 shadowMapDesc.extent = {ShadowMapSystem::resolution, ShadowMapSystem::resolution};
                 shadowMapDesc.clearValue.depthStencil = {1.0f, 0};
+                // One layer per cascade, sampled as an array so the shader can
+                // pick a layer per fragment with an ordinary texture
+                // coordinate rather than indexing a list of bindings.
+                const uint32_t cascadeCount = static_cast<uint32_t>(std::max(ubo.cascadeCount, 1));
+                shadowMapDesc.layers = cascadeCount;
                 FrameGraphResource shadowMap = graph.createTransient("shadowMap", shadowMapDesc);
 
                 // Bloom works at half resolution: it is blurred anyway, and
@@ -520,16 +555,20 @@ namespace ege {
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 }
 
-                const glm::mat4 sunViewProjection = ubo.sunViewProjection;
-
-                graph.addPass(
-                    "shadow",
-                    [&](FrameGraph::PassBuilder& pass) {
-                        pass.write(shadowMap, ResourceAccess::depthWrite);
-                    },
-                    [&, sunViewProjection](VkCommandBuffer cmd, const FrameGraphResources&) {
-                        shadowSystem.render(cmd, world, sunViewProjection);
-                    });
+                // One depth pass per cascade, each into its own layer. The
+                // graph derives the barrier between them and the transition
+                // to sampled before the scene pass reads the array.
+                for (uint32_t cascade = 0; cascade < cascadeCount; cascade++) {
+                    const glm::mat4 cascadeMatrix = ubo.sunViewProjection[cascade];
+                    graph.addPass(
+                        "shadowCascade" + std::to_string(cascade),
+                        [&, cascade](FrameGraph::PassBuilder& pass) {
+                            pass.write(shadowMap, ResourceAccess::depthWrite, cascade);
+                        },
+                        [&, cascadeMatrix](VkCommandBuffer cmd, const FrameGraphResources&) {
+                            shadowSystem.render(cmd, world, cascadeMatrix);
+                        });
+                }
 
                 graph.addPass(
                     "scene",

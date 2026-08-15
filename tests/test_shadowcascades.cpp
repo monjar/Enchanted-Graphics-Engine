@@ -46,6 +46,16 @@ namespace {
                ndc.z <= 1.f;
     }
 
+    // The ortho half-width the cascade covers. Recovered from the length of
+    // the matrix's first row rather than from its [0][0]: the combined
+    // view-projection folds the light's rotation into every element, and a
+    // single element therefore measures the basis as much as the scale. The
+    // rotation is orthonormal, so the row's length is the scale alone.
+    float mapHalfWidth(const glm::mat4& viewProjection) {
+        const glm::vec3 row0{viewProjection[0][0], viewProjection[1][0], viewProjection[2][0]};
+        return 1.f / glm::length(row0);
+    }
+
     CascadeSettings defaultSettings() {
         CascadeSettings settings{};
         settings.count = 4;
@@ -156,8 +166,7 @@ TEST_CASE("turning the camera does not resize a cascade") {
     auto mapExtent = [&](glm::vec3 target) {
         const ShadowCascadeSet set = fitShadowCascades(
             inverseCamera(eye, target), light, nearPlane, farPlane, defaultSettings());
-        // The ortho half-width is recoverable from the projection's x scale.
-        return 1.f / set.cascades[0].viewProjection[0][0];
+        return mapHalfWidth(set.cascades[0].viewProjection);
     };
 
     const float facingNorth = mapExtent({0.f, 3.f, -10.f});
@@ -227,4 +236,47 @@ TEST_CASE("cascade count is clamped to what the shader has room for") {
         settings);
 
     CHECK(set.count == maxShadowCascades);
+}
+
+TEST_CASE("cascades follow a camera far from the world origin") {
+    // What the fixed box this replaced could not do. That box was anchored at
+    // the origin with a 24-unit extent, so a camera anywhere else looked at
+    // ground with no shadow map over it at all - the scene simply stopped
+    // casting. The demo never left the box, which is why it never showed;
+    // this is the regression a test has to hold rather than a picture.
+    const glm::vec3 faraway{500.f, 3.f, -400.f};
+    const ShadowCascadeSet set = fitShadowCascades(
+        inverseCamera(faraway, faraway + glm::vec3{0.f, -1.f, -10.f}),
+        glm::normalize(glm::vec3{0.4f, -1.f, 0.3f}),
+        nearPlane,
+        farPlane,
+        defaultSettings());
+
+    // The ground just in front of the camera is covered by the near cascade.
+    const glm::vec3 groundAhead = faraway + glm::vec3{0.f, -3.f, -2.f};
+    CHECK(insideMap(project(set.cascades[0].viewProjection, groundAhead)));
+
+    // And the old fixed box, for the contrast: 24 units at the origin never
+    // came near this camera.
+    CHECK(glm::length(faraway) > 24.f);
+}
+
+TEST_CASE("the near cascade is far tighter than one map over the whole range") {
+    // Where the texels go. One map stretched over the shadowed distance gives
+    // every part of it the same density; cascades give the near slice a map
+    // sized to the near slice, which is most of the point.
+    const ShadowCascadeSet set = fitShadowCascades(
+        inverseCamera({0.f, 3.f, 6.f}, {0.f, 0.f, 0.f}),
+        glm::normalize(glm::vec3{0.4f, -1.f, 0.3f}),
+        nearPlane,
+        farPlane,
+        defaultSettings());
+
+    const float nearHalfWidth = mapHalfWidth(set.cascades[0].viewProjection);
+    const float farHalfWidth = mapHalfWidth(set.cascades[set.count - 1].viewProjection);
+
+    CHECK(nearHalfWidth < farHalfWidth);
+    // An order of magnitude of texel density, which is the difference between
+    // a shadow edge that reads as an edge and one that reads as a staircase.
+    CHECK(farHalfWidth > nearHalfWidth * 8.f);
 }
