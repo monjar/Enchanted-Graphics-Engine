@@ -15,9 +15,11 @@ near-mirror to fully rough, plus two dielectrics, lit by three point lights
 and a low sun under a procedurally generated evening sky. The smoothest metal
 reflects that sky — in earlier builds it was nearly black, because a mirror
 with no environment to reflect *is* nearly black, and giving it one is
-exactly what image-based lighting does. The sun casts real shadows through a
-depth-only frame graph pass, and its direction, the disk in the sky and the
-shadows all agree because they share one definition. The environment, its
+exactly what image-based lighting does. The sun casts real shadows through
+depth-only frame graph passes — four cascades fitted to the camera's own
+frustum, so the texels follow the viewer rather than the scene's bounding
+box — and its direction, the disk in the sky and the shadows all agree
+because they share one definition. The environment, its
 irradiance and prefiltered specular convolutions and the BRDF lookup table
 are all computed on the GPU at startup, so a clean checkout still ships no
 binary assets.
@@ -182,7 +184,7 @@ own copies of the type, component and behaviour registries and nothing
 registered across the boundary would be visible. That is a build change to the
 whole project, and it is its own piece of work.
 
-Still to come: cascaded and point-light shadows, anti-aliasing, the standalone
+Still to come: point-light and spot shadows, anti-aliasing, the standalone
 editor application, script hot reload, character controllers and physics
 constraints.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
@@ -256,7 +258,7 @@ src/
   physics/      the PhysicsWorld interface, its Jolt backend, rigid bodies,
                 colliders and the ECS sync
   rhi/          device, swapchain, pipeline, buffer, descriptors, textures,
-                frame graph, frame recording
+                frame graph (including layered images), frame recording
   render/       renderer, model, camera, materials, lights, bounds,
                 environment lighting, PBR, shadows, skybox, bloom and post-process
   scene/        world, entities, component pools, components, hierarchy, serialization
