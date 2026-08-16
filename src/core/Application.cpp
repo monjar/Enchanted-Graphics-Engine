@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <stdexcept>
 
@@ -1084,6 +1085,44 @@ namespace ege {
         addLight("KeyLight", {-1.5f, -1.6f, -1.2f}, {1.f, 0.95f, 0.85f}, 6.f);
         addLight("FillLight", {1.8f, -1.2f, 0.8f}, {0.4f, 0.6f, 1.f}, 5.f);
         addLight("RimLight", {0.f, -0.9f, 2.2f}, {1.f, 0.5f, 0.3f}, 3.f);
+
+        // A bank of small accent lights over the floor, well past the sixteen
+        // the forward shader used to cap the scene at. They are here to be
+        // counted as much as to be seen: with clustered shading a fragment
+        // loops the lights that reach it rather than every light in the
+        // scene, and a demo with three lights demonstrates nothing about
+        // that. Short range and low intensity so they read as pools on the
+        // floor rather than washing out the key/fill/rim composition above -
+        // and a short range is also what gives the culling something to do,
+        // since a light that reaches everywhere lands in every cluster.
+        {
+            constexpr int columns = 8;
+            constexpr int rows = 5;
+            constexpr float rangeMetres = 1.2f;
+            int index = 0;
+            for (int row = 0; row < rows; row++) {
+                for (int column = 0; column < columns; column++) {
+                    const float x =
+                        -3.5f + 7.f * static_cast<float>(column) / static_cast<float>(columns - 1);
+                    const float z =
+                        -1.5f + 5.5f * static_cast<float>(row) / static_cast<float>(rows - 1);
+                    // Around the hue circle, so neighbouring pools differ and
+                    // the boundaries between clusters would be obvious if the
+                    // assignment were wrong.
+                    const float hue = glm::two_pi<float>() * static_cast<float>(index) /
+                                      static_cast<float>(columns * rows);
+                    const glm::vec3 color{
+                        0.5f + 0.5f * std::cos(hue),
+                        0.5f + 0.5f * std::cos(hue + glm::two_pi<float>() / 3.f),
+                        0.5f + 0.5f * std::cos(hue - glm::two_pi<float>() / 3.f)};
+
+                    Entity accent =
+                        addLight("Accent" + std::to_string(index), {x, -0.32f, z}, color, 0.34f);
+                    accent.fetch<PointLight>().range = rangeMetres;
+                    index++;
+                }
+            }
+        }
 
         // The sun. Its direction is the negation of the sky shader's sun
         // position, so the disk in the environment, the direct light and the
