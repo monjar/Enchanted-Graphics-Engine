@@ -13,6 +13,9 @@
 struct PointLight {
     vec4 position;  // xyz world position, w cull radius
     vec4 color;     // rgb color, w intensity
+    // x: which cube of the shadow array holds this light's shadow, or -1 for
+    // a light that casts none.
+    vec4 shadow;
 };
 
 layout(set = 0, binding = 0) uniform GlobalUbo {
@@ -34,6 +37,10 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     // xyz: cells per axis, w: how many lights one cluster records.
     uvec4 clusterGrid;
     vec4 screenSize;  // xy: the extent the scene renders at
+    // Point-light shadow cubes. x: the near plane every cube is rendered
+    // with; the far plane is each light's own range, so it is read from the
+    // light rather than from here.
+    vec4 pointShadowParams;
     int numLights;
     int cascadeCount;
 } ubo;

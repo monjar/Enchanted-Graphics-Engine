@@ -22,6 +22,11 @@ namespace ege {
     struct GpuPointLight {
         glm::vec4 position{0.f};  // xyz world position, w cull radius
         glm::vec4 color{1.f};     // w is intensity
+        // x: which cube of the shadow array holds this light's shadow, or -1
+        // for a light that casts none. A float rather than an int because the
+        // rest of the struct is vec4s and mixing the two invites a layout
+        // mistake nothing would report.
+        glm::vec4 shadow{-1.f, 0.f, 0.f, 0.f};
     };
 
     // Authoring-side point light. Becomes a component when the ECS lands.
@@ -29,9 +34,15 @@ namespace ege {
         glm::vec3 color{1.f};
         float intensity = 1.f;
         // Distance at which the light is considered to contribute nothing.
-        // Not used for attenuation, which is inverse-square; this is for
-        // culling once there are enough lights to need it.
+        // Not used for attenuation, which is inverse-square; this is what the
+        // cluster culling tests against, and the far plane of the light's
+        // shadow cube if it casts one.
         float range = 25.f;
+        // Whether this light casts shadows. Six depth passes when it does, so
+        // it is per-light rather than universal: a scene can afford that for
+        // the few lights whose shadows are looked at and not for the decorative
+        // ones. Only the first `maxShadowedPointLights` asking for it get it.
+        bool castsShadows = true;
     };
 
     // A sun: parallel rays, no falloff, and the one light that casts a
@@ -51,6 +62,7 @@ EGE_REFLECT(ege::PointLight)
 EGE_FIELD(color).asColor();
 EGE_FIELD(intensity).range(0.f, 100.f);
 EGE_FIELD(range).range(0.f, 1000.f).tooltip("Culling radius, not attenuation falloff");
+EGE_FIELD(castsShadows).tooltip("Six depth passes when on; only the first few lights get it");
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::DirectionalLight)

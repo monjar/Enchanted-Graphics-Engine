@@ -21,6 +21,7 @@
 #include "render/DynamicMesh.hpp"
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
+#include "render/PointShadows.hpp"
 #include "render/PostProcessSystem.hpp"
 #include "render/ShadowCascades.hpp"
 #include "render/ShadowMapSystem.hpp"
@@ -83,6 +84,10 @@ namespace ege {
             // xyz: cells per axis, w: how many lights one cluster records.
             glm::uvec4 clusterGrid{0u};
             glm::vec4 screenSize{0.f};  // xy: the extent the scene renders at
+            // Point-light shadow cubes. x: the near plane every cube is
+            // rendered with; the far plane is each light's own range, so it
+            // travels with the light rather than here.
+            glm::vec4 pointShadowParams{0.f};
             alignas(16) int numLights = 0;
             int cascadeCount = 0;
         };
@@ -107,7 +112,7 @@ namespace ege {
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 5)
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 6)
                 // Two storage buffers per frame: the scene's lights and the
                 // per-cluster lists culled from them.
                 .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 2)
@@ -208,6 +213,9 @@ namespace ege {
                     7,
                     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                     VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT)
+                // Every shadow-casting point light's cube, in one array.
+                .addBinding(
+                    8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
@@ -517,21 +525,43 @@ namespace ege {
                 // here bounds allocation rather than shading cost.
                 std::vector<GpuPointLight> sceneLights;
                 sceneLights.reserve(maxSceneLights);
-                world.each<Transform, PointLight>(
-                    [&](Entity, Transform& transform, PointLight& light) {
-                        if (sceneLights.size() >= maxSceneLights) {
-                            return;
-                        }
-                        GpuPointLight gpuLight{};
-                        // The cull radius rides in position.w, which is where
-                        // the culling shader reads it: the light's own range,
-                        // the distance past which it is treated as
-                        // contributing nothing.
-                        gpuLight.position = glm::vec4{transform.translation, light.range};
-                        gpuLight.color = glm::vec4{light.color, light.intensity};
-                        sceneLights.push_back(gpuLight);
-                    });
+
+                // The lights whose shadow cubes get rendered this frame, in
+                // the order their cubes sit in the array. Shadow casters are
+                // taken in the order the scene yields them and stop at the
+                // cap, so which lights cast is stable frame to frame as long
+                // as the scene is.
+                struct ShadowCaster {
+                    glm::vec3 position{0.f};
+                    float range = 0.f;
+                };
+
+                std::vector<ShadowCaster> shadowCasters;
+
+                world.each<Transform, PointLight>([&](Entity,
+                                                      Transform& transform,
+                                                      PointLight& light) {
+                    if (sceneLights.size() >= maxSceneLights) {
+                        return;
+                    }
+                    GpuPointLight gpuLight{};
+                    // The cull radius rides in position.w, which is where
+                    // the culling shader reads it: the light's own range,
+                    // the distance past which it is treated as
+                    // contributing nothing - and the far plane of its
+                    // shadow cube for exactly the same reason.
+                    gpuLight.position = glm::vec4{transform.translation, light.range};
+                    gpuLight.color = glm::vec4{light.color, light.intensity};
+
+                    if (light.castsShadows && shadowCasters.size() < maxShadowedPointLights) {
+                        gpuLight.shadow.x = static_cast<float>(shadowCasters.size());
+                        shadowCasters.push_back(ShadowCaster{transform.translation, light.range});
+                    }
+
+                    sceneLights.push_back(gpuLight);
+                });
                 ubo.numLights = static_cast<int>(sceneLights.size());
+                ubo.pointShadowParams = glm::vec4{pointShadowNearPlane, 0.f, 0.f, 0.f};
 
                 if (!sceneLights.empty()) {
                     lightBuffers[frameIndex]->writeToBuffer(
@@ -590,6 +620,22 @@ namespace ege {
                 const uint32_t cascadeCount = static_cast<uint32_t>(std::max(ubo.cascadeCount, 1));
                 shadowMapDesc.layers = cascadeCount;
                 FrameGraphResource shadowMap = graph.createTransient("shadowMap", shadowMapDesc);
+
+                // Every shadow-casting point light's cube, as one cube array:
+                // six faces per light, laid out so cube `i` occupies layers
+                // 6i to 6i+5, which is exactly how a cube array view reads
+                // them. Always the full size even when fewer lights cast, so
+                // the physical image is one the graph can keep reusing rather
+                // than reallocating whenever a light is switched on.
+                TransientImageDesc pointShadowDesc{};
+                pointShadowDesc.format = renderer.getSwapChainDepthFormat();
+                pointShadowDesc.extent = {
+                    ShadowMapSystem::pointResolution, ShadowMapSystem::pointResolution};
+                pointShadowDesc.clearValue.depthStencil = {1.0f, 0};
+                pointShadowDesc.layers = maxShadowedPointLights * cubeFaceCount;
+                pointShadowDesc.cube = true;
+                FrameGraphResource pointShadowMaps =
+                    graph.createTransient("pointShadowMaps", pointShadowDesc);
 
                 // Where the culling pass puts each cluster's light list. A
                 // graph resource rather than a buffer of our own, so the
@@ -665,6 +711,37 @@ namespace ege {
                         });
                 }
 
+                // Every cube face, every frame - including the faces of slots
+                // no light is using. A slot with no caster records no
+                // geometry, so its pass costs one depth clear and nothing
+                // else, and in exchange every layer of the array is defined
+                // whatever the scene contains. The alternative is declaring
+                // passes only for the lights that cast, which leaves the
+                // image unwritten when nothing does and makes the scene pass
+                // read a resource no pass produced.
+                for (uint32_t slot = 0; slot < maxShadowedPointLights; slot++) {
+                    const bool used = slot < shadowCasters.size();
+                    const std::array<glm::mat4, cubeFaceCount> faces =
+                        used ? pointShadowFaceMatrices(
+                                   shadowCasters[slot].position, shadowCasters[slot].range)
+                             : std::array<glm::mat4, cubeFaceCount>{};
+
+                    for (uint32_t face = 0; face < cubeFaceCount; face++) {
+                        const uint32_t layer = slot * cubeFaceCount + face;
+                        const glm::mat4 faceMatrix = faces[face];
+                        graph.addPass(
+                            "pointShadow" + std::to_string(slot) + "_" + std::to_string(face),
+                            [&, layer](FrameGraph::PassBuilder& pass) {
+                                pass.write(pointShadowMaps, ResourceAccess::depthWrite, layer);
+                            },
+                            [&, used, faceMatrix](VkCommandBuffer cmd, const FrameGraphResources&) {
+                                if (used) {
+                                    shadowSystem.render(cmd, world, faceMatrix);
+                                }
+                            });
+                    }
+                }
+
                 // Light culling, before anything shades. Not a raster pass at
                 // all - it declares no attachment, so the graph runs it
                 // outside vkCmdBeginRendering and derives the compute-to-
@@ -692,6 +769,7 @@ namespace ege {
                     "scene",
                     [&](FrameGraph::PassBuilder& pass) {
                         pass.read(shadowMap, ResourceAccess::sampled);
+                        pass.read(pointShadowMaps, ResourceAccess::sampled);
                         pass.read(clusterList, ResourceAccess::storageRead);
                         pass.write(sceneColor, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
@@ -715,9 +793,15 @@ namespace ege {
                         // a command buffer has already bound invalidates the
                         // command buffer, so every per-frame write to this set
                         // has to land before its first use.
+                        VkDescriptorImageInfo pointShadowInfo{};
+                        pointShadowInfo.sampler = shadowSystem.cubeComparisonSampler();
+                        pointShadowInfo.imageView = resolved.view(pointShadowMaps);
+                        pointShadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
                         DescriptorWriter(*globalSetLayout, *globalPool)
                             .writeImage(5, &shadowInfo)
                             .writeBuffer(7, &clusterInfo)
+                            .writeImage(8, &pointShadowInfo)
                             .overwrite(globalDescriptorSets[frameIndex]);
 
                         frameInfo.commandBuffer = cmd;
@@ -1118,7 +1202,13 @@ namespace ege {
 
                     Entity accent =
                         addLight("Accent" + std::to_string(index), {x, -0.32f, z}, color, 0.34f);
-                    accent.fetch<PointLight>().range = rangeMetres;
+                    PointLight& accentLight = accent.fetch<PointLight>();
+                    accentLight.range = rangeMetres;
+                    // Decoration, not lighting anyone reads a shadow from -
+                    // and forty of these would be two hundred and forty depth
+                    // passes. The three lights that compose the shot cast;
+                    // these do not.
+                    accentLight.castsShadows = false;
                     index++;
                 }
             }

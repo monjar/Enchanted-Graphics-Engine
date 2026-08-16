@@ -72,9 +72,24 @@ namespace ege {
         if (vkCreateSampler(device.device(), &samplerInfo, nullptr, &shadowSampler) != VK_SUCCESS) {
             throw std::runtime_error{"failed to create the shadow comparison sampler"};
         }
+
+        // The same comparison sampler for point lights' cubes, but clamped to
+        // edge. A cube covers every direction, so there is no outside for a
+        // border colour to answer for - and a border at a face edge would draw
+        // a visible seam where two faces meet.
+        VkSamplerCreateInfo cubeSamplerInfo = samplerInfo;
+        cubeSamplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        cubeSamplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        cubeSamplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+
+        if (vkCreateSampler(device.device(), &cubeSamplerInfo, nullptr, &cubeSampler) !=
+            VK_SUCCESS) {
+            throw std::runtime_error{"failed to create the cube shadow comparison sampler"};
+        }
     }
 
     ShadowMapSystem::~ShadowMapSystem() {
+        vkDestroySampler(device.device(), cubeSampler, nullptr);
         vkDestroySampler(device.device(), shadowSampler, nullptr);
         vkDestroyPipelineLayout(device.device(), pipelineLayout, nullptr);
     }
