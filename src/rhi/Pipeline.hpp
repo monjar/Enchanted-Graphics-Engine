@@ -56,14 +56,10 @@ namespace ege {
         static void defaultPipelineConfigInfo(PipelineConfigInfo& configInfo);
 
     private:
-        static std::vector<char> readFile(const std::string& filePath);
-
         void createGraphicsPipeline(
             const std::string& vertFilePath,
             const std::string& fragFilePath,
             const PipelineConfigInfo& configInfo);
-
-        void createShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule);
 
         // Pipline fundementally needs a device to exist, so no risk of dangling (Aggregation)
         Device& device;
@@ -73,4 +69,40 @@ namespace ege {
         VkShaderModule vertShaderModule;
         VkShaderModule fragShaderModule;
     };
+
+    // A compute pipeline: one shader stage, no attachments, no fixed-function
+    // state at all. It lives beside the graphics pipeline rather than in its
+    // own file because the two share how SPIR-V is found on disk and turned
+    // into a shader module, and there is no third kind.
+    //
+    // Compute work is dispatched on the graphics queue rather than on a
+    // dedicated compute one. A separate queue would let culling overlap the
+    // previous frame's raster, but it would also need ownership transfers and
+    // a second timeline to synchronise against - real complexity to buy an
+    // overlap this engine has no measurement to justify yet.
+    class ComputePipeline {
+    public:
+        ComputePipeline(
+            Device& device, const std::string& compFilePath, VkPipelineLayout pipelineLayout);
+        ~ComputePipeline();
+
+        ComputePipeline(const ComputePipeline&) = delete;
+        ComputePipeline& operator=(const ComputePipeline&) = delete;
+
+        void bind(VkCommandBuffer commandBuffer);
+
+    private:
+        Device& device;
+
+        VkPipeline computePipeline = VK_NULL_HANDLE;
+        VkShaderModule shaderModule = VK_NULL_HANDLE;
+    };
+
+    // How many workgroups cover `count` items at `groupSize` per group. The
+    // rounding-up is what makes the shader's bounds check load-bearing: the
+    // last group runs invocations past the end of the work.
+    inline uint32_t dispatchGroupCount(uint32_t count, uint32_t groupSize) {
+        return groupSize == 0 ? 0 : (count + groupSize - 1) / groupSize;
+    }
+
 }  // namespace ege

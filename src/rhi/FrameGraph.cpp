@@ -13,10 +13,10 @@ namespace ege {
         // Every write bit a graph resource can carry. Source access masks are
         // filtered to these: making writes available is what a memory
         // dependency is for, and read bits in a source mask are meaningless.
-        constexpr VkAccessFlags2 allWrites = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
-                                             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-                                             VK_ACCESS_2_SHADER_WRITE_BIT |
-                                             VK_ACCESS_2_TRANSFER_WRITE_BIT;
+        constexpr VkAccessFlags2 allWrites =
+            VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT |
+            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
 
         struct AccessInfo {
             VkImageLayout layout;
@@ -43,6 +43,18 @@ namespace ege {
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
+                // Buffers have no layout, so these carry UNDEFINED and the
+                // barrier logic sees "layout unchanged" for them throughout.
+                case ResourceAccess::storageWrite:
+                    return {
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT};
+                case ResourceAccess::storageRead:
+                    return {
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
             }
             return {VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE};
         }
@@ -55,8 +67,28 @@ namespace ege {
                     return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
                 case ResourceAccess::sampled:
                     return VK_IMAGE_USAGE_SAMPLED_BIT;
+                case ResourceAccess::storageWrite:
+                case ResourceAccess::storageRead:
+                    return 0;
             }
             return 0;
+        }
+
+        VkBufferUsageFlags bufferUsageFor(ResourceAccess access) {
+            switch (access) {
+                case ResourceAccess::storageWrite:
+                case ResourceAccess::storageRead:
+                    return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                case ResourceAccess::colorWrite:
+                case ResourceAccess::depthWrite:
+                case ResourceAccess::sampled:
+                    return 0;
+            }
+            return 0;
+        }
+
+        bool isBufferAccess(ResourceAccess access) {
+            return access == ResourceAccess::storageWrite || access == ResourceAccess::storageRead;
         }
 
         VkImageAspectFlags aspectFor(VkFormat format) {
@@ -92,6 +124,26 @@ namespace ege {
         return graph.resolveExtent(graph.resources.at(resource.index));
     }
 
+    VkBuffer FrameGraphResources::buffer(FrameGraphResource resource) const {
+        const auto& res = graph.resources.at(resource.index);
+        EGE_VERIFY(
+            res.kind == FrameGraph::ResourceKind::buffer,
+            "resource '{}' is an image, not a buffer",
+            res.name);
+        EGE_VERIFY(
+            res.physicalIndex != UINT32_MAX, "resource '{}' has no physical buffer", res.name);
+        return graph.physicalBuffers[res.physicalIndex].buffer;
+    }
+
+    VkDeviceSize FrameGraphResources::bufferSize(FrameGraphResource resource) const {
+        const auto& res = graph.resources.at(resource.index);
+        EGE_VERIFY(
+            res.kind == FrameGraph::ResourceKind::buffer,
+            "resource '{}' is an image, not a buffer",
+            res.name);
+        return res.bufferDesc.size;
+    }
+
     // ---- declaration -------------------------------------------------------
 
     void FrameGraph::beginFrame(VkExtent2D outputExtentRef) {
@@ -110,6 +162,19 @@ namespace ege {
         Resource resource{};
         resource.name = std::move(name);
         resource.desc = desc;
+        resources.push_back(std::move(resource));
+        return FrameGraphResource{static_cast<uint32_t>(resources.size() - 1)};
+    }
+
+    FrameGraphResource FrameGraph::createTransientBuffer(
+        std::string name, const TransientBufferDesc& desc) {
+        if (desc.size == 0) {
+            throw std::logic_error{"frame graph transient buffer '" + name + "' has no size"};
+        }
+        Resource resource{};
+        resource.name = std::move(name);
+        resource.kind = ResourceKind::buffer;
+        resource.bufferDesc = desc;
         resources.push_back(std::move(resource));
         return FrameGraphResource{static_cast<uint32_t>(resources.size() - 1)};
     }
@@ -141,6 +206,7 @@ namespace ege {
         if (!resource.valid() || resource.index >= graph.resources.size()) {
             throw std::logic_error{"pass declared a read of an invalid resource handle"};
         }
+        graph.checkAccessKind(resource, access);
         graph.passes[passIndex].accesses.push_back({resource, access, false});
     }
 
@@ -149,10 +215,23 @@ namespace ege {
         if (!resource.valid() || resource.index >= graph.resources.size()) {
             throw std::logic_error{"pass declared a write of an invalid resource handle"};
         }
-        if (layer >= graph.resources[resource.index].desc.layers) {
+        graph.checkAccessKind(resource, access);
+        if (graph.resources[resource.index].kind == ResourceKind::image &&
+            layer >= graph.resources[resource.index].desc.layers) {
             throw std::logic_error{"pass declared a write of a layer the image does not have"};
         }
         graph.passes[passIndex].accesses.push_back({resource, access, true, layer});
+    }
+
+    void FrameGraph::checkAccessKind(FrameGraphResource resource, ResourceAccess access) const {
+        const Resource& res = resources[resource.index];
+        const bool wantsBuffer = isBufferAccess(access);
+        if (wantsBuffer != (res.kind == ResourceKind::buffer)) {
+            throw std::logic_error{
+                "pass declared a " + std::string{wantsBuffer ? "buffer" : "image"} +
+                " access of '" + res.name + "', which is a " +
+                (res.kind == ResourceKind::buffer ? "buffer" : "image")};
+        }
     }
 
     void FrameGraph::addPass(
@@ -209,7 +288,9 @@ namespace ege {
         for (Resource& resource : resources) {
             resource.state = ResourceState{};
             resource.usage = 0;
+            resource.bufferUsage = 0;
             resource.written = false;
+            resource.firstTouch = true;
             resource.writtenLayers.assign(resource.desc.layers, false);
             resource.physicalIndex = UINT32_MAX;
             if (resource.imported) {
@@ -238,15 +319,24 @@ namespace ege {
                 }
 
                 resource.usage |= usageFor(passAccess.access);
+                resource.bufferUsage |= bufferUsageFor(passAccess.access);
+
+                const bool isBuffer = resource.kind == ResourceKind::buffer;
 
                 // A barrier is needed on any layout change, and on any hazard
                 // involving a write. The only transition that may be elided is
                 // read-after-read in an unchanged layout.
-                const bool layoutChanges = resource.state.layout != target.layout;
+                const bool layoutChanges = !isBuffer && resource.state.layout != target.layout;
                 const bool hazard =
                     (resource.state.access & allWrites) != 0 ||
                     ((target.access & allWrites) != 0 && resource.state.access != VK_ACCESS_2_NONE);
-                if (layoutChanges || hazard) {
+                // A buffer has no layout to change, so nothing above fires on
+                // its first touch - and its first touch is exactly where the
+                // cross-frame hazard lives: this frame's compute write against
+                // last frame's fragment read of the same recycled buffer.
+                const bool firstBufferUse = isBuffer && !resource.imported && resource.firstTouch;
+
+                if (layoutChanges || hazard || firstBufferUse) {
                     PlannedBarrier barrier{};
                     barrier.resourceIndex = passAccess.resource.index;
                     barrier.oldLayout = resource.state.layout;
@@ -256,11 +346,16 @@ namespace ege {
                     barrier.dstStage = target.stage;
                     barrier.dstAccess = target.access;
                     barrier.firstUse =
-                        !resource.imported && resource.state.layout == VK_IMAGE_LAYOUT_UNDEFINED;
+                        !resource.imported &&
+                        (isBuffer ? resource.firstTouch
+                                  : resource.state.layout == VK_IMAGE_LAYOUT_UNDEFINED);
                     compiledPass.barriers.push_back(barrier);
                 }
+                resource.firstTouch = false;
 
-                if (passAccess.isWrite) {
+                if (passAccess.isWrite && isBuffer) {
+                    resource.written = true;
+                } else if (passAccess.isWrite) {
                     PlannedAttachment attachment{};
                     attachment.resourceIndex = passAccess.resource.index;
                     attachment.layer = passAccess.layer;
@@ -412,6 +507,47 @@ namespace ege {
         return static_cast<uint32_t>(physicalImages.size() - 1);
     }
 
+    uint32_t FrameGraph::acquirePhysicalBuffer(Device& deviceRef, Resource& resource) {
+        for (uint32_t i = 0; i < physicalBuffers.size(); i++) {
+            PhysicalBuffer& physical = physicalBuffers[i];
+            if (!physical.usedThisFrame && physical.size == resource.bufferDesc.size &&
+                physical.usage == resource.bufferUsage) {
+                physical.usedThisFrame = true;
+                physical.lastFrameUsed = frameCounter;
+                return i;
+            }
+        }
+
+        PhysicalBuffer physical{};
+        physical.size = resource.bufferDesc.size;
+        physical.usage = resource.bufferUsage;
+        physical.usedThisFrame = true;
+        physical.lastFrameUsed = frameCounter;
+
+        // Device-local and never mapped: the host neither writes nor reads it,
+        // so there is nothing to gain from making it visible.
+        deviceRef.createBuffer(
+            physical.size,
+            physical.usage,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+            physical.buffer,
+            physical.allocation);
+
+        EGE_DEBUG(
+            "frame graph allocated a {}-byte transient buffer for '{}'",
+            physical.size,
+            resource.name);
+
+        physicalBuffers.push_back(physical);
+        return static_cast<uint32_t>(physicalBuffers.size() - 1);
+    }
+
+    void FrameGraph::destroyPhysicalBuffer(PhysicalBuffer& physical) {
+        device->destroyBuffer(physical.buffer, physical.allocation);
+        physical.buffer = VK_NULL_HANDLE;
+        physical.allocation = VK_NULL_HANDLE;
+    }
+
     void FrameGraph::destroyPhysicalImage(PhysicalImage& physical) {
         for (VkImageView layerView : physical.layerViews) {
             vkDestroyImageView(device->device(), layerView, nullptr);
@@ -431,11 +567,21 @@ namespace ege {
         for (PhysicalImage& physical : physicalImages) {
             physical.usedThisFrame = false;
         }
+        for (PhysicalBuffer& physical : physicalBuffers) {
+            physical.usedThisFrame = false;
+        }
 
-        // Give every live transient a physical image. Liveness is encoded in
-        // usage: only accesses from surviving passes accumulated any.
+        // Give every live transient a physical resource. Liveness is encoded
+        // in usage: only accesses from surviving passes accumulated any.
         for (Resource& resource : resources) {
-            if (!resource.imported && resource.usage != 0) {
+            if (resource.imported) {
+                continue;
+            }
+            if (resource.kind == ResourceKind::buffer) {
+                if (resource.bufferUsage != 0) {
+                    resource.physicalIndex = acquirePhysicalBuffer(deviceRef, resource);
+                }
+            } else if (resource.usage != 0) {
                 resource.physicalIndex = acquirePhysicalImage(deviceRef, resource);
             }
         }
@@ -447,9 +593,42 @@ namespace ege {
                 return;
             }
             std::vector<VkImageMemoryBarrier2> barriers;
+            std::vector<VkBufferMemoryBarrier2> bufferBarriers;
             barriers.reserve(planned.size());
             for (const PlannedBarrier& plan : planned) {
                 const Resource& resource = resources[plan.resourceIndex];
+
+                if (resource.kind == ResourceKind::buffer) {
+                    const PhysicalBuffer& physical = physicalBuffers[resource.physicalIndex];
+
+                    VkBufferMemoryBarrier2 bufferBarrier{};
+                    bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
+                    bufferBarrier.srcStageMask = plan.srcStage;
+                    bufferBarrier.srcAccessMask = plan.srcAccess;
+                    bufferBarrier.dstStageMask = plan.dstStage;
+                    bufferBarrier.dstAccessMask = plan.dstAccess;
+                    bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    bufferBarrier.buffer = physical.buffer;
+                    bufferBarrier.offset = 0;
+                    bufferBarrier.size = VK_WHOLE_SIZE;
+
+                    // The same cross-frame chain the images make, for the same
+                    // reason: this frame overwrites a buffer the last frame may
+                    // still have been reading.
+                    if (plan.firstUse) {
+                        bufferBarrier.srcStageMask = physical.lastStage;
+                        bufferBarrier.srcAccessMask = physical.lastWriteAccess;
+                    }
+                    // Nothing has ever touched it, so there is nothing to wait
+                    // for; a barrier with no source stage is not legal.
+                    if (bufferBarrier.srcStageMask == VK_PIPELINE_STAGE_2_NONE) {
+                        continue;
+                    }
+
+                    bufferBarriers.push_back(bufferBarrier);
+                    continue;
+                }
 
                 VkImageMemoryBarrier2 barrier{};
                 barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
@@ -479,10 +658,16 @@ namespace ege {
                 barriers.push_back(barrier);
             }
 
+            if (barriers.empty() && bufferBarriers.empty()) {
+                return;
+            }
+
             VkDependencyInfo dependencyInfo{};
             dependencyInfo.sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO;
             dependencyInfo.imageMemoryBarrierCount = static_cast<uint32_t>(barriers.size());
             dependencyInfo.pImageMemoryBarriers = barriers.data();
+            dependencyInfo.bufferMemoryBarrierCount = static_cast<uint32_t>(bufferBarriers.size());
+            dependencyInfo.pBufferMemoryBarriers = bufferBarriers.data();
             vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
         };
 
@@ -573,6 +758,12 @@ namespace ege {
             if (resource.imported || resource.physicalIndex == UINT32_MAX) {
                 continue;
             }
+            if (resource.kind == ResourceKind::buffer) {
+                PhysicalBuffer& physical = physicalBuffers[resource.physicalIndex];
+                physical.lastStage = resource.state.stage;
+                physical.lastWriteAccess = resource.state.access & allWrites;
+                continue;
+            }
             PhysicalImage& physical = physicalImages[resource.physicalIndex];
             physical.lastStage = resource.state.stage;
             physical.lastWriteAccess = resource.state.access & allWrites;
@@ -590,6 +781,14 @@ namespace ege {
                 ++it;
             }
         }
+        for (auto it = physicalBuffers.begin(); it != physicalBuffers.end();) {
+            if (!it->usedThisFrame && frameCounter - it->lastFrameUsed > evictAfterFrames) {
+                destroyPhysicalBuffer(*it);
+                it = physicalBuffers.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
 
     FrameGraph::~FrameGraph() {
@@ -598,6 +797,9 @@ namespace ege {
         }
         for (PhysicalImage& physical : physicalImages) {
             destroyPhysicalImage(physical);
+        }
+        for (PhysicalBuffer& physical : physicalBuffers) {
+            destroyPhysicalBuffer(physical);
         }
     }
 

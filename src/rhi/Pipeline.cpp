@@ -13,6 +13,46 @@
 
 namespace ege {
 
+    namespace {
+
+        // Compiled SPIR-V, read from the directory the build writes it into.
+        std::vector<char> readShaderBinary(const std::string& filePath) {
+            // read file in binary and seek end
+            std::string fullFilePath = std::string{EGE_SHADER_ROOT} + "/" + filePath;
+            std::ifstream file{fullFilePath, std::ios::ate | std::ios::binary};
+            if (!file.is_open()) {
+                throw std::runtime_error("failed to open file: " + fullFilePath);
+            }
+
+            // tellg gets the last position, since we already did seek end its the end
+            size_t fileSize = static_cast<size_t>(file.tellg());
+
+            std::vector<char> buffer(fileSize);
+
+            file.seekg(0);
+            file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
+
+            file.close();
+            return buffer;
+        }
+
+        VkShaderModule makeShaderModule(Device& device, const std::vector<char>& code) {
+            VkShaderModuleCreateInfo createInfo{};
+            createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            createInfo.codeSize = code.size();
+            // this cast is only valid because we are using vector and not c_style array
+            createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+
+            VkShaderModule shaderModule = VK_NULL_HANDLE;
+            if (vkCreateShaderModule(device.device(), &createInfo, nullptr, &shaderModule) !=
+                VK_SUCCESS) {
+                throw std::runtime_error("Failed to create shader module.");
+            }
+            return shaderModule;
+        }
+
+    }  // namespace
+
     Pipeline::Pipeline(
         Device& deviceRef,
         const std::string& vertFilePath,
@@ -29,26 +69,6 @@ namespace ege {
         vkDestroyPipeline(device.device(), graphicsPipeline, nullptr);
     }
 
-    std::vector<char> Pipeline::readFile(const std::string& filePath) {
-        // read file in binary and seek end
-        std::string fullFilePath = std::string{EGE_SHADER_ROOT} + "/" + filePath;
-        std::ifstream file{fullFilePath, std::ios::ate | std::ios::binary};
-        if (!file.is_open()) {
-            throw std::runtime_error("failed to open file: " + fullFilePath);
-        }
-
-        // tellg gets the last position, since we already did seek end its the end
-        size_t fileSize = static_cast<size_t>(file.tellg());
-
-        std::vector<char> buffer(fileSize);
-
-        file.seekg(0);
-        file.read(buffer.data(), static_cast<std::streamsize>(fileSize));
-
-        file.close();
-        return buffer;
-    }
-
     void Pipeline::createGraphicsPipeline(
         const std::string& vertFilePath,
         const std::string& fragFilePath,
@@ -61,11 +81,8 @@ namespace ege {
              configInfo.depthAttachmentFormat != VK_FORMAT_UNDEFINED) &&
             "Cannot create graphics pipeline: no attachment formats provided");
 
-        auto vertShaderCode = readFile(vertFilePath);
-        auto fragShaderCode = readFile(fragFilePath);
-
-        createShaderModule(vertShaderCode, &vertShaderModule);
-        createShaderModule(fragShaderCode, &fragShaderModule);
+        vertShaderModule = makeShaderModule(device, readShaderBinary(vertFilePath));
+        fragShaderModule = makeShaderModule(device, readShaderBinary(fragFilePath));
 
         VkPipelineShaderStageCreateInfo shaderStages[2];
 
@@ -135,21 +152,50 @@ namespace ege {
         }
     }
 
-    void Pipeline::createShaderModule(const std::vector<char>& code, VkShaderModule* shaderModule) {
-        VkShaderModuleCreateInfo createInfo{};
-        createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-        createInfo.codeSize = code.size();
-        // this cast is only valid because we are using vector and not c_style array
-        createInfo.pCode = reinterpret_cast<const uint32_t*>(code.data());
+    void Pipeline::bind(VkCommandBuffer commandBuffer) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    }
 
-        if (vkCreateShaderModule(device.device(), &createInfo, nullptr, shaderModule) !=
-            VK_SUCCESS) {
-            throw std::runtime_error("Failed to create shader module.");
+    ComputePipeline::ComputePipeline(
+        Device& deviceRef, const std::string& compFilePath, VkPipelineLayout pipelineLayout)
+        : device{deviceRef} {
+        assert(
+            pipelineLayout != VK_NULL_HANDLE &&
+            "Cannot create compute pipeline: no pipelineLayout provided");
+
+        shaderModule = makeShaderModule(device, readShaderBinary(compFilePath));
+
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        stage.module = shaderModule;
+        stage.pName = "main";
+
+        VkComputePipelineCreateInfo pipelineInfo{};
+        pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        pipelineInfo.stage = stage;
+        pipelineInfo.layout = pipelineLayout;
+        pipelineInfo.basePipelineIndex = -1;
+        pipelineInfo.basePipelineHandle = VK_NULL_HANDLE;
+
+        if (vkCreateComputePipelines(
+                device.device(),
+                device.pipelineCache(),
+                1,
+                &pipelineInfo,
+                nullptr,
+                &computePipeline) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create compute pipeline");
         }
     }
 
-    void Pipeline::bind(VkCommandBuffer commandBuffer) {
-        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+    ComputePipeline::~ComputePipeline() {
+        vkDestroyShaderModule(device.device(), shaderModule, nullptr);
+        vkDestroyPipeline(device.device(), computePipeline, nullptr);
+    }
+
+    void ComputePipeline::bind(VkCommandBuffer commandBuffer) {
+        vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
     }
 
     void Pipeline::defaultPipelineConfigInfo(PipelineConfigInfo& configInfo) {

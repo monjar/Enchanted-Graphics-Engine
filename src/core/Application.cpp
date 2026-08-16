@@ -16,6 +16,8 @@
 #include "reflect/Serialization.hpp"
 #include "render/BloomSystem.hpp"
 #include "render/Camera.hpp"
+#include "render/ClusterGrid.hpp"
+#include "render/ClusterLightSystem.hpp"
 #include "render/DynamicMesh.hpp"
 #include "render/EnvironmentLighting.hpp"
 #include "render/PbrRenderSystem.hpp"
@@ -41,6 +43,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <filesystem>
 #include <stdexcept>
 
@@ -71,7 +74,15 @@ namespace ege {
             // A tint and scale on the image-based ambient, which is already
             // physical - so the neutral value is 1, not a small fudge factor.
             glm::vec4 ambientLightColor{1.f, 1.f, 1.f, 1.f};  // w is intensity
-            GpuPointLight pointLights[maxPointLights]{};
+            // Clustered shading. The lights themselves are no longer here:
+            // a fixed array in a uniform block is what capped the scene at
+            // sixteen of them, and they now live in a storage buffer that
+            // nothing loops over per fragment.
+            // x: depth-slice scale, y: depth-slice bias, z: near, w: far.
+            glm::vec4 clusterParams{0.f};
+            // xyz: cells per axis, w: how many lights one cluster records.
+            glm::uvec4 clusterGrid{0u};
+            glm::vec4 screenSize{0.f};  // xy: the extent the scene renders at
             alignas(16) int numLights = 0;
             int cascadeCount = 0;
         };
@@ -97,6 +108,9 @@ namespace ege {
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 5)
+                // Two storage buffers per frame: the scene's lights and the
+                // per-cluster lists culled from them.
+                .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 2)
                 .build();
 
         // Four image samplers per material, and room for a reasonable number
@@ -148,9 +162,28 @@ namespace ege {
             uboBuffers[i]->map();
         }
 
+        // The scene's lights, gathered per frame into a storage buffer. Host
+        // visible because the CPU writes it every frame, like the uniform
+        // buffer beside it; one per frame in flight for the same reason.
+        std::vector<std::unique_ptr<Buffer>> lightBuffers(SwapChain::MAX_FRAMES_IN_FLIGHT);
+        for (size_t i = 0; i < lightBuffers.size(); i++) {
+            lightBuffers[i] = std::make_unique<Buffer>(
+                device,
+                sizeof(GpuPointLight),
+                maxSceneLights,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+            lightBuffers[i]->map();
+        }
+
         auto globalSetLayout =
             DescriptorSetLayout::Builder(device)
-                .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_ALL_GRAPHICS)
+                // Compute as well as graphics: the light culling pass binds
+                // this same set and reads the same camera out of it.
+                .addBinding(
+                    0,
+                    VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                    VK_SHADER_STAGE_ALL_GRAPHICS | VK_SHADER_STAGE_COMPUTE_BIT)
                 .addBinding(
                     1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .addBinding(
@@ -164,11 +197,23 @@ namespace ege {
                 // frame with whatever physical image the graph provides.
                 .addBinding(
                     5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // The scene's lights, and the per-cluster lists built from
+                // them. The culling pass writes the second and reads the
+                // first; the scene pass reads both.
+                .addBinding(
+                    6,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT)
+                .addBinding(
+                    7,
+                    VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                    VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < globalDescriptorSets.size(); i++) {
             auto bufferInfo = uboBuffers[i]->descriptorInfo();
+            auto lightInfo = lightBuffers[i]->descriptorInfo();
             // The lighting maps are generated once and never change, so they
             // are written alongside the per-frame buffer and left alone.
             auto irradianceInfo = environmentLighting.irradianceInfo();
@@ -181,6 +226,7 @@ namespace ege {
                 .writeImage(2, &prefilteredInfo)
                 .writeImage(3, &brdfLutInfo)
                 .writeImage(4, &environmentInfo)
+                .writeBuffer(6, &lightInfo)
                 .build(globalDescriptorSets[i]);
         }
 
@@ -214,6 +260,15 @@ namespace ege {
         constexpr float shadowNearPlane = 0.1f;
         constexpr float shadowDistance = 40.f;
         ShadowCascadeSet cascades{};
+
+        // How far out lights are clustered. The near plane matches the
+        // camera's; the far one is where a point light's inverse-square
+        // falloff has long since stopped being visible, and clustering past
+        // it would spend depth slices on nothing.
+        constexpr float clusterNearPlane = 0.1f;
+        constexpr float clusterFarPlane = 100.f;
+
+        ClusterLightSystem clusterLights{device, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
         BloomSystem bloom{device, hdrFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
@@ -456,21 +511,52 @@ namespace ege {
                     }
                     ubo.cascadeCount = static_cast<int>(cascades.count);
                 });
-                // Lights are entities now, gathered per frame rather than
-                // held in a parallel list. The cap is the shader's array size;
-                // clustered shading in Phase 9 is what removes it.
-                int lightIndex = 0;
+                // Lights are entities, gathered per frame into a storage
+                // buffer. No fragment loops over this many - the culling pass
+                // reduces it to the few that reach each cluster - so the cap
+                // here bounds allocation rather than shading cost.
+                std::vector<GpuPointLight> sceneLights;
+                sceneLights.reserve(maxSceneLights);
                 world.each<Transform, PointLight>(
                     [&](Entity, Transform& transform, PointLight& light) {
-                        if (lightIndex >= maxPointLights) {
+                        if (sceneLights.size() >= maxSceneLights) {
                             return;
                         }
-                        ubo.pointLights[lightIndex].position =
-                            glm::vec4{transform.translation, 1.f};
-                        ubo.pointLights[lightIndex].color = glm::vec4{light.color, light.intensity};
-                        lightIndex++;
+                        GpuPointLight gpuLight{};
+                        // The cull radius rides in position.w, which is where
+                        // the culling shader reads it: the light's own range,
+                        // the distance past which it is treated as
+                        // contributing nothing.
+                        gpuLight.position = glm::vec4{transform.translation, light.range};
+                        gpuLight.color = glm::vec4{light.color, light.intensity};
+                        sceneLights.push_back(gpuLight);
                     });
-                ubo.numLights = lightIndex;
+                ubo.numLights = static_cast<int>(sceneLights.size());
+
+                if (!sceneLights.empty()) {
+                    lightBuffers[frameIndex]->writeToBuffer(
+                        sceneLights.data(), sceneLights.size() * sizeof(GpuPointLight));
+                    lightBuffers[frameIndex]->flush();
+                }
+
+                // How the froxel grid is cut, and what the shader needs to
+                // find its own cell in it.
+                ClusterGrid clusterGrid{};
+                clusterGrid.nearPlane = clusterNearPlane;
+                clusterGrid.farPlane = clusterFarPlane;
+                const glm::vec2 sliceScaleBias = clusterSliceScaleBias(clusterGrid);
+                ubo.clusterParams = glm::vec4{
+                    sliceScaleBias.x,
+                    sliceScaleBias.y,
+                    clusterGrid.nearPlane,
+                    clusterGrid.farPlane};
+                ubo.clusterGrid =
+                    glm::uvec4{clusterGrid.x, clusterGrid.y, clusterGrid.z, maxLightsPerCluster};
+                ubo.screenSize = glm::vec4{
+                    static_cast<float>(renderExtent.width),
+                    static_cast<float>(renderExtent.height),
+                    0.f,
+                    0.f};
 
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
@@ -504,6 +590,15 @@ namespace ege {
                 const uint32_t cascadeCount = static_cast<uint32_t>(std::max(ubo.cascadeCount, 1));
                 shadowMapDesc.layers = cascadeCount;
                 FrameGraphResource shadowMap = graph.createTransient("shadowMap", shadowMapDesc);
+
+                // Where the culling pass puts each cluster's light list. A
+                // graph resource rather than a buffer of our own, so the
+                // barrier between writing it in compute and reading it in the
+                // scene's fragment shader is derived like every other.
+                TransientBufferDesc clusterListDesc{};
+                clusterListDesc.size = ClusterLightSystem::clusterBufferSize();
+                FrameGraphResource clusterList =
+                    graph.createTransientBuffer("clusterLights", clusterListDesc);
 
                 // Bloom works at half resolution: it is blurred anyway, and
                 // half the pixels means a quarter of the blur cost.
@@ -570,10 +665,34 @@ namespace ege {
                         });
                 }
 
+                // Light culling, before anything shades. Not a raster pass at
+                // all - it declares no attachment, so the graph runs it
+                // outside vkCmdBeginRendering and derives the compute-to-
+                // fragment dependency on the buffer by itself.
+                graph.addPass(
+                    "lightCull",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.write(clusterList, ResourceAccess::storageWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        VkDescriptorBufferInfo clusterInfo{};
+                        clusterInfo.buffer = resolved.buffer(clusterList);
+                        clusterInfo.offset = 0;
+                        clusterInfo.range = resolved.bufferSize(clusterList);
+
+                        clusterLights.cull(
+                            cmd,
+                            frameIndex,
+                            uboBuffers[frameIndex]->descriptorInfo(),
+                            lightBuffers[frameIndex]->descriptorInfo(),
+                            clusterInfo);
+                    });
+
                 graph.addPass(
                     "scene",
                     [&](FrameGraph::PassBuilder& pass) {
                         pass.read(shadowMap, ResourceAccess::sampled);
+                        pass.read(clusterList, ResourceAccess::storageRead);
                         pass.write(sceneColor, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
                     },
@@ -585,8 +704,20 @@ namespace ege {
                         shadowInfo.sampler = shadowSystem.comparisonSampler();
                         shadowInfo.imageView = resolved.view(shadowMap);
                         shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+                        VkDescriptorBufferInfo clusterInfo{};
+                        clusterInfo.buffer = resolved.buffer(clusterList);
+                        clusterInfo.offset = 0;
+                        clusterInfo.range = resolved.bufferSize(clusterList);
+
+                        // Both writes happen here, before anything in this
+                        // frame binds the set: updating a descriptor set that
+                        // a command buffer has already bound invalidates the
+                        // command buffer, so every per-frame write to this set
+                        // has to land before its first use.
                         DescriptorWriter(*globalSetLayout, *globalPool)
                             .writeImage(5, &shadowInfo)
+                            .writeBuffer(7, &clusterInfo)
                             .overwrite(globalDescriptorSets[frameIndex]);
 
                         frameInfo.commandBuffer = cmd;
@@ -954,6 +1085,44 @@ namespace ege {
         addLight("KeyLight", {-1.5f, -1.6f, -1.2f}, {1.f, 0.95f, 0.85f}, 6.f);
         addLight("FillLight", {1.8f, -1.2f, 0.8f}, {0.4f, 0.6f, 1.f}, 5.f);
         addLight("RimLight", {0.f, -0.9f, 2.2f}, {1.f, 0.5f, 0.3f}, 3.f);
+
+        // A bank of small accent lights over the floor, well past the sixteen
+        // the forward shader used to cap the scene at. They are here to be
+        // counted as much as to be seen: with clustered shading a fragment
+        // loops the lights that reach it rather than every light in the
+        // scene, and a demo with three lights demonstrates nothing about
+        // that. Short range and low intensity so they read as pools on the
+        // floor rather than washing out the key/fill/rim composition above -
+        // and a short range is also what gives the culling something to do,
+        // since a light that reaches everywhere lands in every cluster.
+        {
+            constexpr int columns = 8;
+            constexpr int rows = 5;
+            constexpr float rangeMetres = 1.2f;
+            int index = 0;
+            for (int row = 0; row < rows; row++) {
+                for (int column = 0; column < columns; column++) {
+                    const float x =
+                        -3.5f + 7.f * static_cast<float>(column) / static_cast<float>(columns - 1);
+                    const float z =
+                        -1.5f + 5.5f * static_cast<float>(row) / static_cast<float>(rows - 1);
+                    // Around the hue circle, so neighbouring pools differ and
+                    // the boundaries between clusters would be obvious if the
+                    // assignment were wrong.
+                    const float hue = glm::two_pi<float>() * static_cast<float>(index) /
+                                      static_cast<float>(columns * rows);
+                    const glm::vec3 color{
+                        0.5f + 0.5f * std::cos(hue),
+                        0.5f + 0.5f * std::cos(hue + glm::two_pi<float>() / 3.f),
+                        0.5f + 0.5f * std::cos(hue - glm::two_pi<float>() / 3.f)};
+
+                    Entity accent =
+                        addLight("Accent" + std::to_string(index), {x, -0.32f, z}, color, 0.34f);
+                    accent.fetch<PointLight>().range = rangeMetres;
+                    index++;
+                }
+            }
+        }
 
         // The sun. Its direction is the negation of the sky shader's sun
         // position, so the disk in the environment, the direct light and the

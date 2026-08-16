@@ -418,7 +418,13 @@ namespace ege {
 
         uint32_t i = 0;
         for (const auto& queueFamily : queueFamilies) {
-            if (queueFamily.queueCount > 0 && queueFamily.queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+            // Compute as well as graphics, because light culling dispatches
+            // on this same queue. The spec does not promise every graphics
+            // family also does compute, but it does promise at least one
+            // family somewhere supports both - so requiring it here narrows
+            // which family is picked rather than which devices qualify.
+            constexpr VkQueueFlags required = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT;
+            if (queueFamily.queueCount > 0 && (queueFamily.queueFlags & required) == required) {
                 indices.graphicsFamily = i;
                 indices.graphicsFamilyHasValue = true;
             }

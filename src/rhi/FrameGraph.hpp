@@ -39,10 +39,17 @@ namespace ege {
 
     // How a pass touches a resource. The graph maps these to layouts, stages
     // and access masks; passes never spell Vulkan synchronization themselves.
+    //
+    // Each value names a stage as well as an operation, because that is what
+    // the graph needs to build a dependency and there is no case yet where the
+    // same operation happens at two stages. A read at a new stage is a new
+    // value here rather than an argument at the call site.
     enum class ResourceAccess {
-        colorWrite,  // rendered to as a color attachment
-        depthWrite,  // rendered to as the depth attachment
-        sampled,     // read in a fragment shader through a sampler
+        colorWrite,    // rendered to as a color attachment
+        depthWrite,    // rendered to as the depth attachment
+        sampled,       // read in a fragment shader through a sampler
+        storageWrite,  // written by a compute shader as a storage buffer
+        storageRead,   // read in a fragment shader as a storage buffer
     };
 
     // A GPU image that lives for (at most) one frame. Extent {0,0} means
@@ -59,6 +66,15 @@ namespace ege {
         uint32_t layers = 1;
     };
 
+    // A GPU buffer that lives for (at most) one frame, in device-local memory
+    // and never mapped: it is written and read by shaders, not by the host.
+    // Light culling is the first caller - a compute pass fills the per-cluster
+    // light lists and the scene pass reads them - and anything else that hands
+    // shader-computed data to a later pass is the same shape.
+    struct TransientBufferDesc {
+        VkDeviceSize size = 0;
+    };
+
     class FrameGraph;
 
     // Resolved physical resources, handed to a pass's execute callback.
@@ -66,6 +82,8 @@ namespace ege {
     public:
         VkImageView view(FrameGraphResource resource) const;
         VkExtent2D extent(FrameGraphResource resource) const;
+        VkBuffer buffer(FrameGraphResource resource) const;
+        VkDeviceSize bufferSize(FrameGraphResource resource) const;
 
     private:
         friend class FrameGraph;
@@ -86,6 +104,8 @@ namespace ege {
         void beginFrame(VkExtent2D outputExtent);
 
         FrameGraphResource createTransient(std::string name, const TransientImageDesc& desc);
+
+        FrameGraphResource createTransientBuffer(std::string name, const TransientBufferDesc& desc);
 
         // Brings an externally owned image (the swapchain image) into the
         // graph. Its content on entry is discardable; after the last pass that
@@ -202,10 +222,18 @@ namespace ege {
             VkAccessFlags2 access = VK_ACCESS_2_NONE;
         };
 
+        enum class ResourceKind { image, buffer };
+
         struct Resource {
             std::string name;
+            ResourceKind kind = ResourceKind::image;
             TransientImageDesc desc;
+            TransientBufferDesc bufferDesc;
             bool imported = false;
+            // Whether any pass has touched it yet this frame. A buffer has no
+            // layout, so this is the only signal that a barrier is owed to
+            // whatever the recycled physical buffer was doing last frame.
+            bool firstTouch = true;
             // Any layer written yet, which is what makes a read legal.
             bool written = false;
             // Written per layer, which is what decides clear versus load: the
@@ -222,6 +250,7 @@ namespace ege {
             // Filled during compile / execute.
             ResourceState state{};
             VkImageUsageFlags usage = 0;
+            VkBufferUsageFlags bufferUsage = 0;
             uint32_t physicalIndex = UINT32_MAX;
         };
 
@@ -260,9 +289,28 @@ namespace ege {
             VkAccessFlags2 lastWriteAccess = VK_ACCESS_2_NONE;
         };
 
+        // A cached GPU buffer, reused frame to frame exactly as the images are.
+        struct PhysicalBuffer {
+            VkBuffer buffer = VK_NULL_HANDLE;
+            VmaAllocation allocation = VK_NULL_HANDLE;
+            VkDeviceSize size = 0;
+            VkBufferUsageFlags usage = 0;
+            uint64_t lastFrameUsed = 0;
+            bool usedThisFrame = false;
+            VkPipelineStageFlags2 lastStage = VK_PIPELINE_STAGE_2_NONE;
+            VkAccessFlags2 lastWriteAccess = VK_ACCESS_2_NONE;
+        };
+
+        // Refuses a buffer access on an image and the reverse, at declaration
+        // rather than at execution: getting it wrong otherwise surfaces as a
+        // missing barrier, which is the kind of bug that works on one driver.
+        void checkAccessKind(FrameGraphResource resource, ResourceAccess access) const;
+
         VkExtent2D resolveExtent(const Resource& resource) const;
         uint32_t acquirePhysicalImage(Device& deviceRef, Resource& resource);
         void destroyPhysicalImage(PhysicalImage& physical);
+        uint32_t acquirePhysicalBuffer(Device& deviceRef, Resource& resource);
+        void destroyPhysicalBuffer(PhysicalBuffer& physical);
 
         std::vector<Resource> resources;
         std::vector<Pass> passes;
@@ -271,6 +319,7 @@ namespace ege {
         std::vector<bool> passLive;
 
         std::vector<PhysicalImage> physicalImages;
+        std::vector<PhysicalBuffer> physicalBuffers;
         VkExtent2D outputExtent{0, 0};
         uint64_t frameCounter = 0;
         bool compiledThisFrame = false;

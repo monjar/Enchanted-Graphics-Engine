@@ -6,20 +6,21 @@
 
 namespace ege {
 
-    // Maximum lights the forward shader loops over.
-    //
-    // A fixed array in the uniform buffer is the simple forward approach and it
-    // does not scale: every fragment iterates every light. Clustered shading in
-    // Phase 9 is what removes the ceiling.
-    inline constexpr int maxPointLights = 16;
-
     // Point light as the GPU sees it.
     //
     // Both members are vec4 even though position needs only three components,
-    // because std140 rounds a vec3 up to a vec4 anyway - writing it as vec3
-    // just makes the padding invisible and the layout easy to get wrong.
+    // because std430 rounds a vec3 up to a vec4 anyway - writing it as vec3
+    // just makes the padding invisible and the layout easy to get wrong. The
+    // spare component earns its keep: it carries the cull radius the light
+    // culling pass tests clusters against.
+    //
+    // There used to be a `maxPointLights = 16` beside this, the length of a
+    // fixed array in the uniform block that every fragment looped over. The
+    // lights now live in a storage buffer and no fragment loops over all of
+    // them, so the ceiling is gone rather than raised; what bounds the buffer
+    // is maxSceneLights in ClusterGrid.hpp, which costs memory and not time.
     struct GpuPointLight {
-        glm::vec4 position{0.f};  // w unused
+        glm::vec4 position{0.f};  // xyz world position, w cull radius
         glm::vec4 color{1.f};     // w is intensity
     };
 

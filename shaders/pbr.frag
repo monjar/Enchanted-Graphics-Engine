@@ -1,4 +1,5 @@
 #version 450
+#extension GL_GOOGLE_include_directive : require
 
 layout(location = 0) in vec3 fragColor;
 layout(location = 1) in vec3 fragPosWorld;
@@ -7,33 +8,22 @@ layout(location = 3) in vec2 fragUv;
 
 layout(location = 0) out vec4 outColor;
 
-struct PointLight {
-    vec4 position;
-    vec4 color;
-};
-
-layout(set = 0, binding = 0) uniform GlobalUbo {
-    mat4 projection;
-    mat4 view;
-    mat4 inverseView;
-    mat4 inverseProjection;
-    // One per cascade: the matrix each shadow map was rendered through.
-    mat4 sunViewProjection[4];
-    // Where each cascade ends, as a distance along the camera's forward
-    // axis. Beyond the last one nothing is shadowed.
-    vec4 cascadeSplits;
-    vec4 sunDirection;  // xyz: direction the light travels; w unused
-    vec4 sunColor;      // rgb color, w intensity; 0 disables the sun
-    vec4 ambientLightColor;
-    PointLight pointLights[16];
-    int numLights;
-    int cascadeCount;
-} ubo;
+#include "global_ubo.glsl"
 
 layout(set = 0, binding = 1) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 2) uniform samplerCube prefilteredMap;
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;
 layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;
+
+layout(std430, set = 0, binding = 6) readonly buffer LightBuffer {
+    PointLight lights[];
+} lightBuffer;
+
+// Per-cluster light lists, filled by light_cull.comp: a count followed by
+// that many indices, repeated at a fixed stride.
+layout(std430, set = 0, binding = 7) readonly buffer ClusterBuffer {
+    uint data[];
+} clusterBuffer;
 
 layout(set = 1, binding = 0) uniform sampler2D baseColorMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
@@ -127,9 +117,13 @@ int cascadeFor(float viewDepth) {
 }
 
 float sunShadowFactor(vec3 worldPos) {
-    // View depth, positive going away from the camera. The engine's view
-    // matrix looks down -Z, so the distance is the negated view-space z.
-    float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
+    // View depth: distance along the camera's forward axis, which is the
+    // measure the splits were computed in. This engine's camera looks down
+    // +Z - its projection puts w = z rather than w = -z - so the view-space
+    // z is already that distance. Negating it, as the more common -Z
+    // convention would need, makes every depth negative, sends every fragment
+    // to cascade 0, and quietly unshadows everything past the first split.
+    float viewDepth = (ubo.view * vec4(worldPos, 1.0)).z;
 
     int cascade = cascadeFor(viewDepth);
     float shadow = sampleCascade(cascade, worldPos);
@@ -149,6 +143,30 @@ float sunShadowFactor(vec3 worldPos) {
         }
     }
     return shadow;
+}
+
+// Which cluster this fragment sits in.
+//
+// The tile comes from the pixel's own position on screen: gl_FragCoord has
+// its origin at the top-left and Vulkan's NDC y points down, so the screen
+// fraction here is the same one the culling shader turned into NDC. The slice
+// comes from view depth through the scale-and-bias form of the exponential
+// spacing, which is two instructions rather than a division and two
+// logarithms. See ClusterGrid.cpp, where both are pinned by tests.
+uint clusterForFragment(vec3 worldPos) {
+    vec2 fraction = gl_FragCoord.xy / max(ubo.screenSize.xy, vec2(1.0));
+    uvec2 tile = uvec2(fraction * vec2(ubo.clusterGrid.xy));
+    tile = min(tile, ubo.clusterGrid.xy - 1u);
+
+    // Positive distance along the camera's forward axis - the same measure
+    // the cascades use, and for the same reason it is not negated here.
+    float viewDepth = (ubo.view * vec4(worldPos, 1.0)).z;
+    float slice =
+        clamp(log2(max(viewDepth, 1e-6)) * ubo.clusterParams.x + ubo.clusterParams.y,
+              0.0,
+              float(ubo.clusterGrid.z - 1u));
+
+    return tile.x + ubo.clusterGrid.x * (tile.y + ubo.clusterGrid.y * uint(slice));
 }
 
 // One direction's worth of Cook-Torrance, shared by the sun and the point
@@ -223,13 +241,22 @@ void main() {
         Lo += directLight(N, V, L, radiance, albedo, metallic, roughness, F0);
     }
 
-    for (int i = 0; i < ubo.numLights; i++) {
-        vec3 toLight = ubo.pointLights[i].position.xyz - fragPosWorld;
+    // Point lights, from this fragment's own cluster rather than from the
+    // whole scene. The loop bound is how many lights reach here, not how many
+    // exist - which is the entire reason the grid exists.
+    uint cluster = clusterForFragment(fragPosWorld);
+    uint base = cluster * (ubo.clusterGrid.w + 1u);
+    uint count = min(clusterBuffer.data[base], ubo.clusterGrid.w);
+
+    for (uint slot = 0u; slot < count; slot++) {
+        PointLight light = lightBuffer.lights[clusterBuffer.data[base + 1u + slot]];
+
+        vec3 toLight = light.position.xyz - fragPosWorld;
         float distanceSquared = max(dot(toLight, toLight), 1e-6);
         vec3 L = toLight * inversesqrt(distanceSquared);
 
         float attenuation = 1.0 / distanceSquared;
-        vec3 radiance = ubo.pointLights[i].color.rgb * ubo.pointLights[i].color.w * attenuation;
+        vec3 radiance = light.color.rgb * light.color.w * attenuation;
 
         Lo += directLight(N, V, L, radiance, albedo, metallic, roughness, F0);
     }

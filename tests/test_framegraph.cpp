@@ -468,3 +468,209 @@ TEST_CASE("a layer the image does not have is refused") {
             noopExecute),
         std::logic_error);
 }
+
+// ---- storage buffers -------------------------------------------------------
+//
+// A compute pass filling a buffer that a raster pass then reads is the shape
+// light culling has. The graph has to notice that dependency and separate the
+// two, and it has to do so without a layout to key on - which is what makes
+// buffers a different case from every image above rather than the same one.
+
+namespace {
+
+    ege::TransientBufferDesc lightListDesc() {
+        ege::TransientBufferDesc desc{};
+        desc.size = 4096;
+        return desc;
+    }
+
+    // A cull pass writing a buffer, a scene pass reading it while writing the
+    // backbuffer. The minimal graph in which a buffer dependency exists.
+    struct CullAndShade {
+        FrameGraphResource lightList;
+        FrameGraphResource backbuffer;
+    };
+
+    CullAndShade declareCullAndShade(FrameGraph& graph) {
+        CullAndShade frame{};
+        frame.lightList = graph.createTransientBuffer("lightList", lightListDesc());
+        frame.backbuffer = importBackbuffer(graph);
+
+        graph.addPass(
+            "cull",
+            [&](FrameGraph::PassBuilder& pass) {
+                pass.write(frame.lightList, ResourceAccess::storageWrite);
+            },
+            noopExecute);
+
+        graph.addPass(
+            "shade",
+            [&](FrameGraph::PassBuilder& pass) {
+                pass.read(frame.lightList, ResourceAccess::storageRead);
+                pass.write(frame.backbuffer, ResourceAccess::colorWrite);
+            },
+            noopExecute);
+
+        return frame;
+    }
+
+}  // namespace
+
+TEST_CASE("a compute pass feeding a raster pass survives culling") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    declareCullAndShade(graph);
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    CHECK(graph.passName(graph.compiledPasses()[0].passIndex) == "cull");
+    CHECK(graph.passName(graph.compiledPasses()[1].passIndex) == "shade");
+}
+
+TEST_CASE("a buffer nobody reads takes its writer with it") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource lightList = graph.createTransientBuffer("lightList", lightListDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "cull",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(lightList, ResourceAccess::storageWrite); },
+        noopExecute);
+    graph.addPass(
+        "present",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(backbuffer, ResourceAccess::colorWrite); },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 1);
+    CHECK(graph.passName(graph.compiledPasses()[0].passIndex) == "present");
+}
+
+TEST_CASE("the write-then-read of a buffer is separated by a barrier") {
+    // Without this the fragment shader reads a list the compute shader has not
+    // finished writing - which on a real driver is a race that usually looks
+    // like nothing at all until the scene gets busy enough to expose it.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    declareCullAndShade(graph);
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const auto& shadeBarriers = graph.compiledPasses()[1].barriers;
+
+    const bool chained = std::any_of(
+        shadeBarriers.begin(), shadeBarriers.end(), [](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.srcStage == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+                   barrier.srcAccess == VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT &&
+                   barrier.dstStage == VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT &&
+                   barrier.dstAccess == VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        });
+    CHECK(chained);
+}
+
+TEST_CASE("a buffer barrier asks for no layout transition") {
+    // Buffers have no layout. A planned barrier that named one would be
+    // recorded against an image barrier struct it does not belong in.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    const CullAndShade frame = declareCullAndShade(graph);
+    graph.compile();
+
+    for (const FrameGraph::CompiledPass& pass : graph.compiledPasses()) {
+        for (const FrameGraph::PlannedBarrier& barrier : pass.barriers) {
+            if (barrier.resourceIndex != frame.lightList.index) {
+                continue;
+            }
+            CHECK(barrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+            CHECK(barrier.newLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+        }
+    }
+}
+
+TEST_CASE("the first touch of a recycled buffer still owes a barrier") {
+    // The cross-frame hazard: this frame's compute write against last frame's
+    // fragment read of the same physical buffer. An image gets this barrier
+    // for free because its layout starts UNDEFINED and has to change; a buffer
+    // has no layout, so nothing would fire without asking for it explicitly.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    const CullAndShade frame = declareCullAndShade(graph);
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const auto& cullBarriers = graph.compiledPasses()[0].barriers;
+
+    const bool firstUse = std::any_of(
+        cullBarriers.begin(), cullBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == frame.lightList.index && barrier.firstUse;
+        });
+    CHECK(firstUse);
+}
+
+TEST_CASE("a buffer write produces no attachment") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    declareCullAndShade(graph);
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const FrameGraph::CompiledPass& cull = graph.compiledPasses()[0];
+    CHECK(cull.colorAttachments.empty());
+    CHECK_FALSE(cull.depthAttachment.has_value());
+}
+
+TEST_CASE("reading a buffer nothing has written is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource lightList = graph.createTransientBuffer("lightList", lightListDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "shade",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(lightList, ResourceAccess::storageRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    CHECK_THROWS_AS(graph.compile(), std::logic_error);
+}
+
+TEST_CASE("an image access on a buffer is refused, and the reverse") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource lightList = graph.createTransientBuffer("lightList", lightListDesc());
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    importBackbuffer(graph);
+
+    CHECK_THROWS_AS(
+        graph.addPass(
+            "buffer as attachment",
+            [&](FrameGraph::PassBuilder& pass) {
+                pass.write(lightList, ResourceAccess::colorWrite);
+            },
+            noopExecute),
+        std::logic_error);
+
+    CHECK_THROWS_AS(
+        graph.addPass(
+            "image as storage",
+            [&](FrameGraph::PassBuilder& pass) {
+                pass.write(sceneColor, ResourceAccess::storageWrite);
+            },
+            noopExecute),
+        std::logic_error);
+}
+
+TEST_CASE("a transient buffer with no size is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    CHECK_THROWS_AS(
+        graph.createTransientBuffer("empty", ege::TransientBufferDesc{}), std::logic_error);
+}
