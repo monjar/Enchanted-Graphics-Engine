@@ -20,7 +20,10 @@ exactly what image-based lighting does. The sun casts real shadows through
 depth-only frame graph passes — four cascades fitted to the camera's own
 frustum, so the texels follow the viewer rather than the scene's bounding
 box — and its direction, the disk in the sky and the shadows all agree
-because they share one definition. The environment, its
+because they share one definition. Point lights cast shadows too, each
+through a cube covering the whole sphere around it: six depth passes into
+six layers of one image, sampled by direction so the hardware picks the face
+and filters across the seams. The environment, its
 irradiance and prefiltered specular convolutions and the BRDF lookup table
 are all computed on the GPU at startup, so a clean checkout still ships no
 binary assets.
@@ -269,11 +272,11 @@ src/
   physics/      the PhysicsWorld interface, its Jolt backend, rigid bodies,
                 colliders and the ECS sync
   rhi/          device, swapchain, graphics and compute pipelines, buffer,
-                descriptors, textures, frame graph (layered images and
+                descriptors, textures, frame graph (layered and cube images,
                 transient buffers), frame recording
   render/       renderer, model, camera, materials, lights, bounds,
-                environment lighting, PBR, shadows, clustered light culling,
-                skybox, bloom and post-process
+                environment lighting, PBR, cascaded and cube shadows,
+                clustered light culling, skybox, bloom and post-process
   scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
                 are shared declarations, included rather than compiled
