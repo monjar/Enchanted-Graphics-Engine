@@ -11,7 +11,9 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <stdexcept>
+#include <string>
 
 using ege::FrameGraph;
 using ege::FrameGraphResource;
@@ -322,4 +324,147 @@ TEST_CASE("beginFrame forgets the previous frame's declarations") {
     // The untouched backbuffer still has to reach its final layout.
     CHECK(graph.finalBarriers().size() == 1);
     CHECK(graph.finalBarriers()[0].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+}
+
+TEST_CASE("each layer of an array image clears on its own first write") {
+    // The property cascades depend on: writing layer 0 must not make layer 1
+    // load whatever layer 0 left, because layer 1 has never been touched this
+    // frame. Keying clear-versus-load on the image rather than the layer is
+    // the obvious mistake, and it shows up as later cascades inheriting the
+    // first one's depth.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    TransientImageDesc cascades = depthDesc();
+    cascades.extent = {1024, 1024};
+    cascades.layers = 3;
+    FrameGraphResource shadowMap = graph.createTransient("shadowMap", cascades);
+
+    for (uint32_t layer = 0; layer < 3; layer++) {
+        graph.addPass(
+            "cascade" + std::to_string(layer),
+            [&, layer](FrameGraph::PassBuilder& pass) {
+                pass.write(shadowMap, ResourceAccess::depthWrite, layer);
+            },
+            noopExecute);
+    }
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(shadowMap, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+    REQUIRE(graph.compiledPasses().size() == 4);
+
+    for (uint32_t layer = 0; layer < 3; layer++) {
+        const auto& depth = graph.compiledPasses()[layer].depthAttachment;
+        REQUIRE(depth.has_value());
+        CHECK(depth->layer == layer);
+        CHECK(depth->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+        // Something samples it afterwards, so every layer is kept.
+        CHECK(depth->storeOp == VK_ATTACHMENT_STORE_OP_STORE);
+    }
+}
+
+TEST_CASE("writing one layer twice loads the second time") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    TransientImageDesc cascades = depthDesc();
+    cascades.layers = 2;
+    FrameGraphResource shadowMap = graph.createTransient("shadowMap", cascades);
+
+    for (int pass = 0; pass < 2; pass++) {
+        graph.addPass(
+            "again" + std::to_string(pass),
+            [&](FrameGraph::PassBuilder& builder) {
+                builder.write(shadowMap, ResourceAccess::depthWrite, 1);
+            },
+            noopExecute);
+    }
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(shadowMap, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+    REQUIRE(graph.compiledPasses().size() == 3);
+    CHECK(graph.compiledPasses()[0].depthAttachment->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    CHECK(graph.compiledPasses()[1].depthAttachment->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);
+}
+
+TEST_CASE("consecutive layer writes are separated by a barrier") {
+    // Layout is tracked per image, so back-to-back writes to different layers
+    // are still a write-after-write on the same image and must be ordered.
+    // Only the first is a first use.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    TransientImageDesc cascades = depthDesc();
+    cascades.layers = 2;
+    FrameGraphResource shadowMap = graph.createTransient("shadowMap", cascades);
+
+    for (uint32_t layer = 0; layer < 2; layer++) {
+        graph.addPass(
+            "cascade" + std::to_string(layer),
+            [&, layer](FrameGraph::PassBuilder& pass) {
+                pass.write(shadowMap, ResourceAccess::depthWrite, layer);
+            },
+            noopExecute);
+    }
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(shadowMap, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses()[0].barriers.size() == 1);
+    CHECK(graph.compiledPasses()[0].barriers[0].firstUse);
+    CHECK(graph.compiledPasses()[0].barriers[0].oldLayout == VK_IMAGE_LAYOUT_UNDEFINED);
+
+    REQUIRE(graph.compiledPasses()[1].barriers.size() == 1);
+    CHECK_FALSE(graph.compiledPasses()[1].barriers[0].firstUse);
+    CHECK(
+        graph.compiledPasses()[1].barriers[0].oldLayout ==
+        VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+    // And the render-to-sample transition still happens before the reader.
+    const auto& sceneBarriers = graph.compiledPasses()[2].barriers;
+    const bool becomesReadable = std::any_of(
+        sceneBarriers.begin(), sceneBarriers.end(), [](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        });
+    CHECK(becomesReadable);
+}
+
+TEST_CASE("a layer the image does not have is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    importBackbuffer(graph);
+
+    TransientImageDesc cascades = depthDesc();
+    cascades.layers = 2;
+    FrameGraphResource shadowMap = graph.createTransient("shadowMap", cascades);
+
+    CHECK_THROWS_AS(
+        graph.addPass(
+            "past the end",
+            [&](FrameGraph::PassBuilder& pass) {
+                pass.write(shadowMap, ResourceAccess::depthWrite, 2);
+            },
+            noopExecute),
+        std::logic_error);
 }

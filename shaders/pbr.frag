@@ -17,18 +17,23 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     mat4 view;
     mat4 inverseView;
     mat4 inverseProjection;
-    mat4 sunViewProjection;
+    // One per cascade: the matrix each shadow map was rendered through.
+    mat4 sunViewProjection[4];
+    // Where each cascade ends, as a distance along the camera's forward
+    // axis. Beyond the last one nothing is shadowed.
+    vec4 cascadeSplits;
     vec4 sunDirection;  // xyz: direction the light travels; w unused
     vec4 sunColor;      // rgb color, w intensity; 0 disables the sun
     vec4 ambientLightColor;
     PointLight pointLights[16];
     int numLights;
+    int cascadeCount;
 } ubo;
 
 layout(set = 0, binding = 1) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 2) uniform samplerCube prefilteredMap;
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;
-layout(set = 0, binding = 5) uniform sampler2DShadow shadowMap;
+layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;
 
 layout(set = 1, binding = 0) uniform sampler2D baseColorMap;
 layout(set = 1, binding = 1) uniform sampler2D normalMap;
@@ -86,8 +91,8 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 // How much sun reaches this point: 0 fully shadowed, 1 fully lit. A 3x3 PCF
 // kernel over the comparison sampler, each tap already 2x2 filtered by the
 // hardware, so the penumbra is 4x4-soft for nine taps.
-float sunShadowFactor(vec3 worldPos) {
-    vec4 lightClip = ubo.sunViewProjection * vec4(worldPos, 1.0);
+float sampleCascade(int cascade, vec3 worldPos) {
+    vec4 lightClip = ubo.sunViewProjection[cascade] * vec4(worldPos, 1.0);
     vec3 lightNdc = lightClip.xyz / lightClip.w;
 
     // Behind the light's far plane or in front of its near plane: call it
@@ -98,15 +103,52 @@ float sunShadowFactor(vec3 worldPos) {
     }
 
     vec2 uv = lightNdc.xy * 0.5 + 0.5;
-    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0));
+    vec2 texelSize = 1.0 / vec2(textureSize(shadowMap, 0).xy);
 
     float shadow = 0.0;
     for (int x = -1; x <= 1; x++) {
         for (int y = -1; y <= 1; y++) {
-            shadow += texture(shadowMap, vec3(uv + vec2(x, y) * texelSize, lightNdc.z));
+            shadow += texture(
+                shadowMap, vec4(uv + vec2(x, y) * texelSize, float(cascade), lightNdc.z));
         }
     }
     return shadow / 9.0;
+}
+
+// Which cascade covers this fragment, chosen by how far down the camera's
+// forward axis it sits - the same measure the splits were computed against.
+int cascadeFor(float viewDepth) {
+    for (int i = 0; i < ubo.cascadeCount - 1; i++) {
+        if (viewDepth < ubo.cascadeSplits[i]) {
+            return i;
+        }
+    }
+    return ubo.cascadeCount - 1;
+}
+
+float sunShadowFactor(vec3 worldPos) {
+    // View depth, positive going away from the camera. The engine's view
+    // matrix looks down -Z, so the distance is the negated view-space z.
+    float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
+
+    int cascade = cascadeFor(viewDepth);
+    float shadow = sampleCascade(cascade, worldPos);
+
+    // Fade across the seam into the next cascade. Two maps of different texel
+    // density meeting at a hard line puts a visible edge across the ground
+    // that has nothing to do with the scene; blending over the last tenth of
+    // a cascade hides the transition at the cost of two lookups in a thin
+    // band.
+    if (cascade < ubo.cascadeCount - 1) {
+        float end = ubo.cascadeSplits[cascade];
+        float start = cascade == 0 ? 0.0 : ubo.cascadeSplits[cascade - 1];
+        float band = (end - start) * 0.1;
+        float into = (viewDepth - (end - band)) / max(band, 1e-4);
+        if (into > 0.0) {
+            shadow = mix(shadow, sampleCascade(cascade + 1, worldPos), clamp(into, 0.0, 1.0));
+        }
+    }
+    return shadow;
 }
 
 // One direction's worth of Cook-Torrance, shared by the sun and the point
