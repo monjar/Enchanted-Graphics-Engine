@@ -68,14 +68,7 @@ namespace ege {
 
         pipeline->bind(commandBuffer);
         vkCmdBindDescriptorSets(
-            commandBuffer,
-            VK_PIPELINE_BIND_POINT_COMPUTE,
-            pipelineLayout,
-            0,
-            1,
-            &set,
-            0,
-            nullptr);
+            commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &set, 0, nullptr);
         // One invocation per cluster. The grid is fixed, so this dispatch is
         // the same size every frame regardless of how many lights there are -
         // the light count only changes how long each invocation's loop is.

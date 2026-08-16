@@ -2,7 +2,7 @@
 
 A Vulkan game engine in C++17, built from the renderer up.
 
-![The demo scene: metal spheres sweeping roughness, two dielectrics, an imported torus, a script-driven sheet and a crate tower awaiting its boulder, lit by three point lights and a sun](docs/images/demo-scene.png)
+![The demo scene: metal spheres sweeping roughness, two dielectrics, an imported torus, a script-driven sheet and a crate tower awaiting its boulder, lit by a sun and forty-three point lights](docs/images/demo-scene.png)
 
 A Vulkan 1.3 forward renderer — dynamic rendering, a frame graph, a
 metallic-roughness PBR pipeline with image-based lighting, shading into a
@@ -11,8 +11,9 @@ system, runtime reflection, textures with mip generation, a job system, a
 fixed-timestep simulation clock and rigid-body physics.
 
 The image above is the demo scene: five metal spheres sweeping roughness from
-near-mirror to fully rough, plus two dielectrics, lit by three point lights
-and a low sun under a procedurally generated evening sky. The smoothest metal
+near-mirror to fully rough, plus two dielectrics, lit by a low sun under a
+procedurally generated evening sky, three lights composing the shot and a
+bank of forty short-range accent lights over the floor. The smoothest metal
 reflects that sky — in earlier builds it was nearly black, because a mirror
 with no environment to reflect *is* nearly black, and giving it one is
 exactly what image-based lighting does. The sun casts real shadows through
@@ -24,10 +25,20 @@ irradiance and prefiltered specular convolutions and the BRDF lookup table
 are all computed on the GPU at startup, so a clean checkout still ships no
 binary assets.
 
+Those forty-odd lights are not a stress test the renderer barely survives —
+they are there because light count stopped being the thing that costs.
+Shading is **clustered**: the view frustum is diced into a grid of cells, a
+compute pass assigns every light to the cells its volume reaches, and a
+fragment loops only the lights in its own cell. What a pixel pays for is how
+many lights actually reach it, not how many the scene contains. The forward
+shader this replaced looped every light for every fragment, which is why the
+scene used to be capped at sixteen.
+
 Scenes save and load as reflection-driven JSON, entities can be parented, and
 draws are frustum-culled and sorted by material. Render passes declare what
-they read and write; barriers, image layouts and transient render targets are
-derived by the frame graph rather than written by hand.
+they read and write; barriers, image layouts, transient render targets and
+transient buffers are derived by the frame graph rather than written by hand —
+including the compute-to-fragment dependency the light lists need.
 
 Bright highlights bloom through a half-resolution blur chain, composited in
 linear light before the ACES tonemap.
@@ -257,12 +268,15 @@ src/
                 these move into EnchantedEditor rather than being rewritten
   physics/      the PhysicsWorld interface, its Jolt backend, rigid bodies,
                 colliders and the ECS sync
-  rhi/          device, swapchain, pipeline, buffer, descriptors, textures,
-                frame graph (including layered images), frame recording
+  rhi/          device, swapchain, graphics and compute pipelines, buffer,
+                descriptors, textures, frame graph (layered images and
+                transient buffers), frame recording
   render/       renderer, model, camera, materials, lights, bounds,
-                environment lighting, PBR, shadows, skybox, bloom and post-process
+                environment lighting, PBR, shadows, clustered light culling,
+                skybox, bloom and post-process
   scene/        world, entities, component pools, components, hierarchy, serialization
-shaders/        GLSL, compiled to SPIR-V into the build tree
+shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
+                are shared declarations, included rather than compiled
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
 tests/          doctest suite
 cmake/          dependency, warning and shader modules
