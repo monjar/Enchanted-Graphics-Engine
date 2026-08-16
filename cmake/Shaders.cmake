@@ -39,6 +39,12 @@ function(ege_add_shaders target shader_dir)
     message(FATAL_ERROR "No shader sources found under ${shader_dir}")
   endif()
 
+  # Shared declarations - the global uniform block above all - live in .glsl
+  # files that are #included rather than compiled on their own. They are not
+  # in the glob for that reason, but every stage has to be rebuilt when one
+  # changes, so they are named as dependencies of all of them.
+  file(GLOB_RECURSE GLSL_INCLUDES CONFIGURE_DEPENDS "${shader_dir}/*.glsl")
+
   # Compiled SPIR-V is a build artifact, so it goes in the build tree rather
   # than beside the GLSL sources where it would be easy to commit by accident.
   set(output_dir "${CMAKE_BINARY_DIR}/shaders")
@@ -50,8 +56,8 @@ function(ege_add_shaders target shader_dir)
     add_custom_command(
       OUTPUT ${spirv}
       COMMAND ${CMAKE_COMMAND} -E make_directory ${output_dir}
-      COMMAND ${EGE_GLSL_VALIDATOR} -V ${glsl} -o ${spirv}
-      DEPENDS ${glsl}
+      COMMAND ${EGE_GLSL_VALIDATOR} -V -I${shader_dir} ${glsl} -o ${spirv}
+      DEPENDS ${glsl} ${GLSL_INCLUDES}
       COMMENT "Compiling shader ${name}"
       VERBATIM)
     list(APPEND spirv_outputs ${spirv})

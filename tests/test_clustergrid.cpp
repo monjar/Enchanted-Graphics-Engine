@@ -9,6 +9,7 @@
 
 #include "render/Camera.hpp"
 #include "render/ClusterGrid.hpp"
+#include "render/ClusterLightSystem.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -22,6 +23,7 @@ using ege::ClusterBounds;
 using ege::clusterBounds;
 using ege::ClusterGrid;
 using ege::clusterIndex;
+using ege::ClusterLightSystem;
 using ege::clusterSliceDepth;
 using ege::clusterSliceForDepth;
 using ege::clusterSliceScaleBias;
@@ -321,4 +323,32 @@ TEST_CASE("a point lands in its own cluster under the engine's projection") {
 
         CHECK(insideBounds(clusterBounds(grid, inverse, ix, iy, iz), viewPoint));
     }
+}
+
+// ---- the buffer the culling pass writes ------------------------------------
+
+TEST_CASE("the cluster buffer has room for every cluster's full list") {
+    // The shaders index this buffer as base = cluster * stride, then write a
+    // count at base and up to stride - 1 indices after it. Sizing it from a
+    // different stride than the shaders use would run the last cluster off the
+    // end of the allocation - which a driver may or may not notice.
+    CHECK(ClusterLightSystem::clusterStride == ege::maxLightsPerCluster + 1);
+
+    const VkDeviceSize lastByteUsed =
+        (static_cast<VkDeviceSize>(ege::clusterCount - 1) * ClusterLightSystem::clusterStride +
+         ClusterLightSystem::clusterStride) *
+        sizeof(uint32_t);
+    CHECK(lastByteUsed <= ClusterLightSystem::clusterBufferSize());
+}
+
+TEST_CASE("the dispatch covers every cluster and no fewer") {
+    // Workgroups round up, so the last one runs invocations past the end of
+    // the grid - which is exactly why the shader bounds-checks. What must not
+    // happen is rounding down and leaving the tail of the grid unculled, with
+    // its lights silently missing.
+    constexpr uint32_t groupSize = 64;
+    const uint32_t groups = ege::dispatchGroupCount(ege::clusterCount, groupSize);
+
+    CHECK(groups * groupSize >= ege::clusterCount);
+    CHECK((groups - 1) * groupSize < ege::clusterCount);
 }

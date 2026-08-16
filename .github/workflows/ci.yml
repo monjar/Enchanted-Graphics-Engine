@@ -98,9 +98,16 @@ jobs:
             ./scripts/run_for.sh 8 ./build/${{ matrix.preset }}/bin/EnchantedEngine \
             2>&1 | tee render.log
 
-          if grep -qiE "validation layer:.*(Error|Warning)" render.log; then
+          # Two formats, because there are two ways a message arrives. The
+          # engine installs a debug messenger and logs "validation layer: ..."
+          # - but only in Debug, where the validation layers are switched on by
+          # the build. In Release the loader still enables the layer through
+          # the environment above and the layer prints in its own format,
+          # which the first pattern alone does not match at all: a Release
+          # smoke test was checking nothing.
+          if grep -qiE "validation layer:.*(error|warning)|validation (error|warning)" render.log; then
             echo "::error::Vulkan validation layer reported a problem"
-            grep -iE "validation layer:" render.log
+            grep -iE "validation layer:|validation (error|warning)" render.log | head -40
             exit 1
           fi
           echo "Rendered with no validation messages."
