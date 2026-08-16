@@ -7,6 +7,7 @@
 // Each of those fails silently on a GPU - the picture just goes subtly wrong -
 // so they are pinned here, where there is no GPU at all.
 
+#include "render/Camera.hpp"
 #include "render/ClusterGrid.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -16,6 +17,7 @@
 #include <cmath>
 #include <vector>
 
+using ege::Camera;
 using ege::ClusterBounds;
 using ege::clusterBounds;
 using ege::ClusterGrid;
@@ -250,5 +252,73 @@ TEST_CASE("every cluster index is distinct and inside the buffer") {
 
     for (bool visited : seen) {
         CHECK(visited);
+    }
+}
+
+// ---- the engine's own camera ----------------------------------------------
+//
+// Everything above builds its projection with GLM, which looks down -Z. This
+// engine's camera looks down +Z. A grid that only ever met the GLM convention
+// would pass every test above and bound the wrong region of space in the
+// running engine - so the same properties are checked once more against the
+// matrices the renderer actually hands the shader.
+
+TEST_CASE("the engine's camera looks down +Z, and the grid follows it") {
+    Camera camera{};
+    camera.setPerspectiveProjection(glm::radians(50.f), 16.f / 9.f, nearPlane, farPlane);
+    camera.setViewYXZ(glm::vec3{0.f}, glm::vec3{0.f});
+
+    // The convention itself, stated as a test rather than as a comment: a
+    // point in front of this camera has positive view-space z.
+    const glm::vec4 inFront = camera.getView() * glm::vec4{0.f, 0.f, 5.f, 1.f};
+    REQUIRE(inFront.z > 0.f);
+
+    const ClusterGrid grid = defaultGrid();
+    const glm::mat4 inverse = glm::inverse(camera.getProjection());
+
+    // Bounds land in front of the camera, on the +Z side, spanning the slice.
+    const ClusterBounds cell = clusterBounds(grid, inverse, 8, 4, 10);
+    CHECK(cell.minPoint.z > 0.f);
+    CHECK(cell.minPoint.z == doctest::Approx(clusterSliceDepth(grid, 10)).epsilon(1e-3));
+    CHECK(cell.maxPoint.z == doctest::Approx(clusterSliceDepth(grid, 11)).epsilon(1e-3));
+}
+
+TEST_CASE("a point lands in its own cluster under the engine's projection") {
+    Camera camera{};
+    camera.setPerspectiveProjection(glm::radians(50.f), 16.f / 9.f, nearPlane, farPlane);
+    camera.setViewYXZ(glm::vec3{0.f}, glm::vec3{0.f});
+
+    const ClusterGrid grid = defaultGrid();
+    const glm::mat4 proj = camera.getProjection();
+    const glm::mat4 inverse = glm::inverse(proj);
+
+    // World points in front of the camera, which here means along +Z.
+    const std::vector<glm::vec3> world = {
+        {0.f, 0.f, 0.5f},
+        {0.4f, -0.3f, 2.f},
+        {-1.2f, 0.9f, 9.f},
+        {3.f, 2.f, 30.f},
+    };
+
+    for (const glm::vec3& point : world) {
+        const glm::vec3 viewPoint = glm::vec3{camera.getView() * glm::vec4{point, 1.f}};
+        // View depth as the shader measures it: distance along the forward
+        // axis, which for this camera is the view-space z unnegated.
+        const float depth = viewPoint.z;
+        REQUIRE(depth > 0.f);
+
+        const glm::vec2 screen = viewToScreen(proj, viewPoint);
+        REQUIRE(screen.x >= 0.f);
+        REQUIRE(screen.x <= 1.f);
+        REQUIRE(screen.y >= 0.f);
+        REQUIRE(screen.y <= 1.f);
+
+        const auto ix =
+            std::min(static_cast<uint32_t>(screen.x * static_cast<float>(grid.x)), grid.x - 1);
+        const auto iy =
+            std::min(static_cast<uint32_t>(screen.y * static_cast<float>(grid.y)), grid.y - 1);
+        const uint32_t iz = clusterSliceForDepth(grid, depth);
+
+        CHECK(insideBounds(clusterBounds(grid, inverse, ix, iy, iz), viewPoint));
     }
 }

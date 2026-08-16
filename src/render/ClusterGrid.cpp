@@ -8,14 +8,19 @@ namespace ege {
     namespace {
 
         // A point on the ray from the eye through `direction`, moved to the
-        // given positive distance along the view's forward axis. View space
-        // looks down -Z, so the target z is negative and the ray parameter
-        // comes out positive for anything in front of the camera.
+        // given distance along the view's forward axis.
+        //
+        // Scaling by |z| rather than by z keeps this correct whichever way the
+        // projection points. This engine's own camera looks down +Z, while the
+        // GLM constructors everything else is written against look down -Z,
+        // and a function that assumed either one would be silently wrong for
+        // half its callers - the ray would come out behind the eye and every
+        // cluster would bound the wrong region.
         glm::vec3 pointAtDepth(glm::vec3 direction, float depth) {
             if (std::abs(direction.z) < 1e-9f) {
                 return direction;
             }
-            return direction * (-depth / direction.z);
+            return direction * (depth / std::abs(direction.z));
         }
 
         // Clip space back to view space. The clip-space z is irrelevant to the

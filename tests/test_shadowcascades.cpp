@@ -6,6 +6,7 @@
 // resize as the camera turns, the edges do not crawl as it moves - are
 // checkable on a machine with no GPU, and each of them fails quietly on one.
 
+#include "render/Camera.hpp"
 #include "render/ShadowCascades.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -279,4 +280,40 @@ TEST_CASE("the near cascade is far tighter than one map over the whole range") {
     // An order of magnitude of texel density, which is the difference between
     // a shadow edge that reads as an edge and one that reads as a staircase.
     CHECK(farHalfWidth > nearHalfWidth * 8.f);
+}
+
+TEST_CASE("the splits are measured the way the engine's own camera measures depth") {
+    // Every test above builds its camera with GLM, which looks down -Z. The
+    // engine's camera looks down +Z, and the shader has to pick a cascade with
+    // the same measure the splits were cut in. Getting that sign wrong is
+    // invisible in a scene that fits in the first cascade and unshadows
+    // everything beyond it in one that does not - so the convention is pinned
+    // here rather than described in a comment.
+    ege::Camera camera{};
+    camera.setPerspectiveProjection(glm::radians(50.f), 16.f / 9.f, nearPlane, 100.f);
+    camera.setViewYXZ(glm::vec3{0.f}, glm::vec3{0.f});
+
+    const glm::vec3 sun = glm::normalize(glm::vec3{0.6f, 0.64f, 0.48f});
+    const ShadowCascadeSet set = fitShadowCascades(
+        glm::inverse(camera.getProjection() * camera.getView()),
+        sun,
+        nearPlane,
+        40.f,
+        CascadeSettings{});
+
+    for (float distance : {0.5f, 3.f, 12.f, 35.f}) {
+        const glm::vec3 world{0.f, 0.f, distance};
+        const float viewDepth = (camera.getView() * glm::vec4{world, 1.f}).z;
+        CHECK(viewDepth == doctest::Approx(distance));
+
+        // The cascade the shader would choose, chosen the same way.
+        uint32_t chosen = set.count - 1;
+        for (uint32_t i = 0; i + 1 < set.count; i++) {
+            if (viewDepth < set.cascades[i].splitDepth) {
+                chosen = i;
+                break;
+            }
+        }
+        CHECK(insideMap(project(set.cascades[chosen].viewProjection, world)));
+    }
 }

@@ -127,9 +127,13 @@ int cascadeFor(float viewDepth) {
 }
 
 float sunShadowFactor(vec3 worldPos) {
-    // View depth, positive going away from the camera. The engine's view
-    // matrix looks down -Z, so the distance is the negated view-space z.
-    float viewDepth = -(ubo.view * vec4(worldPos, 1.0)).z;
+    // View depth: distance along the camera's forward axis, which is the
+    // measure the splits were computed in. This engine's camera looks down
+    // +Z - its projection puts w = z rather than w = -z - so the view-space
+    // z is already that distance. Negating it, as the more common -Z
+    // convention would need, makes every depth negative, sends every fragment
+    // to cascade 0, and quietly unshadows everything past the first split.
+    float viewDepth = (ubo.view * vec4(worldPos, 1.0)).z;
 
     int cascade = cascadeFor(viewDepth);
     float shadow = sampleCascade(cascade, worldPos);

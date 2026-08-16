@@ -55,8 +55,15 @@ namespace ege {
         float farPlane = 100.f;
     };
 
-    // A cluster's bounds in view space, where the camera sits at the origin
-    // looking down -Z.
+    // A cluster's bounds in view space, where the camera sits at the origin.
+    //
+    // Which way "forward" points is the projection's business, not this
+    // header's: bounds come back in whatever handedness the matrix passed in
+    // uses. This engine's camera looks down +Z; GLM's own constructors look
+    // down -Z. A "view depth" below always means a positive distance along
+    // the forward axis whichever it is, which is the measure a shader has to
+    // reproduce - and getting that sign wrong is invisible in a small scene
+    // and wrong everywhere in a large one.
     struct ClusterBounds {
         glm::vec3 minPoint{0.f};
         glm::vec3 maxPoint{0.f};
