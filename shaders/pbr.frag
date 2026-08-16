@@ -14,6 +14,9 @@ layout(set = 0, binding = 1) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 2) uniform samplerCube prefilteredMap;
 layout(set = 0, binding = 3) uniform sampler2D brdfLut;
 layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;
+// One cube per shadow-casting point light, sampled by direction rather than
+// by index - the hardware picks the face and filters across the seams.
+layout(set = 0, binding = 8) uniform samplerCubeArrayShadow pointShadowMaps;
 
 layout(std430, set = 0, binding = 6) readonly buffer LightBuffer {
     PointLight lights[];
@@ -145,6 +148,38 @@ float sunShadowFactor(vec3 worldPos) {
     return shadow;
 }
 
+// How much of a point light reaches this fragment: 0 fully shadowed, 1 fully
+// lit. Mirrors pointShadowReferenceDepth in render/PointShadows.cpp, which is
+// where the formula is derived and tested.
+float pointShadowFactor(PointLight light, vec3 worldPos) {
+    int cube = int(light.shadow.x);
+    if (cube < 0) {
+        return 1.0;  // this light casts none
+    }
+
+    vec3 toFragment = worldPos - light.position.xyz;
+
+    // The distance along the face's own axis, not the straight-line distance:
+    // a perspective depth buffer stores the former, and comparing against the
+    // latter makes the corner of every face shadow itself.
+    vec3 magnitude = abs(toFragment);
+    float axisDistance = max(magnitude.x, max(magnitude.y, magnitude.z));
+
+    float near = ubo.pointShadowParams.x;
+    float far = max(light.position.w, near + 1e-4);
+    if (axisDistance <= near) {
+        return 1.0;  // closer than the cube's near plane; nothing was recorded
+    }
+
+    float reference = far * (axisDistance - near) / ((far - near) * axisDistance);
+    // A small offset along the depth range, for the same reason the sun's map
+    // uses a polygon-offset bias: a surface compared against its own recorded
+    // depth lands on either side of it by a texel's worth of slope.
+    reference -= 0.0015;
+
+    return texture(pointShadowMaps, vec4(toFragment, float(cube)), reference);
+}
+
 // Which cluster this fragment sits in.
 //
 // The tile comes from the pixel's own position on screen: gl_FragCoord has
@@ -256,7 +291,8 @@ void main() {
         vec3 L = toLight * inversesqrt(distanceSquared);
 
         float attenuation = 1.0 / distanceSquared;
-        vec3 radiance = light.color.rgb * light.color.w * attenuation;
+        vec3 radiance =
+            light.color.rgb * light.color.w * attenuation * pointShadowFactor(light, fragPosWorld);
 
         Lo += directLight(N, V, L, radiance, albedo, metallic, roughness, F0);
     }

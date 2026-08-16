@@ -61,9 +61,16 @@ namespace ege {
         VkClearValue clearValue{};
         // More than one makes the image a 2D array: sampled through a single
         // array view, rendered into one layer at a time by passes that say
-        // which layer they write. Shadow cascades are the first caller; cube
-        // shadows for point lights are the obvious second.
+        // which layer they write. Shadow cascades were the first caller;
+        // point-light cube shadows are the second.
         uint32_t layers = 1;
+        // Sample the layers as cube faces rather than as an array. The layers
+        // are still rendered one at a time through ordinary 2D views - what
+        // changes is only how a shader reads the result: by direction rather
+        // than by index, with the hardware choosing the face and filtering
+        // across the seams between them. Requires a multiple of six layers,
+        // and more than six makes it a cube array.
+        bool cube = false;
     };
 
     // A GPU buffer that lives for (at most) one frame, in device-local memory
@@ -280,6 +287,7 @@ namespace ege {
             VkFormat format = VK_FORMAT_UNDEFINED;
             VkExtent2D extent{0, 0};
             uint32_t layers = 1;
+            bool cube = false;
             VkImageUsageFlags usage = 0;
             uint64_t lastFrameUsed = 0;
             bool usedThisFrame = false;

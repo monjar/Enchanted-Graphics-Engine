@@ -674,3 +674,76 @@ TEST_CASE("a transient buffer with no size is refused") {
     CHECK_THROWS_AS(
         graph.createTransientBuffer("empty", ege::TransientBufferDesc{}), std::logic_error);
 }
+
+// ---- cube images -----------------------------------------------------------
+//
+// Point-light shadows want the layers of an array read as directions rather
+// than as indices. What changes is only how the whole-image view is made; the
+// per-layer views a pass renders through are the same 2D views as always.
+
+TEST_CASE("a cube image is written one face at a time like any other layer") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    TransientImageDesc cubeDesc = depthDesc();
+    cubeDesc.layers = 6;
+    cubeDesc.cube = true;
+    FrameGraphResource shadowCube = graph.createTransient("shadowCube", cubeDesc);
+
+    for (uint32_t face = 0; face < 6; face++) {
+        graph.addPass(
+            "face" + std::to_string(face),
+            [&, face](FrameGraph::PassBuilder& pass) {
+                pass.write(shadowCube, ResourceAccess::depthWrite, face);
+            },
+            noopExecute);
+    }
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(shadowCube, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 7);
+    // Each face is the first write of its own layer, so each clears.
+    for (uint32_t face = 0; face < 6; face++) {
+        const FrameGraph::CompiledPass& pass = graph.compiledPasses()[face];
+        REQUIRE(pass.depthAttachment.has_value());
+        CHECK(pass.depthAttachment->layer == face);
+        CHECK(pass.depthAttachment->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    }
+}
+
+TEST_CASE("a cube array holds a whole cube per light") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    importBackbuffer(graph);
+
+    TransientImageDesc cubeDesc = depthDesc();
+    cubeDesc.layers = 6 * 4;
+    cubeDesc.cube = true;
+    // Four lights' worth of faces in one image is the point: one binding and
+    // one barrier rather than four of each.
+    CHECK_NOTHROW(graph.createTransient("shadowCubes", cubeDesc));
+}
+
+TEST_CASE("a cube image without a multiple of six layers is refused") {
+    // Caught at declaration, because the alternative is VK_IMAGE_VIEW_TYPE_CUBE
+    // failing at view creation with nothing to say about which resource asked
+    // for it.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    TransientImageDesc cubeDesc = depthDesc();
+    cubeDesc.cube = true;
+    cubeDesc.layers = 4;
+    CHECK_THROWS_AS(graph.createTransient("notACube", cubeDesc), std::logic_error);
+
+    cubeDesc.layers = 1;
+    CHECK_THROWS_AS(graph.createTransient("stillNotACube", cubeDesc), std::logic_error);
+}
