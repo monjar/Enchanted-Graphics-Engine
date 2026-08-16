@@ -159,6 +159,10 @@ namespace ege {
 
     FrameGraphResource FrameGraph::createTransient(
         std::string name, const TransientImageDesc& desc) {
+        if (desc.cube && (desc.layers == 0 || desc.layers % 6 != 0)) {
+            throw std::logic_error{
+                "frame graph cube image '" + name + "' needs a multiple of six layers"};
+        }
         Resource resource{};
         resource.name = std::move(name);
         resource.desc = desc;
@@ -427,7 +431,8 @@ namespace ege {
             PhysicalImage& physical = physicalImages[i];
             if (!physical.usedThisFrame && physical.format == resource.desc.format &&
                 physical.extent.width == extent.width && physical.extent.height == extent.height &&
-                physical.layers == resource.desc.layers && physical.usage == resource.usage) {
+                physical.layers == resource.desc.layers && physical.cube == resource.desc.cube &&
+                physical.usage == resource.usage) {
                 physical.usedThisFrame = true;
                 physical.lastFrameUsed = frameCounter;
                 return i;
@@ -438,6 +443,7 @@ namespace ege {
         physical.format = resource.desc.format;
         physical.extent = extent;
         physical.layers = resource.desc.layers;
+        physical.cube = resource.desc.cube;
         physical.usage = resource.usage;
         physical.usedThisFrame = true;
         physical.lastFrameUsed = frameCounter;
@@ -454,17 +460,28 @@ namespace ege {
         imageInfo.usage = resource.usage;
         imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        // Declared at creation, not at view time: an image can only be viewed
+        // as a cube if it was made willing to be.
+        if (physical.cube) {
+            imageInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+        }
 
         deviceRef.createImageWithInfo(
             imageInfo, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, physical.image, physical.allocation);
 
         // The whole-image view, which is what a shader samples through: 2D for
-        // one layer, 2D_ARRAY for several.
+        // one layer, 2D_ARRAY for several, and CUBE or CUBE_ARRAY when the
+        // layers are meant to be read as directions instead of indices.
         VkImageViewCreateInfo viewInfo{};
         viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         viewInfo.image = physical.image;
-        viewInfo.viewType =
-            physical.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        if (physical.cube) {
+            viewInfo.viewType =
+                physical.layers > 6 ? VK_IMAGE_VIEW_TYPE_CUBE_ARRAY : VK_IMAGE_VIEW_TYPE_CUBE;
+        } else {
+            viewInfo.viewType =
+                physical.layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
+        }
         viewInfo.format = resource.desc.format;
         viewInfo.subresourceRange = {aspectFor(resource.desc.format), 0, 1, 0, physical.layers};
 

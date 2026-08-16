@@ -186,6 +186,10 @@ namespace ege {
         VkPhysicalDeviceFeatures2 deviceFeatures{};
         deviceFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
         deviceFeatures.features.samplerAnisotropy = VK_TRUE;
+        // Point-light shadows are a cube per light, sampled as one cube array
+        // rather than as a binding each. Core since Vulkan 1.0 and universal
+        // on anything that reaches 1.3, but it is still opt-in.
+        deviceFeatures.features.imageCubeArray = VK_TRUE;
         deviceFeatures.pNext = &features13;
 
         std::vector<const char*> enabledExtensions = deviceExtensions;
@@ -273,7 +277,8 @@ namespace ege {
         vkGetPhysicalDeviceFeatures2(device, &supportedFeatures);
 
         return indices.isComplete() && extensionsSupported && swapChainAdequate &&
-               supportedFeatures.features.samplerAnisotropy && supported13.dynamicRendering &&
+               supportedFeatures.features.samplerAnisotropy &&
+               supportedFeatures.features.imageCubeArray && supported13.dynamicRendering &&
                supported13.synchronization2;
     }
 
