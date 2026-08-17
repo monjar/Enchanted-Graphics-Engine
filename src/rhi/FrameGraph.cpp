@@ -224,7 +224,40 @@ namespace ege {
             layer >= graph.resources[resource.index].desc.layers) {
             throw std::logic_error{"pass declared a write of a layer the image does not have"};
         }
-        graph.passes[passIndex].accesses.push_back({resource, access, true, layer});
+        graph.passes[passIndex].accesses.push_back({resource, access, true, false, layer, {}});
+    }
+
+    void FrameGraph::PassBuilder::resolve(
+        FrameGraphResource multisampled, FrameGraphResource target) {
+        if (!multisampled.valid() || multisampled.index >= graph.resources.size() ||
+            !target.valid() || target.index >= graph.resources.size()) {
+            throw std::logic_error{"pass declared a resolve of an invalid resource handle"};
+        }
+        const Resource& source = graph.resources[multisampled.index];
+        const Resource& destination = graph.resources[target.index];
+        if (source.kind != ResourceKind::image || destination.kind != ResourceKind::image) {
+            throw std::logic_error{"only images can be resolved"};
+        }
+        if (source.desc.samples == VK_SAMPLE_COUNT_1_BIT) {
+            throw std::logic_error{
+                "pass declared a resolve of '" + source.name + "', which is not multisampled"};
+        }
+        if (destination.desc.samples != VK_SAMPLE_COUNT_1_BIT) {
+            throw std::logic_error{
+                "pass declared a resolve into '" + destination.name +
+                "', which is itself multisampled"};
+        }
+
+        PassAccess access{};
+        access.resource = target;
+        // A resolve target is written as a colour attachment - that is what
+        // the hardware does to it - so it wants the same layout, the same
+        // usage and the same barriers as one.
+        access.access = ResourceAccess::colorWrite;
+        access.isWrite = true;
+        access.isResolve = true;
+        access.resolveSource = multisampled;
+        graph.passes[passIndex].accesses.push_back(access);
     }
 
     void FrameGraph::checkAccessKind(FrameGraphResource resource, ResourceAccess access) const {
@@ -359,6 +392,12 @@ namespace ege {
 
                 if (passAccess.isWrite && isBuffer) {
                     resource.written = true;
+                } else if (passAccess.isWrite && passAccess.isResolve) {
+                    // The resolve target is not an attachment of its own; it
+                    // is named by the multisampled attachment's own entry,
+                    // matched up once every attachment exists.
+                    resource.written = true;
+                    resource.writtenLayers[passAccess.layer] = true;
                 } else if (passAccess.isWrite) {
                     PlannedAttachment attachment{};
                     attachment.resourceIndex = passAccess.resource.index;
@@ -386,6 +425,28 @@ namespace ege {
                 }
 
                 resource.state = {target.layout, target.stage, target.access};
+            }
+
+            // Now that every attachment exists, point each multisampled one
+            // at where it resolves to. Done here rather than inline because
+            // the write and the resolve may be declared in either order.
+            for (const PassAccess& passAccess : passes[passIndex].accesses) {
+                if (!passAccess.isResolve) {
+                    continue;
+                }
+                bool matched = false;
+                for (PlannedAttachment& attachment : compiledPass.colorAttachments) {
+                    if (attachment.resourceIndex == passAccess.resolveSource.index) {
+                        attachment.resolveResourceIndex = passAccess.resource.index;
+                        matched = true;
+                    }
+                }
+                if (!matched) {
+                    throw std::logic_error{
+                        "pass '" + passes[passIndex].name + "' resolves '" +
+                        resources[passAccess.resolveSource.index].name +
+                        "', which it does not render to"};
+                }
             }
 
             compiled.push_back(std::move(compiledPass));
@@ -432,7 +493,7 @@ namespace ege {
             if (!physical.usedThisFrame && physical.format == resource.desc.format &&
                 physical.extent.width == extent.width && physical.extent.height == extent.height &&
                 physical.layers == resource.desc.layers && physical.cube == resource.desc.cube &&
-                physical.usage == resource.usage) {
+                physical.samples == resource.desc.samples && physical.usage == resource.usage) {
                 physical.usedThisFrame = true;
                 physical.lastFrameUsed = frameCounter;
                 return i;
@@ -444,6 +505,7 @@ namespace ege {
         physical.extent = extent;
         physical.layers = resource.desc.layers;
         physical.cube = resource.desc.cube;
+        physical.samples = resource.desc.samples;
         physical.usage = resource.usage;
         physical.usedThisFrame = true;
         physical.lastFrameUsed = frameCounter;
@@ -458,7 +520,7 @@ namespace ege {
         imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
         imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageInfo.usage = resource.usage;
-        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.samples = physical.samples;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         // Declared at creation, not at view time: an image can only be viewed
         // as a cube if it was made willing to be.
@@ -722,6 +784,21 @@ namespace ege {
                     info.loadOp = attachment.loadOp;
                     info.storeOp = attachment.storeOp;
                     info.clearValue = attachment.clearValue;
+
+                    // Averaging the samples happens as the attachment is
+                    // stored, which is the whole economy of multisampling: no
+                    // second pass reads the large image back.
+                    if (attachment.resolveResourceIndex != FrameGraphResource::invalidIndex) {
+                        PlannedAttachment resolveTarget{};
+                        resolveTarget.resourceIndex = attachment.resolveResourceIndex;
+                        info.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
+                        info.resolveImageView = attachmentView(resolveTarget);
+                        info.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+                        // Nothing reads the multisampled image after the
+                        // resolve, so keeping it would be pure bandwidth.
+                        info.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+                    }
+
                     colorAttachments.push_back(info);
                 }
 
