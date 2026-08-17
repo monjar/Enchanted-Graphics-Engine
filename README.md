@@ -43,6 +43,11 @@ they read and write; barriers, image layouts, transient render targets and
 transient buffers are derived by the frame graph rather than written by hand —
 including the compute-to-fragment dependency the light lists need.
 
+The scene is rasterised at four coverage samples a pixel and averaged back
+down as the attachment is stored, so geometry edges are smooth rather than
+staircased. A device that cannot manage it says so and the renderer runs
+single-sampled instead.
+
 Bright highlights bloom through a half-resolution blur chain, composited in
 linear light before the ACES tonemap.
 
@@ -273,7 +278,7 @@ src/
                 colliders and the ECS sync
   rhi/          device, swapchain, graphics and compute pipelines, buffer,
                 descriptors, textures, frame graph (layered and cube images,
-                transient buffers), frame recording
+                multisampled attachments, transient buffers), frame recording
   render/       renderer, model, camera, materials, lights, bounds,
                 environment lighting, PBR, cascaded and cube shadows,
                 clustered light culling, skybox, bloom and post-process
