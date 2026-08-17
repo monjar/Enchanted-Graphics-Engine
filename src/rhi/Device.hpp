@@ -120,6 +120,17 @@ namespace ege {
 
         void destroyImage(VkImage image, VmaAllocation allocation);
 
+        // The best multisample count this device supports for both colour
+        // and depth, capped at 4x.
+        //
+        // Both matter: an implementation may allow more samples on colour
+        // than on depth, and an attachment pair has to agree. The cap is a
+        // judgement rather than a limit - 8x costs twice the bandwidth of 4x
+        // for a difference that is hard to see at ordinary resolutions.
+        // Returns VK_SAMPLE_COUNT_1_BIT when nothing better is available,
+        // which switches multisampling off rather than failing.
+        VkSampleCountFlagBits maxUsableSampleCount() const;
+
         VkPhysicalDeviceProperties properties;
 
     private:

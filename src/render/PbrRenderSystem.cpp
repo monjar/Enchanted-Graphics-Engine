@@ -34,10 +34,11 @@ namespace ege {
         VkFormat colorFormat,
         VkFormat depthFormat,
         VkDescriptorSetLayout globalSetLayout,
-        VkDescriptorSetLayout materialSetLayout)
+        VkDescriptorSetLayout materialSetLayout,
+        VkSampleCountFlagBits samples)
         : device{deviceRef} {
         createPipelineLayout(globalSetLayout, materialSetLayout);
-        createPipeline(colorFormat, depthFormat);
+        createPipeline(colorFormat, depthFormat, samples);
     }
 
     PbrRenderSystem::~PbrRenderSystem() {
@@ -80,11 +81,17 @@ namespace ege {
         }
     }
 
-    void PbrRenderSystem::createPipeline(VkFormat colorFormat, VkFormat depthFormat) {
+    void PbrRenderSystem::createPipeline(
+        VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples) {
         EGE_ASSERT(pipelineLayout != VK_NULL_HANDLE, "pipeline layout must exist first");
 
         PipelineConfigInfo pipelineConfig{};
         Pipeline::defaultPipelineConfigInfo(pipelineConfig);
+        // Has to match the attachments this pipeline renders into. A pipeline
+        // whose sample count disagrees with its attachment is invalid, which
+        // is why the count travels from the frame graph's target all the way
+        // down here rather than being decided locally.
+        pipelineConfig.multisampleInfo.rasterizationSamples = samples;
         pipelineConfig.bindingDescriptions = Model::Vertex::getBindingDescriptions();
         pipelineConfig.attributeDescriptions = Model::Vertex::getAttributeDescriptions();
         pipelineConfig.colorAttachmentFormats = {colorFormat};

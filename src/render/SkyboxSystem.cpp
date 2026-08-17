@@ -8,7 +8,8 @@ namespace ege {
         Device& deviceRef,
         VkFormat colorFormat,
         VkFormat depthFormat,
-        VkDescriptorSetLayout globalSetLayout)
+        VkDescriptorSetLayout globalSetLayout,
+        VkSampleCountFlagBits samples)
         : device{deviceRef} {
         VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -22,6 +23,9 @@ namespace ege {
 
         PipelineConfigInfo config{};
         Pipeline::defaultPipelineConfigInfo(config);
+        // The sky renders into the same attachments the scene does, so it
+        // carries the same sample count.
+        config.multisampleInfo.rasterizationSamples = samples;
         config.bindingDescriptions.clear();
         config.attributeDescriptions.clear();
         // Test against the scene's depth at the far plane, write nothing:

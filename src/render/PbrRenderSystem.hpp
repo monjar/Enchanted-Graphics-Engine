@@ -22,7 +22,8 @@ namespace ege {
             VkFormat colorFormat,
             VkFormat depthFormat,
             VkDescriptorSetLayout globalSetLayout,
-            VkDescriptorSetLayout materialSetLayout);
+            VkDescriptorSetLayout materialSetLayout,
+            VkSampleCountFlagBits samples);
         ~PbrRenderSystem();
 
         PbrRenderSystem(const PbrRenderSystem&) = delete;
@@ -47,7 +48,8 @@ namespace ege {
     private:
         void createPipelineLayout(
             VkDescriptorSetLayout globalSetLayout, VkDescriptorSetLayout materialSetLayout);
-        void createPipeline(VkFormat colorFormat, VkFormat depthFormat);
+        void createPipeline(
+            VkFormat colorFormat, VkFormat depthFormat, VkSampleCountFlagBits samples);
 
         Device& device;
 

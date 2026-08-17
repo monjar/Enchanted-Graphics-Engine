@@ -282,6 +282,19 @@ namespace ege {
                supported13.synchronization2;
     }
 
+    VkSampleCountFlagBits Device::maxUsableSampleCount() const {
+        const VkSampleCountFlags counts = properties.limits.framebufferColorSampleCounts &
+                                          properties.limits.framebufferDepthSampleCounts;
+
+        if (counts & VK_SAMPLE_COUNT_4_BIT) {
+            return VK_SAMPLE_COUNT_4_BIT;
+        }
+        if (counts & VK_SAMPLE_COUNT_2_BIT) {
+            return VK_SAMPLE_COUNT_2_BIT;
+        }
+        return VK_SAMPLE_COUNT_1_BIT;
+    }
+
     void Device::populateDebugMessengerCreateInfo(VkDebugUtilsMessengerCreateInfoEXT& createInfo) {
         createInfo = {};
         createInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
