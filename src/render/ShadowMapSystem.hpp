@@ -27,6 +27,11 @@ namespace ege {
         // covers a fraction of the world the sun's map has to.
         static constexpr uint32_t pointResolution = 512;
 
+        // Per spot light. Larger than a cube face because there is only one
+        // of it, and because a spot is usually pointed at something the
+        // viewer is looking at rather than lighting a whole neighbourhood.
+        static constexpr uint32_t spotResolution = 1024;
+
         ShadowMapSystem(Device& device, VkFormat depthFormat);
         ~ShadowMapSystem();
 

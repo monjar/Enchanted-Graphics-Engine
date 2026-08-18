@@ -35,6 +35,7 @@ namespace ege {
         registry.add<Transform>();
         registry.add<MeshRenderer>();
         registry.add<PointLight>();
+        registry.add<SpotLight>();
         registry.add<DirectionalLight>();
         registry.add<Hidden>();
         registry.add<Script>();

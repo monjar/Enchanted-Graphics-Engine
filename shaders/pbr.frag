@@ -17,9 +17,13 @@ layout(set = 0, binding = 5) uniform sampler2DArrayShadow shadowMap;
 // One cube per shadow-casting point light, sampled by direction rather than
 // by index - the hardware picks the face and filters across the seams.
 layout(set = 0, binding = 8) uniform samplerCubeArrayShadow pointShadowMaps;
+// One map per shadow-casting spot. A spot has a single direction and a
+// bounded angle, so unlike a point light it needs no cube and unlike the sun
+// it needs no cascades - one ordinary projective lookup covers it.
+layout(set = 0, binding = 9) uniform sampler2DArrayShadow spotShadowMaps;
 
 layout(std430, set = 0, binding = 6) readonly buffer LightBuffer {
-    PointLight lights[];
+    Light lights[];
 } lightBuffer;
 
 // Per-cluster light lists, filled by light_cull.comp: a count followed by
@@ -151,8 +155,8 @@ float sunShadowFactor(vec3 worldPos) {
 // How much of a point light reaches this fragment: 0 fully shadowed, 1 fully
 // lit. Mirrors pointShadowReferenceDepth in render/PointShadows.cpp, which is
 // where the formula is derived and tested.
-float pointShadowFactor(PointLight light, vec3 worldPos) {
-    int cube = int(light.shadow.x);
+float pointShadowFactor(Light light, vec3 worldPos) {
+    int cube = int(light.params.x);
     if (cube < 0) {
         return 1.0;  // this light casts none
     }
@@ -178,6 +182,57 @@ float pointShadowFactor(PointLight light, vec3 worldPos) {
     reference -= 0.0015;
 
     return texture(pointShadowMaps, vec4(toFragment, float(cube)), reference);
+}
+
+// How much of a spot's cone reaches this fragment: 1 inside the inner angle,
+// 0 outside the outer one, smooth between. Mirrors spotConeAttenuation in
+// render/SpotShadows.cpp, where the falloff's direction is pinned by a test -
+// running it backwards gives a light bright at its rim and dark in its middle,
+// which reads as a strange material rather than as a broken light.
+float spotConeFactor(Light light, vec3 toFragment) {
+    float cosOuter = light.direction.w;
+    float cosInner = light.params.y;
+    float cosAngle = dot(light.direction.xyz, normalize(toFragment));
+
+    // A larger angle is a smaller cosine, so the inner one is the upper bound.
+    float span = cosInner - cosOuter;
+    if (span <= 1e-5) {
+        return cosAngle >= cosOuter ? 1.0 : 0.0;
+    }
+    return clamp((cosAngle - cosOuter) / span, 0.0, 1.0);
+}
+
+// How much of a spot reaches this fragment through its shadow map: an
+// ordinary projective lookup, the same shape as one cascade of the sun's.
+float spotShadowFactor(Light light, vec3 worldPos) {
+    int slot = int(light.params.x);
+    if (slot < 0) {
+        return 1.0;  // this light casts none
+    }
+
+    vec4 lightClip = ubo.spotShadowMatrices[slot] * vec4(worldPos, 1.0);
+    if (lightClip.w <= 0.0) {
+        return 1.0;  // behind the light, where its cone does not reach anyway
+    }
+    vec3 lightNdc = lightClip.xyz / lightClip.w;
+    if (lightNdc.z < 0.0 || lightNdc.z > 1.0) {
+        return 1.0;  // outside the map's depth range
+    }
+
+    vec2 uv = lightNdc.xy * 0.5 + 0.5;
+    vec2 texelSize = 1.0 / vec2(textureSize(spotShadowMaps, 0).xy);
+
+    // The same 3x3 kernel the sun's cascades use, each tap already 2x2
+    // filtered by the hardware.
+    float shadow = 0.0;
+    for (int x = -1; x <= 1; x++) {
+        for (int y = -1; y <= 1; y++) {
+            shadow += texture(
+                spotShadowMaps,
+                vec4(uv + vec2(x, y) * texelSize, float(slot), lightNdc.z - 0.0015));
+        }
+    }
+    return shadow / 9.0;
 }
 
 // Which cluster this fragment sits in.
@@ -284,15 +339,27 @@ void main() {
     uint count = min(clusterBuffer.data[base], ubo.clusterGrid.w);
 
     for (uint slot = 0u; slot < count; slot++) {
-        PointLight light = lightBuffer.lights[clusterBuffer.data[base + 1u + slot]];
+        Light light = lightBuffer.lights[clusterBuffer.data[base + 1u + slot]];
 
         vec3 toLight = light.position.xyz - fragPosWorld;
         float distanceSquared = max(dot(toLight, toLight), 1e-6);
         vec3 L = toLight * inversesqrt(distanceSquared);
 
+        // Inverse-square falloff is shared; what differs between a point light
+        // and a spot is the cone and which map its shadow lives in.
         float attenuation = 1.0 / distanceSquared;
-        vec3 radiance =
-            light.color.rgb * light.color.w * attenuation * pointShadowFactor(light, fragPosWorld);
+        if (int(light.params.z) == LIGHT_TYPE_SPOT) {
+            // The cone is tested against the direction from the light to the
+            // fragment, which is the negation of the one used for shading.
+            attenuation *= spotConeFactor(light, -toLight);
+            if (attenuation > 0.0) {
+                attenuation *= spotShadowFactor(light, fragPosWorld);
+            }
+        } else {
+            attenuation *= pointShadowFactor(light, fragPosWorld);
+        }
+
+        vec3 radiance = light.color.rgb * light.color.w * attenuation;
 
         Lo += directLight(N, V, L, radiance, albedo, metallic, roughness, F0);
     }
