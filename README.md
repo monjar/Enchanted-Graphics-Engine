@@ -2,7 +2,7 @@
 
 A Vulkan game engine in C++17, built from the renderer up.
 
-![The demo scene: metal spheres sweeping roughness, two dielectrics, an imported torus, a script-driven sheet and a crate tower awaiting its boulder, lit by a sun and forty-three point lights](docs/images/demo-scene.png)
+![The demo scene: metal spheres sweeping roughness, two dielectrics, an imported torus, a script-driven sheet and a crate tower awaiting its boulder, lit by a sun, forty-three point lights and a spot over the crates](docs/images/demo-scene.png)
 
 A Vulkan 1.3 forward renderer — dynamic rendering, a frame graph, a
 metallic-roughness PBR pipeline with image-based lighting, shading into a
@@ -12,8 +12,9 @@ fixed-timestep simulation clock and rigid-body physics.
 
 The image above is the demo scene: five metal spheres sweeping roughness from
 near-mirror to fully rough, plus two dielectrics, lit by a low sun under a
-procedurally generated evening sky, three lights composing the shot and a
-bank of forty short-range accent lights over the floor. The smoothest metal
+procedurally generated evening sky, three lights composing the shot, a bank
+of forty short-range accent lights over the floor and a spot aimed down at
+the crate tower. The smoothest metal
 reflects that sky — in earlier builds it was nearly black, because a mirror
 with no environment to reflect *is* nearly black, and giving it one is
 exactly what image-based lighting does. The sun casts real shadows through
@@ -23,10 +24,13 @@ box — and its direction, the disk in the sky and the shadows all agree
 because they share one definition. Point lights cast shadows too, each
 through a cube covering the whole sphere around it: six depth passes into
 six layers of one image, sampled by direction so the hardware picks the face
-and filters across the seams. The environment, its
-irradiance and prefiltered specular convolutions and the BRDF lookup table
-are all computed on the GPU at startup, so a clean checkout still ships no
-binary assets.
+and filters across the seams. A spot light over the crate tower casts through
+a single map, which is all a cone with one direction and a bounded angle
+needs — the cheapest of the three kinds of shadow the engine now has.
+
+The environment, its irradiance and prefiltered specular convolutions and the
+BRDF lookup table are all computed on the GPU at startup, so a clean checkout
+still ships no binary assets.
 
 Those forty-odd lights are not a stress test the renderer barely survives —
 they are there because light count stopped being the thing that costs.
@@ -280,7 +284,7 @@ src/
                 descriptors, textures, frame graph (layered and cube images,
                 multisampled attachments, transient buffers), frame recording
   render/       renderer, model, camera, materials, lights, bounds,
-                environment lighting, PBR, cascaded and cube shadows,
+                environment lighting, PBR, cascaded, cube and spot shadows,
                 clustered light culling, skybox, bloom and post-process
   scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files

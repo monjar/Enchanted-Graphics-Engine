@@ -26,6 +26,7 @@
 #include "render/ShadowCascades.hpp"
 #include "render/ShadowMapSystem.hpp"
 #include "render/SkyboxSystem.hpp"
+#include "render/SpotShadows.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/FrameGraph.hpp"
 #include "rhi/FrameRecorder.hpp"
@@ -88,6 +89,11 @@ namespace ege {
             // rendered with; the far plane is each light's own range, so it
             // travels with the light rather than here.
             glm::vec4 pointShadowParams{0.f};
+            // One per shadow-casting spot: the matrix its map was rendered
+            // through, which the lighting pass projects fragments back into.
+            // A spot needs only one - it already has a single direction and a
+            // bounded angle, which is why it is the cheapest light to shadow.
+            glm::mat4 spotShadowMatrices[maxShadowedSpotLights]{};
             alignas(16) int numLights = 0;
             int cascadeCount = 0;
         };
@@ -112,7 +118,7 @@ namespace ege {
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 6)
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 7)
                 // Two storage buffers per frame: the scene's lights and the
                 // per-cluster lists culled from them.
                 .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 2)
@@ -174,7 +180,7 @@ namespace ege {
         for (size_t i = 0; i < lightBuffers.size(); i++) {
             lightBuffers[i] = std::make_unique<Buffer>(
                 device,
-                sizeof(GpuPointLight),
+                sizeof(GpuLight),
                 maxSceneLights,
                 VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
@@ -216,6 +222,9 @@ namespace ege {
                 // Every shadow-casting point light's cube, in one array.
                 .addBinding(
                     8, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // Every shadow-casting spot's map, in one array.
+                .addBinding(
+                    9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
@@ -538,49 +547,100 @@ namespace ege {
                 // buffer. No fragment loops over this many - the culling pass
                 // reduces it to the few that reach each cluster - so the cap
                 // here bounds allocation rather than shading cost.
-                std::vector<GpuPointLight> sceneLights;
+                std::vector<GpuLight> sceneLights;
                 sceneLights.reserve(maxSceneLights);
 
-                // The lights whose shadow cubes get rendered this frame, in
-                // the order their cubes sit in the array. Shadow casters are
-                // taken in the order the scene yields them and stop at the
-                // cap, so which lights cast is stable frame to frame as long
-                // as the scene is.
-                struct ShadowCaster {
+                // The lights whose shadow maps get rendered this frame, in the
+                // order their slots sit in the arrays. Casters are taken in
+                // the order the scene yields them and stop at the cap, so
+                // which lights cast is stable frame to frame as long as the
+                // scene is. Points and spots have separate slots because they
+                // cast into differently shaped maps - a cube each against a
+                // single map each.
+                struct PointShadowCaster {
                     glm::vec3 position{0.f};
                     float range = 0.f;
                 };
 
-                std::vector<ShadowCaster> shadowCasters;
+                struct SpotShadowCaster {
+                    glm::mat4 viewProjection{1.f};
+                };
 
-                world.each<Transform, PointLight>([&](Entity,
-                                                      Transform& transform,
-                                                      PointLight& light) {
-                    if (sceneLights.size() >= maxSceneLights) {
-                        return;
-                    }
-                    GpuPointLight gpuLight{};
-                    // The cull radius rides in position.w, which is where
-                    // the culling shader reads it: the light's own range,
-                    // the distance past which it is treated as
-                    // contributing nothing - and the far plane of its
-                    // shadow cube for exactly the same reason.
-                    gpuLight.position = glm::vec4{transform.translation, light.range};
-                    gpuLight.color = glm::vec4{light.color, light.intensity};
+                std::vector<PointShadowCaster> shadowCasters;
+                std::vector<SpotShadowCaster> spotCasters;
 
-                    if (light.castsShadows && shadowCasters.size() < maxShadowedPointLights) {
-                        gpuLight.shadow.x = static_cast<float>(shadowCasters.size());
-                        shadowCasters.push_back(ShadowCaster{transform.translation, light.range});
-                    }
+                world.each<Transform, PointLight>(
+                    [&](Entity, Transform& transform, PointLight& light) {
+                        if (sceneLights.size() >= maxSceneLights) {
+                            return;
+                        }
+                        GpuLight gpuLight{};
+                        // The cull radius rides in position.w, which is where
+                        // the culling shader reads it: the light's own range,
+                        // the distance past which it is treated as
+                        // contributing nothing - and the far plane of its
+                        // shadow cube for exactly the same reason.
+                        gpuLight.position = glm::vec4{transform.translation, light.range};
+                        gpuLight.color = glm::vec4{light.color, light.intensity};
+                        gpuLight.params.z = static_cast<float>(GpuLightType::point);
 
-                    sceneLights.push_back(gpuLight);
-                });
+                        if (light.castsShadows && shadowCasters.size() < maxShadowedPointLights) {
+                            gpuLight.params.x = static_cast<float>(shadowCasters.size());
+                            shadowCasters.push_back(
+                                PointShadowCaster{transform.translation, light.range});
+                        }
+
+                        sceneLights.push_back(gpuLight);
+                    });
+
+                // Spots go into the same buffer and through the same culling.
+                // A cone is bounded by the sphere of its range, so the cluster
+                // test needs nothing new: it may hand a fragment a spot whose
+                // cone misses it, which costs one iteration that shades to
+                // zero and never a light that should have been there.
+                world.each<Transform, SpotLight>(
+                    [&](Entity, Transform& transform, SpotLight& light) {
+                        if (sceneLights.size() >= maxSceneLights) {
+                            return;
+                        }
+                        // Which way the entity faces, so a spot is aimed by
+                        // rotating it like anything else in the scene rather than
+                        // by carrying a direction the transform disagrees with.
+                        const glm::vec3 forward = glm::normalize(
+                            glm::vec3{transform.mat4() * glm::vec4{0.f, 0.f, 1.f, 0.f}});
+                        // Cosines, because that is what a dot product gives the
+                        // shader and converting back would cost an inverse cosine
+                        // per fragment. The inner is held inside the outer so an
+                        // authored pair that crosses over dims rather than
+                        // lighting the rim and darkening the core.
+                        const float outerAngle = std::max(light.outerAngle, 0.01f);
+                        const float innerAngle = std::min(light.innerAngle, outerAngle);
+
+                        GpuLight gpuLight{};
+                        gpuLight.position = glm::vec4{transform.translation, light.range};
+                        gpuLight.color = glm::vec4{light.color, light.intensity};
+                        gpuLight.direction = glm::vec4{forward, std::cos(outerAngle)};
+                        gpuLight.params.y = std::cos(innerAngle);
+                        gpuLight.params.z = static_cast<float>(GpuLightType::spot);
+
+                        if (light.castsShadows && spotCasters.size() < maxShadowedSpotLights) {
+                            const auto slot = static_cast<uint32_t>(spotCasters.size());
+                            gpuLight.params.x = static_cast<float>(slot);
+                            const glm::mat4 matrix = spotShadowMatrix(
+                                transform.translation, forward, outerAngle, light.range);
+                            ubo.spotShadowMatrices[slot] = matrix;
+                            spotCasters.push_back(SpotShadowCaster{matrix});
+                        }
+
+                        sceneLights.push_back(gpuLight);
+                    });
+
                 ubo.numLights = static_cast<int>(sceneLights.size());
                 ubo.pointShadowParams = glm::vec4{pointShadowNearPlane, 0.f, 0.f, 0.f};
 
                 if (!sceneLights.empty()) {
                     lightBuffers[frameIndex]->writeToBuffer(
-                        sceneLights.data(), sceneLights.size() * sizeof(GpuPointLight));
+                        sceneLights.data(), sceneLights.size() * sizeof(GpuLight));
                     lightBuffers[frameIndex]->flush();
                 }
 
@@ -666,6 +726,21 @@ namespace ege {
                 pointShadowDesc.cube = true;
                 FrameGraphResource pointShadowMaps =
                     graph.createTransient("pointShadowMaps", pointShadowDesc);
+
+                // One map per shadow-casting spot, as a plain 2D array - a
+                // spot has one direction and a bounded angle, so unlike a
+                // point light it needs no cube and unlike the sun it needs no
+                // cascades. Sized for the cap either way, for the same reason
+                // the cube array is: a physical image the graph can keep
+                // reusing rather than reallocating as lights come and go.
+                TransientImageDesc spotShadowDesc{};
+                spotShadowDesc.format = renderer.getSwapChainDepthFormat();
+                spotShadowDesc.extent = {
+                    ShadowMapSystem::spotResolution, ShadowMapSystem::spotResolution};
+                spotShadowDesc.clearValue.depthStencil = {1.0f, 0};
+                spotShadowDesc.layers = maxShadowedSpotLights;
+                FrameGraphResource spotShadowMaps =
+                    graph.createTransient("spotShadowMaps", spotShadowDesc);
 
                 // Where the culling pass puts each cluster's light list. A
                 // graph resource rather than a buffer of our own, so the
@@ -772,6 +847,25 @@ namespace ege {
                     }
                 }
 
+                // One pass per spot slot, on the same terms as the cube faces
+                // above: unused slots record nothing and cost a clear, so the
+                // array is defined whatever the scene holds.
+                for (uint32_t slot = 0; slot < maxShadowedSpotLights; slot++) {
+                    const bool used = slot < spotCasters.size();
+                    const glm::mat4 spotMatrix =
+                        used ? spotCasters[slot].viewProjection : glm::mat4{1.f};
+                    graph.addPass(
+                        "spotShadow" + std::to_string(slot),
+                        [&, slot](FrameGraph::PassBuilder& pass) {
+                            pass.write(spotShadowMaps, ResourceAccess::depthWrite, slot);
+                        },
+                        [&, used, spotMatrix](VkCommandBuffer cmd, const FrameGraphResources&) {
+                            if (used) {
+                                shadowSystem.render(cmd, world, spotMatrix);
+                            }
+                        });
+                }
+
                 // Light culling, before anything shades. Not a raster pass at
                 // all - it declares no attachment, so the graph runs it
                 // outside vkCmdBeginRendering and derives the compute-to-
@@ -800,6 +894,7 @@ namespace ege {
                     [&](FrameGraph::PassBuilder& pass) {
                         pass.read(shadowMap, ResourceAccess::sampled);
                         pass.read(pointShadowMaps, ResourceAccess::sampled);
+                        pass.read(spotShadowMaps, ResourceAccess::sampled);
                         pass.read(clusterList, ResourceAccess::storageRead);
                         pass.write(sceneColorMs, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
@@ -831,10 +926,16 @@ namespace ege {
                         pointShadowInfo.imageView = resolved.view(pointShadowMaps);
                         pointShadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+                        VkDescriptorImageInfo spotShadowInfo{};
+                        spotShadowInfo.sampler = shadowSystem.comparisonSampler();
+                        spotShadowInfo.imageView = resolved.view(spotShadowMaps);
+                        spotShadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
                         DescriptorWriter(*globalSetLayout, *globalPool)
                             .writeImage(5, &shadowInfo)
                             .writeBuffer(7, &clusterInfo)
                             .writeImage(8, &pointShadowInfo)
+                            .writeImage(9, &spotShadowInfo)
                             .overwrite(globalDescriptorSets[frameIndex]);
 
                         frameInfo.commandBuffer = cmd;
@@ -1203,6 +1304,37 @@ namespace ege {
         addLight("FillLight", {1.8f, -1.2f, 0.8f}, {0.4f, 0.6f, 1.f}, 5.f);
         addLight("RimLight", {0.f, -0.9f, 2.2f}, {1.f, 0.5f, 0.3f}, 3.f);
 
+        // A spot aimed down at the crate tower, which is the one thing in the
+        // scene tall enough for a cone to fall across unevenly - a spot aimed
+        // at flat ground draws a circle and demonstrates nothing about the
+        // shadow map. Remember -Y is up, so this sits above the tower and
+        // points back down at it.
+        {
+            Entity spot = world.spawn("TowerSpot");
+            Transform spotTransform{};
+            spotTransform.translation = {-2.3f, -2.6f, 0.2f};
+            // A spot is aimed by rotating the entity, like anything else in
+            // the scene: the light shines down the transform's forward axis
+            // rather than carrying a direction of its own that the transform
+            // could disagree with.
+            //
+            // The sign matters and is easy to get backwards. A negative pitch
+            // turns forward towards +Y, which is *downwards* here because this
+            // scene treats -Y as up; a positive one aims the light at the sky.
+            // Slightly under a quarter turn, so the cone also leans towards
+            // the tower rather than falling straight past it.
+            spotTransform.rotation = {-glm::half_pi<float>() * 0.88f, 0.f, 0.f};
+            spot.attach<Transform>(spotTransform);
+
+            SpotLight cone{};
+            cone.color = {1.f, 0.93f, 0.75f};
+            cone.intensity = 22.f;
+            cone.range = 9.f;
+            cone.innerAngle = 0.20f;
+            cone.outerAngle = 0.34f;
+            spot.attach<SpotLight>(cone);
+        }
+
         // A bank of small accent lights over the floor, well past the sixteen
         // the forward shader used to cap the scene at. They are here to be
         // counted as much as to be seen: with clustered shading a fragment
@@ -1264,10 +1396,11 @@ namespace ege {
         importGltfModels();
 
         EGE_INFO(
-            "Scene loaded: {} entities, {} drawn, {} lights, {} assets",
+            "Scene loaded: {} entities, {} drawn, {} point lights, {} spot lights, {} assets",
             world.entityCount(),
             world.count<Transform, MeshRenderer>(),
             world.count<Transform, PointLight>(),
+            world.count<Transform, SpotLight>(),
             AssetDatabase::instance().all().size());
 
         verifySceneRoundTrip();

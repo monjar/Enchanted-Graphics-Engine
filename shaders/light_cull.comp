@@ -21,7 +21,7 @@ layout(local_size_x = 64) in;
 #include "global_ubo.glsl"
 
 layout(std430, set = 0, binding = 6) readonly buffer LightBuffer {
-    PointLight lights[];
+    Light lights[];
 } lightBuffer;
 
 // One entry per cluster: how many lights reached it, then their indices. A
@@ -96,6 +96,9 @@ void main() {
         float radius = lightBuffer.lights[i].position.w;
 
         // Closest point in the box to the light, compared against its reach.
+        // A spot's cone is bounded by that same sphere, so this test covers
+        // both kinds: it may assign a spot to a cell its cone misses, which
+        // costs one iteration that shades to zero and never a missing light.
         vec3 closest = clamp(centre, boundsMin, boundsMax);
         vec3 offset = centre - closest;
         if (dot(offset, offset) <= radius * radius) {
