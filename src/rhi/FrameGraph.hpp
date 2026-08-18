@@ -64,6 +64,13 @@ namespace ege {
         // which layer they write. Shadow cascades were the first caller;
         // point-light cube shadows are the second.
         uint32_t layers = 1;
+        // More than one sample makes the image multisampled: the rasterizer
+        // takes several coverage samples per pixel and a resolve averages
+        // them, which is what stops geometry edges from staircasing. Nothing
+        // samples a multisampled image directly - a pass that renders into
+        // one declares a resolve into a single-sample image, and that is what
+        // later passes read.
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
         // Sample the layers as cube faces rather than as an array. The layers
         // are still rendered one at a time through ordinary 2D views - what
         // changes is only how a shader reads the result: by direction rather
@@ -140,6 +147,17 @@ namespace ege {
             // passes and then sampled together - the case cascades are.
             void write(FrameGraphResource resource, ResourceAccess access, uint32_t layer = 0);
 
+            // Averages a multisampled attachment into a single-sample image
+            // as the pass ends. This happens while the attachment is being
+            // stored rather than as a second pass over the image, which is
+            // why multisampling costs so much less than rendering large and
+            // scaling down.
+            //
+            // `multisampled` must also be declared as a write by this pass;
+            // `target` is what everything downstream reads, and the graph
+            // treats it as written here.
+            void resolve(FrameGraphResource multisampled, FrameGraphResource target);
+
         private:
             friend class FrameGraph;
 
@@ -174,6 +192,10 @@ namespace ege {
 
         struct PlannedAttachment {
             uint32_t resourceIndex = 0;
+            // Where a multisampled attachment is averaged to as it is stored.
+            // invalidIndex when the attachment is single-sampled, which is
+            // every attachment in a frame with multisampling switched off.
+            uint32_t resolveResourceIndex = FrameGraphResource::invalidIndex;
             // Which layer of an array image is attached. Always 0 for the
             // ordinary single-layer case.
             uint32_t layer = 0;
@@ -265,7 +287,11 @@ namespace ege {
             FrameGraphResource resource;
             ResourceAccess access;
             bool isWrite = false;
+            bool isResolve = false;
             uint32_t layer = 0;
+            // For a resolve access, the multisampled attachment being
+            // averaged into this one.
+            FrameGraphResource resolveSource{};
         };
 
         struct Pass {
@@ -288,6 +314,7 @@ namespace ege {
             VkExtent2D extent{0, 0};
             uint32_t layers = 1;
             bool cube = false;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
             VkImageUsageFlags usage = 0;
             uint64_t lastFrameUsed = 0;
             bool usedThisFrame = false;

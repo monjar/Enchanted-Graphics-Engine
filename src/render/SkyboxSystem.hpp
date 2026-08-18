@@ -19,7 +19,8 @@ namespace ege {
             Device& device,
             VkFormat colorFormat,
             VkFormat depthFormat,
-            VkDescriptorSetLayout globalSetLayout);
+            VkDescriptorSetLayout globalSetLayout,
+            VkSampleCountFlagBits samples);
         ~SkyboxSystem();
 
         SkyboxSystem(const SkyboxSystem&) = delete;

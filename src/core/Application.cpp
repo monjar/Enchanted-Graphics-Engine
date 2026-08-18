@@ -245,18 +245,33 @@ namespace ege {
         // color-attachment support.
         constexpr VkFormat hdrFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
+        // Anti-aliasing, if the device offers it. The scene is rasterised with
+        // several coverage samples per pixel and averaged back down before
+        // anything reads it; a device that cannot do that reports one sample
+        // and every path below degrades to exactly what it was.
+        //
+        // Multisampling and clustered forward shading get along, which is not
+        // true of every renderer: a deferred one would have to shade every
+        // sample or resolve a G-buffer, and neither is cheap. Forward shading
+        // runs the fragment shader once per covered pixel and lets the
+        // hardware average coverage, which is the whole saving.
+        const VkSampleCountFlagBits sceneSamples = device.maxUsableSampleCount();
+        EGE_INFO("Multisampling: {}x", static_cast<uint32_t>(sceneSamples));
+
         PbrRenderSystem pbrRenderSystem{
             device,
             hdrFormat,
             renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout(),
-            materialSetLayout->getDescriptorSetLayout()};
+            materialSetLayout->getDescriptorSetLayout(),
+            sceneSamples};
 
         SkyboxSystem skybox{
             device,
             hdrFormat,
             renderer.getSwapChainDepthFormat(),
-            globalSetLayout->getDescriptorSetLayout()};
+            globalSetLayout->getDescriptorSetLayout(),
+            sceneSamples};
 
         ShadowMapSystem shadowSystem{device, renderer.getSwapChainDepthFormat()};
 
@@ -596,16 +611,31 @@ namespace ege {
                 // doing so is what lets passes appear and disappear freely.
                 graph.beginFrame(swapExtent);
 
+                const bool multisampled = sceneSamples != VK_SAMPLE_COUNT_1_BIT;
+
                 TransientImageDesc sceneColorDesc{};
                 sceneColorDesc.format = hdrFormat;
                 sceneColorDesc.extent = renderExtent;
                 sceneColorDesc.clearValue.color = {{0.01f, 0.01f, 0.01f, 1.0f}};
+                // What bloom and the tonemap read: single-sampled either way.
+                // With multisampling on, the scene renders into a separate
+                // multisampled image and this is what it resolves into.
                 FrameGraphResource sceneColor = graph.createTransient("sceneColor", sceneColorDesc);
+
+                TransientImageDesc sceneColorMsDesc = sceneColorDesc;
+                sceneColorMsDesc.samples = sceneSamples;
+                FrameGraphResource sceneColorMs =
+                    multisampled ? graph.createTransient("sceneColorMs", sceneColorMsDesc)
+                                 : sceneColor;
 
                 TransientImageDesc sceneDepthDesc{};
                 sceneDepthDesc.format = renderer.getSwapChainDepthFormat();
                 sceneDepthDesc.extent = renderExtent;
                 sceneDepthDesc.clearValue.depthStencil = {1.0f, 0};
+                // Depth matches the colour it is tested against, and is never
+                // resolved: nothing samples it, so averaging it would produce
+                // a value no sample actually had.
+                sceneDepthDesc.samples = sceneSamples;
                 FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", sceneDepthDesc);
 
                 // Fixed-size, not swapchain-relative: shadow quality has
@@ -771,8 +801,11 @@ namespace ege {
                         pass.read(shadowMap, ResourceAccess::sampled);
                         pass.read(pointShadowMaps, ResourceAccess::sampled);
                         pass.read(clusterList, ResourceAccess::storageRead);
-                        pass.write(sceneColor, ResourceAccess::colorWrite);
+                        pass.write(sceneColorMs, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
+                        if (multisampled) {
+                            pass.resolve(sceneColorMs, sceneColor);
+                        }
                     },
                     [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
                         // The shadow map is a graph transient, so which

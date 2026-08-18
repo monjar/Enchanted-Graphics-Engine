@@ -747,3 +747,156 @@ TEST_CASE("a cube image without a multiple of six layers is refused") {
     cubeDesc.layers = 1;
     CHECK_THROWS_AS(graph.createTransient("stillNotACube", cubeDesc), std::logic_error);
 }
+
+// ---- multisampling ---------------------------------------------------------
+//
+// A multisampled attachment is never sampled directly. The pass that renders
+// into it names a single-sample image to average into, and that is what
+// everything downstream reads - so the graph has to treat the resolve target
+// as written here, and has to know not to make it an attachment of its own.
+
+namespace {
+
+    TransientImageDesc multisampledColorDesc() {
+        TransientImageDesc desc = colorDesc();
+        desc.samples = VK_SAMPLE_COUNT_4_BIT;
+        return desc;
+    }
+
+}  // namespace
+
+TEST_CASE("a resolve names where the multisampled attachment averages to") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource sceneMs = graph.createTransient("sceneColorMs", multisampledColorDesc());
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.write(sceneMs, ResourceAccess::colorWrite);
+            pass.resolve(sceneMs, sceneColor);
+        },
+        noopExecute);
+    graph.addPass(
+        "post",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(sceneColor, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const FrameGraph::CompiledPass& scene = graph.compiledPasses()[0];
+    // One attachment, not two: the resolve target is named by the
+    // multisampled attachment rather than being attached beside it.
+    REQUIRE(scene.colorAttachments.size() == 1);
+    CHECK(scene.colorAttachments[0].resourceIndex == sceneMs.index);
+    CHECK(scene.colorAttachments[0].resolveResourceIndex == sceneColor.index);
+}
+
+TEST_CASE("the resolve target counts as written, so reading it is legal") {
+    // Without this the graph would reject the post pass for reading something
+    // nothing produced - the resolve is the only thing that writes it.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource sceneMs = graph.createTransient("sceneColorMs", multisampledColorDesc());
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.write(sceneMs, ResourceAccess::colorWrite);
+            pass.resolve(sceneMs, sceneColor);
+        },
+        noopExecute);
+    graph.addPass(
+        "post",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(sceneColor, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    CHECK_NOTHROW(graph.compile());
+
+    // And the render-to-sample transition is derived for it exactly as for
+    // any other attachment a later pass reads.
+    const auto& postBarriers = graph.compiledPasses()[1].barriers;
+    const bool becomesReadable = std::any_of(
+        postBarriers.begin(), postBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == sceneColor.index &&
+                   barrier.oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+                   barrier.newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        });
+    CHECK(becomesReadable);
+}
+
+TEST_CASE("resolving something the pass does not render to is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource sceneMs = graph.createTransient("sceneColorMs", multisampledColorDesc());
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    // The pass writes the backbuffer as well, so that it survives culling -
+    // a pass nothing consumes is dropped before anything is checked about it,
+    // which is right but would make this test pass for the wrong reason.
+    graph.addPass(
+        "forgot to write it",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+            pass.resolve(sceneMs, sceneColor);
+        },
+        noopExecute);
+
+    CHECK_THROWS_AS(graph.compile(), std::logic_error);
+}
+
+TEST_CASE("a resolve between mismatched sample counts is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource sceneMs = graph.createTransient("sceneColorMs", multisampledColorDesc());
+    FrameGraphResource alsoMs = graph.createTransient("alsoMs", multisampledColorDesc());
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    importBackbuffer(graph);
+
+    // A single-sample source has nothing to average.
+    CHECK_THROWS_AS(
+        graph.addPass(
+            "resolve from single",
+            [&](FrameGraph::PassBuilder& pass) { pass.resolve(sceneColor, sceneColor); },
+            noopExecute),
+        std::logic_error);
+
+    // A multisampled destination is not a resolve target.
+    CHECK_THROWS_AS(
+        graph.addPass(
+            "resolve into multisampled",
+            [&](FrameGraph::PassBuilder& pass) { pass.resolve(sceneMs, alsoMs); },
+            noopExecute),
+        std::logic_error);
+}
+
+TEST_CASE("single-sample attachments name no resolve at all") {
+    // The path taken whenever multisampling is off, which is every frame on a
+    // device that cannot do it.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    declareSceneAndPost(graph);
+    graph.compile();
+
+    for (const FrameGraph::CompiledPass& pass : graph.compiledPasses()) {
+        for (const FrameGraph::PlannedAttachment& attachment : pass.colorAttachments) {
+            CHECK(attachment.resolveResourceIndex == FrameGraphResource::invalidIndex);
+        }
+    }
+}
