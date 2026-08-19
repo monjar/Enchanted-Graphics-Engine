@@ -57,11 +57,13 @@ namespace ege {
         createLogicalDevice();
         createAllocator();
         createPipelineCache();
-        createCommandPool();
     }
 
     Device::~Device() {
-        vkDestroyCommandPool(device_, commandPool, nullptr);
+        for (const auto& [threadId, pool] : commandPools) {
+            vkDestroyCommandPool(device_, pool, nullptr);
+        }
+        commandPools.clear();
         savePipelineCache();
         vkDestroyPipelineCache(device_, cache, nullptr);
         vmaDestroyAllocator(vmaAllocator);
@@ -228,18 +230,39 @@ namespace ege {
         vkGetDeviceQueue(device_, indices.presentFamily, 0, &presentQueue_);
     }
 
-    void Device::createCommandPool() {
-        QueueFamilyIndices queueFamilyIndices = findPhysicalQueueFamilies();
+    void Device::waitIdle() {
+        const std::unique_lock<std::mutex> lock = lockGraphicsQueue();
+        vkDeviceWaitIdle(device_);
+    }
+
+    VkCommandPool Device::commandPool() {
+        const std::thread::id self = std::this_thread::get_id();
+
+        {
+            const std::lock_guard<std::mutex> lock{poolMutex};
+            const auto existing = commandPools.find(self);
+            if (existing != commandPools.end()) {
+                return existing->second;
+            }
+        }
 
         VkCommandPoolCreateInfo poolInfo = {};
         poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-        poolInfo.queueFamilyIndex = queueFamilyIndices.graphicsFamily;
+        poolInfo.queueFamilyIndex = findPhysicalQueueFamilies().graphicsFamily;
         poolInfo.flags =
             VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 
-        if (vkCreateCommandPool(device_, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+        VkCommandPool pool = VK_NULL_HANDLE;
+        if (vkCreateCommandPool(device_, &poolInfo, nullptr, &pool) != VK_SUCCESS) {
             throw std::runtime_error("failed to create command pool!");
         }
+
+        const std::lock_guard<std::mutex> lock{poolMutex};
+        // Another thread cannot have raced this one to the same key - the key
+        // is this thread - but the map it is going into is shared.
+        commandPools.emplace(self, pool);
+        EGE_TRACE("created a command pool for thread {}", commandPools.size());
+        return pool;
     }
 
     void Device::createSurface() {
@@ -638,7 +661,9 @@ namespace ege {
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandPool = commandPool;
+        // This thread's pool, and the same one endSingleTimeCommands will
+        // free from - which is why the two have to be called on one thread.
+        allocInfo.commandPool = commandPool();
         allocInfo.commandBufferCount = 1;
 
         VkCommandBuffer commandBuffer;
@@ -660,10 +685,33 @@ namespace ege {
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffer;
 
-        vkQueueSubmit(graphicsQueue_, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(graphicsQueue_);
+        // A fence rather than vkQueueWaitIdle, which waits for everything the
+        // queue holds rather than for this. On one thread the difference was
+        // only wasted time; with uploads arriving from workers it is the
+        // difference between waiting for your own copy and waiting for the
+        // frame somebody else just submitted.
+        VkFenceCreateInfo fenceInfo{};
+        fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        VkFence fence = VK_NULL_HANDLE;
+        if (vkCreateFence(device_, &fenceInfo, nullptr, &fence) != VK_SUCCESS) {
+            throw std::runtime_error("failed to create an upload fence!");
+        }
 
-        vkFreeCommandBuffers(device_, commandPool, 1, &commandBuffer);
+        {
+            // Only the submission itself needs the queue. Holding the lock
+            // across the wait as well would serialise every upload behind
+            // whatever is already running.
+            const std::unique_lock<std::mutex> lock = lockGraphicsQueue();
+            if (vkQueueSubmit(graphicsQueue_, 1, &submitInfo, fence) != VK_SUCCESS) {
+                vkDestroyFence(device_, fence, nullptr);
+                throw std::runtime_error("failed to submit a single-time command buffer!");
+            }
+        }
+
+        vkWaitForFences(device_, 1, &fence, VK_TRUE, UINT64_MAX);
+        vkDestroyFence(device_, fence, nullptr);
+
+        vkFreeCommandBuffers(device_, commandPool(), 1, &commandBuffer);
     }
 
     void Device::copyBuffer(VkBuffer srcBuffer, VkBuffer dstBuffer, VkDeviceSize size) {

@@ -156,7 +156,7 @@ namespace ege {
         // when the pyramid's own size changes, not on every frame of a drag.
         // The editor's viewport image retires its old copies on a delay
         // instead, which is what to copy if this ever becomes noticeable.
-        vkDeviceWaitIdle(device.device());
+        device.waitIdle();
         destroyTargets();
         // Everything read back so far described a frame at the old size.
         current = OcclusionSnapshot{};

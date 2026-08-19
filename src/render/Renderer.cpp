@@ -20,7 +20,7 @@ namespace ege {
             extent = window.getExtent();
             Window::waitForEvents();
         }
-        vkDeviceWaitIdle(device.device());
+        device.waitIdle();
         if (egeSwapChain == nullptr) {
             egeSwapChain = std::make_unique<SwapChain>(device, extent);
         } else {
@@ -36,7 +36,7 @@ namespace ege {
     void Renderer::freeCommandBuffers() {
         vkFreeCommandBuffers(
             device.device(),
-            device.getCommandPool(),
+            device.commandPool(),
             static_cast<uint32_t>(commandBuffers.size()),
             commandBuffers.data());
         commandBuffers.clear();
@@ -48,7 +48,7 @@ namespace ege {
         VkCommandBufferAllocateInfo allocInfo{};
         allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
         allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-        allocInfo.commandPool = device.getCommandPool();
+        allocInfo.commandPool = device.commandPool();
         allocInfo.commandBufferCount = static_cast<uint32_t>(commandBuffers.size());
 
         if (vkAllocateCommandBuffers(device.device(), &allocInfo, commandBuffers.data()) !=

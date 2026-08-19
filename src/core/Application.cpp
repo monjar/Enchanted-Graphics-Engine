@@ -1213,7 +1213,7 @@ namespace ege {
             }
         }
 
-        vkDeviceWaitIdle(device.device());
+        device.waitIdle();
     }
 
     void Application::loadScene() {
@@ -1686,7 +1686,7 @@ namespace ege {
         // frame after someone saves a file is invisible - the alternative is
         // versioning every asset for the sake of an event that happens when a
         // human presses Ctrl+S.
-        vkDeviceWaitIdle(device.device());
+        device.waitIdle();
 
         std::error_code errorCode;
         for (const FileWatcher::Event& change : changes) {
