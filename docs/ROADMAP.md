@@ -547,7 +547,7 @@ Three things worth recording, two of them bugs this work exposed rather than int
 
 The demo gained forty short-range accent lights, well past the old cap, because a demo with three lights demonstrates nothing about a change whose point is that light count stopped mattering — and because the headless CI run would otherwise exercise the culling path with a list short enough to fit anywhere. Neighbouring lights step around the hue circle, so a cluster assigned wrongly at a cell boundary would draw hard-edged blocks of colour across the floor rather than a smooth gradient.
 
-*Not done:* everything else in this phase — SSAO, screen-space reflections, volumetric fog, decals, TAA and motion vectors, depth pre-pass and HZB occlusion culling, GPU-driven rendering, skeletal animation, particles, terrain and global illumination. Clustered shading is one item of a long list, and the list is the work of a phase measured in months.
+*Not done at the time:* everything else in this phase — SSAO, screen-space reflections, volumetric fog, decals, TAA and motion vectors, depth pre-pass and HZB occlusion culling, GPU-driven rendering, skeletal animation, particles, terrain and global illumination. Clustered shading is one item of a long list, and the list is the work of a phase measured in months. The depth pre-pass, SSAO and occlusion culling have since landed; see below.
 
 **Point-light cube shadows landed next**, on the same foundation and clearing the last of the shadow debt Phase 4 recorded. A point light casts in every direction at once, so its map is the whole sphere around it: six ninety-degree views sharing the light's position, rendered into six layers of one image and sampled by direction rather than by index. The frame graph's layered images — added for the cascades, and predicted there as what cube shadows would be built on — needed only to learn that an array of layers can be viewed as a cube. More than six layers makes it a cube array, so every casting light's cube lives in one image behind one binding and one barrier.
 
@@ -564,6 +564,28 @@ Two shapes worth carrying forward:
 
 - **Spot lights fall out of this almost for free.** They are a point light with a cone test; the cluster assignment and the per-cluster list are already there.
 - **Deferred shading is now a smaller change than it was.** The cluster grid and the light buffer are the parts a deferred lighting pass would need, and the frame graph already carries the buffers between passes.
+
+**The depth pre-pass, screen-space ambient occlusion and occlusion culling landed together**, because the first is what the other two are built on and shipping it alone would have meant claiming a saving nothing yet measured.
+
+**Depth first.** Clustered forward shades every fragment that survives the depth test, and that shader samples four environment maps, walks the cascades and loops the fragment's whole cluster with a cube or projective shadow lookup per light. Whether a fragment survives depends on what was drawn before it, and the draw list is sorted by material, which has nothing to do with depth — so how many times a pixel was shaded was luck. Depth now goes down in a pass that writes nothing else, and the shading pass tests `EQUAL` with depth writes off.
+
+`EQUAL` rather than `LESS_OR_EQUAL` on purpose: a fragment merely in front of the recorded depth is one the pre-pass did not see, which would mean the two passes disagree about the scene, and losing it visibly beats shading it twice quietly. That comparison only works if both passes compute `gl_Position` to the bit. The obvious thing to copy is the shadow pass, which premultiplies the matrices on the CPU and pushes one `mat4` — and which would land fractionally elsewhere and punch holes in everything. So the expression lives in one shared include along with the push constant block it reads, and both stages declare `invariant gl_Position`, which is what forbids a compiler from reassociating those multiplies differently in one of them.
+
+Two holes in the frame graph had to be closed first, and both are of the same family: *the graph knew about producers and readers, and depth has neither.* Nothing samples what a pre-pass writes — the pass that consumes it consumes it by loading it and testing against it. So liveness culled the pre-pass as contributing nothing, and the store-op rule, decided by the same reasoning, discarded its result. Both now account for a later pass writing the same layer, which is exactly the case where the loaded content matters, and both are pinned by tests. The second hole was that only colour could be resolved; nothing single-sampled can read multisampled depth, which is what both of the items below need.
+
+**Screen-space ambient occlusion** is what the depth is read for first. Image-based ambient hands every fragment the same irradiance whatever is standing next to it, so the inside of a corner is as bright as an open field and nothing reads as touching anything. Points are sampled in the hemisphere over each surface and tested against the recorded depth; the fraction blocked dims the ambient term. Only the ambient term — occlusion is a statement about how much of the environment a point can see, and a direct light either reaches the point or is stopped by a shadow map that already knows. Folding it into the whole sum instead is the usual mistake and lays a grey smear along contacts the sun is lighting perfectly well.
+
+The kernel, the per-pixel rotations and the reconstruction from a depth sample back to a view-space point live in `render/Ssao`, device-free. The reconstruction is the part that needed pinning: published SSAO is written for OpenGL's conventions — a depth range of [-1, 1] and a camera looking down -Z — and this engine has neither, so the tests do not check the code against a formula copied from the same place the code was. They project points through the engine's own `Camera` and check the reconstruction lands back where they started. Verified by differencing a frame against the same frame without it: darkening at the base of every sphere, the joints of the stacked crates and the inside of the torus, and nowhere else.
+
+**Occlusion culling** is what it is read for second. Frustum culling drops what is outside the camera and says nothing about what is inside it and behind a wall. A depth pyramid — each texel the farthest depth anywhere beneath it — answers that a whole object at a time, before the object is submitted.
+
+The shape it took is not the textbook one, and the reason is worth recording. A GPU implementation builds the pyramid as mips, tests bounds in a compute shader, and consumes the verdict in the same frame through indirect draws. **This engine has no indirect draws** — it issues one `vkCmdDrawIndexed` per object from a loop in C++ — so a verdict that never left the GPU could not skip anything, and building one anyway would be infrastructure against nothing. So the pyramid is halved on the GPU until it is a few tens of thousands of floats, copied into a mapped buffer, and finished and tested on the CPU where the draws actually are. Each level is its own image rather than a mip: every level is written once, read once by the level above it and finished with, so separate images cost a few more passes and save the graph tracking a layout per mip. The last level is not a transient at all — it has to outlive the frame that fills it, so it is imported the way the swapchain image is and left in `TRANSFER_SRC_OPTIMAL` for the copy that follows.
+
+The cost is latency: the buffer is read by the frame that reuses its index, which makes the reading a couple of frames old, so the camera it was captured through travels with it and the test is made against that camera rather than the current one. Everything else errs towards drawing — a coarse texel answers for more screen than was asked about, which can only push the reading further away; a box reaching behind the camera is not tested at all; a level whose size is odd takes in three children rather than two, because a parent that has not seen a texel would report a nearer maximum than the truth, and that is the one error that loses visible geometry.
+
+The demo scene had nothing standing behind anything, which is why it gained one thing that does. Measured over the whole tour with the validation layers on: the pyramid culls it on 43 of 181 frames, and against the same tour with culling switched off exactly one frame of 121 differs — twenty-five pixels where the sphere had just begun to show past the sheet's edge and the reading was still a frame or two behind. That is the latency, measured rather than assumed.
+
+*Still not done in this phase:* screen-space reflections, volumetric fog, decals, TAA and motion vectors, GPU-driven rendering, skeletal animation, particles, terrain and global illumination.
 
 ### Phase 10 — Completing the engine (ongoing)
 
@@ -656,12 +678,15 @@ Proven by breaking it on purpose — emptying the scene pass produced a run that
 ### 10.1 What the engine is now
 
 A Vulkan 1.3 clustered-forward renderer with a frame graph that owns layered,
-cube and multisampled images and transient buffers; PBR with image-based
-lighting; three kinds of shadow (cascaded sun, cube point, projective spot);
-4× MSAA; bloom and an ACES tonemap. Underneath: a sparse-set ECS, runtime
-reflection driving serialization and the editor, a GUID asset database, C++
-scripting, and Jolt physics. Around it: 261 tests, five CI configurations, and
-a headless render that now checks its own output.
+cube and multisampled images — colour and depth, with their resolves — and
+transient buffers; PBR with image-based lighting; three kinds of shadow
+(cascaded sun, cube point, projective spot); 4× MSAA; a depth pre-pass with
+screen-space ambient occlusion and a depth pyramid built on it; bloom and an
+ACES tonemap. Draws are rejected by the frustum and by what the pyramid found
+hidden. Underneath: a sparse-set ECS, runtime reflection driving serialization
+and the editor, a GUID asset database, C++ scripting, and Jolt physics. Around
+it: 281 tests, five CI configurations, and a headless render that checks its
+own output.
 
 ### 10.2 Next, in order
 
@@ -669,23 +694,25 @@ Each of these is a single increment — one branch, one pull request.
 
 | # | Item | Why now | Blocked by |
 |---|---|---|---|
-| 1 | **Depth pre-pass** | Clustered forward shades every fragment that survives the depth test, and the demo already has overdraw. A depth-only pass first means the scene pass shades each pixel once. It is also the prerequisite for the two items under it. | nothing |
-| 2 | **SSAO** | The single largest remaining gain in how *grounded* objects look, and the ambient term is currently unoccluded everywhere. Needs depth and normals from a pre-pass. | 1 |
-| 3 | **HZB occlusion culling** | Frustum culling is in; nothing rejects what is behind something else. The pre-pass depth is the pyramid's source. | 1 |
-| 4 | **GPU instancing** | Phase 4 left the draw list sorted by material and mesh and never merged consecutive identical draws. The groundwork is done; this is the merge. | nothing |
-| 5 | **Per-thread command pools** | Phase 6 called async asset loading a *hazard* rather than a preference: uploading from a worker needs a pool per thread, and `Device` has one. This unblocks async loading and anything else that wants to record off the main thread. | nothing |
-| 6 | **Async asset loading** | What the asset database was designed for and could not have. | 5 |
-| 7 | **Render-transform interpolation** | `Time::fixedAlpha()` has existed since Phase 1 for exactly this. Physics at 60 Hz on a 144 Hz display judders today. Lands as one change across everything the simulation moves, not as a physics special case. | nothing |
-| 8 | **Engine as a shared library** | The one thing Phase 7 asked for and did not get. A `dlopen`'d script module linked against a *static* engine gets its own copies of every registry, so nothing it registers is visible. This is a build change on every platform and deserves its own commit. | nothing |
-| 9 | **Script hot reload** | The feature 8 exists to enable, and the file watcher that drives it is already built and working. | 8 |
-| 10 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
+| ~~1~~ | ~~**Depth pre-pass**~~ | **Landed.** Depth goes down first and the scene pass tests `EQUAL` with writes off, so the clustered fragment shader runs once per visible pixel. | — |
+| ~~2~~ | ~~**SSAO**~~ | **Landed.** The hemisphere over each surface is sampled against the pre-pass depth and the image-based ambient is dimmed by what it finds. | — |
+| ~~3~~ | ~~**HZB occlusion culling**~~ | **Landed**, though not in the shape the row assumed: with no indirect draws to consume a GPU verdict, the pyramid is finished and tested on the CPU where the draws are issued, at the cost of a couple of frames of latency. | — |
+| 1 | **GPU instancing** | Phase 4 left the draw list sorted by material and mesh and never merged consecutive identical draws. The groundwork is done; this is the merge, and it is now the largest per-draw saving left. | nothing |
+| 2 | **Indirect draws** | The thing occlusion culling wanted and did not have. One `vkCmdDrawIndexedIndirect` per object with its instance count in a buffer is enough to make the occlusion verdict apply in the frame that computed it, which removes the pop-in the CPU path accepts. It also composes with 1: a merged batch is exactly an indirect draw with a count. | 1 |
+| 3 | **Per-thread command pools** | Phase 6 called async asset loading a *hazard* rather than a preference: uploading from a worker needs a pool per thread, and `Device` has one. This unblocks async loading and anything else that wants to record off the main thread. | nothing |
+| 4 | **Async asset loading** | What the asset database was designed for and could not have. | 3 |
+| 5 | **Render-transform interpolation** | `Time::fixedAlpha()` has existed since Phase 1 for exactly this. Physics at 60 Hz on a 144 Hz display judders today. Lands as one change across everything the simulation moves, not as a physics special case. | nothing |
+| 6 | **Engine as a shared library** | The one thing Phase 7 asked for and did not get. A `dlopen`'d script module linked against a *static* engine gets its own copies of every registry, so nothing it registers is visible. This is a build change on every platform and deserves its own commit. | nothing |
+| 7 | **Script hot reload** | The feature 6 exists to enable, and the file watcher that drives it is already built and working. | 6 |
+| 8 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
+| 9 | **Velocity buffer and TAA** | Moved up from "deliberately not next" now that a depth pre-pass exists to write velocity alongside depth for nothing. MSAA covers geometry aliasing; the specular aliasing left over is what TAA is actually for. | 5 |
+| 10 | **Screen-space reflections** | The depth pyramid built for occlusion culling is also what a ray-marched reflection traces against, so the expensive half already exists. Wants a velocity buffer for the reprojection, which is what puts it after 9. | 9 |
 
 ### 10.3 Deliberately not next
 
-- **TAA** — wants motion vectors, and motion vectors want a velocity buffer the
-  frame graph does not yet produce. FXAA is cheaper but MSAA already covers the
-  geometry aliasing that hurts most; the remaining aliasing is specular, which
-  neither fixes.
+- **Indirect-draw-driven GPU culling in full** — meshlets, a GPU-side draw
+  stream, two-phase occlusion culling against last frame's pyramid. Each is
+  real, and each wants the plain indirect draw at row 2 to exist first.
 - **Bindless descriptors and SPIRV-Reflect layouts** — neither blocks anything.
   Bindless earns its cost when material count outgrows per-material sets, and
   the worst of the coupling SPIRV-Reflect would remove is already gone.
