@@ -273,7 +273,8 @@ namespace ege {
             renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout(),
             materialSetLayout->getDescriptorSetLayout(),
-            sceneSamples};
+            sceneSamples,
+            SwapChain::MAX_FRAMES_IN_FLIGHT};
 
         SkyboxSystem skybox{
             device,
@@ -666,6 +667,11 @@ namespace ege {
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
+                // Which objects are visible, gathered once for the frame: the
+                // depth pre-pass and the shading pass both draw this list, and
+                // they have to draw the same one.
+                pbrRenderSystem.prepare(frameInfo);
+
                 // render: declare the frame, then let the graph run it. The
                 // declarations are cheap enough to restate every frame, and
                 // doing so is what lets passes appear and disappear freely.
@@ -865,6 +871,21 @@ namespace ege {
                             }
                         });
                 }
+
+                // Depth before colour. Nothing samples what this produces -
+                // the scene pass consumes it by testing EQUAL against it - so
+                // the graph keeps the pass alive on the strength of that later
+                // load rather than on any read.
+                graph.addPass(
+                    "depthPrePass",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.write(sceneDepth, ResourceAccess::depthWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                        frameInfo.commandBuffer = cmd;
+                        pbrRenderSystem.renderDepthPrePass(
+                            frameInfo, uboBuffers[frameIndex]->descriptorInfo());
+                    });
 
                 // Light culling, before anything shades. Not a raster pass at
                 // all - it declares no attachment, so the graph runs it

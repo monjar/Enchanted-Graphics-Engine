@@ -35,13 +35,16 @@ namespace ege {
         VkFormat depthFormat,
         VkDescriptorSetLayout globalSetLayout,
         VkDescriptorSetLayout materialSetLayout,
-        VkSampleCountFlagBits samples)
+        VkSampleCountFlagBits samples,
+        uint32_t framesInFlight)
         : device{deviceRef} {
         createPipelineLayout(globalSetLayout, materialSetLayout);
         createPipeline(colorFormat, depthFormat, samples);
+        createDepthPipeline(depthFormat, samples, framesInFlight);
     }
 
     PbrRenderSystem::~PbrRenderSystem() {
+        vkDestroyPipelineLayout(device.device(), depthPipelineLayout, nullptr);
         vkDestroyPipelineLayout(device.device(), pipelineLayout, nullptr);
     }
 
@@ -92,6 +95,14 @@ namespace ege {
         // is why the count travels from the frame graph's target all the way
         // down here rather than being decided locally.
         pipelineConfig.multisampleInfo.rasterizationSamples = samples;
+        // The depth pre-pass has already written the depth of whatever ends up
+        // visible, so this pass keeps only the fragments that match it exactly
+        // and writes none of its own. EQUAL rather than LESS_OR_EQUAL because
+        // a fragment that is merely in front of the recorded depth is one the
+        // pre-pass did not see, which means the two passes disagree about the
+        // scene - better to lose it visibly than to shade it twice quietly.
+        pipelineConfig.depthStencilInfo.depthCompareOp = VK_COMPARE_OP_EQUAL;
+        pipelineConfig.depthStencilInfo.depthWriteEnable = VK_FALSE;
         pipelineConfig.bindingDescriptions = Model::Vertex::getBindingDescriptions();
         pipelineConfig.attributeDescriptions = Model::Vertex::getAttributeDescriptions();
         pipelineConfig.colorAttachmentFormats = {colorFormat};
@@ -102,7 +113,77 @@ namespace ege {
             std::make_unique<Pipeline>(device, "pbr.vert.spv", "pbr.frag.spv", pipelineConfig);
     }
 
-    void PbrRenderSystem::render(FrameInfo& frameInfo) {
+    void PbrRenderSystem::createDepthPipeline(
+        VkFormat depthFormat, VkSampleCountFlagBits samples, uint32_t framesInFlight) {
+        // Binding 0 is the uniform block, the same number the global set uses,
+        // so the pre-pass's vertex shader includes the same declaration of it
+        // as everything else.
+        depthSetLayout =
+            DescriptorSetLayout::Builder(device)
+                .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
+                .build();
+
+        depthPool = DescriptorPool::Builder(device)
+                        .setMaxSets(framesInFlight)
+                        .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, framesInFlight)
+                        .build();
+
+        depthDescriptorSets.resize(framesInFlight);
+        for (VkDescriptorSet& set : depthDescriptorSets) {
+            if (!depthPool->allocateDescriptor(depthSetLayout->getDescriptorSetLayout(), set)) {
+                throw std::runtime_error{"failed to allocate a depth pre-pass descriptor set"};
+            }
+        }
+
+        // The same push constant block as the shading pass, so the two vertex
+        // shaders can share its declaration; only the vertex stage reads it
+        // here, because the pre-pass has no fragment shader worth the name.
+        VkPushConstantRange pushRange{};
+        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRange.offset = 0;
+        pushRange.size = sizeof(PushConstants);
+
+        const VkDescriptorSetLayout rawLayout = depthSetLayout->getDescriptorSetLayout();
+        VkPipelineLayoutCreateInfo layoutInfo{};
+        layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        layoutInfo.setLayoutCount = 1;
+        layoutInfo.pSetLayouts = &rawLayout;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &pushRange;
+
+        if (vkCreatePipelineLayout(device.device(), &layoutInfo, nullptr, &depthPipelineLayout) !=
+            VK_SUCCESS) {
+            throw std::runtime_error{"failed to create the depth pre-pass pipeline layout"};
+        }
+
+        PipelineConfigInfo config{};
+        Pipeline::defaultPipelineConfigInfo(config);
+        // Everything that decides where a triangle lands has to match the
+        // shading pipeline: the same sample count, the same cull mode, the
+        // same winding. A pre-pass that rasterizes even slightly differently
+        // writes depth the shading pass cannot match.
+        config.multisampleInfo.rasterizationSamples = samples;
+        config.bindingDescriptions = Model::Vertex::getBindingDescriptions();
+        // The whole vertex is bound, but only position is declared - the same
+        // arrangement the shadow pass uses, and for the same reason.
+        config.attributeDescriptions = Model::Vertex::getAttributeDescriptions();
+        config.attributeDescriptions.resize(1);
+        // No colour attachment at all: depth is the entire product.
+        config.colorAttachmentFormats.clear();
+        config.colorBlendInfo.attachmentCount = 0;
+        config.colorBlendInfo.pAttachments = nullptr;
+        config.depthAttachmentFormat = depthFormat;
+        config.pipelineLayout = depthPipelineLayout;
+
+        // No depth bias here, unlike the shadow pass. A shadow map is compared
+        // against from a different point of view and needs slack; this depth
+        // is compared against from the point of view that wrote it, and any
+        // offset at all would make every EQUAL test fail.
+        depthPipeline =
+            std::make_unique<Pipeline>(device, "depth_prepass.vert.spv", "shadow.frag.spv", config);
+    }
+
+    void PbrRenderSystem::prepare(FrameInfo& frameInfo) {
         frameStats = Stats{};
         drawList.clear();
 
@@ -164,6 +245,58 @@ namespace ege {
             return a.model < b.model;
         });
 
+        gathered = true;
+    }
+
+    void PbrRenderSystem::renderDepthPrePass(
+        FrameInfo& frameInfo, const VkDescriptorBufferInfo& globalUbo) {
+        EGE_ASSERT(gathered, "prepare must run before the depth pre-pass");
+        EGE_ASSERT(frameInfo.frameIndex < depthDescriptorSets.size(), "frame index out of range");
+
+        // Written before it is bound and not touched again this frame, on the
+        // same terms as the light culling pass's set.
+        VkDescriptorSet& set = depthDescriptorSets[frameInfo.frameIndex];
+        DescriptorWriter(*depthSetLayout, *depthPool)
+            .writeBuffer(0, const_cast<VkDescriptorBufferInfo*>(&globalUbo))
+            .overwrite(set);
+
+        depthPipeline->bind(frameInfo.commandBuffer);
+
+        vkCmdBindDescriptorSets(
+            frameInfo.commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            depthPipelineLayout,
+            0,
+            1,
+            &set,
+            0,
+            nullptr);
+
+        // No material binds: the pre-pass reads no textures, so the whole list
+        // draws with one pipeline and one descriptor set. The push constants
+        // still go out in full, because the range is shared with the shading
+        // pass and a partial update would leave the rest of it stale.
+        for (const DrawItem& item : drawList) {
+            PushConstants push{};
+            push.modelMatrix = item.modelMatrix;
+            push.normalMatrix = item.normalMatrix;
+
+            vkCmdPushConstants(
+                frameInfo.commandBuffer,
+                depthPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT,
+                0,
+                sizeof(PushConstants),
+                &push);
+
+            const_cast<Model*>(item.model)->bind(frameInfo.commandBuffer);
+            const_cast<Model*>(item.model)->draw(frameInfo.commandBuffer);
+        }
+    }
+
+    void PbrRenderSystem::render(FrameInfo& frameInfo) {
+        EGE_ASSERT(gathered, "prepare must run before the scene pass");
+
         pipeline->bind(frameInfo.commandBuffer);
 
         vkCmdBindDescriptorSets(
@@ -219,6 +352,8 @@ namespace ege {
             const_cast<Model*>(item.model)->draw(frameInfo.commandBuffer);
             frameStats.drawn++;
         }
+
+        gathered = false;
     }
 
 }  // namespace ege

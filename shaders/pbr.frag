@@ -8,7 +8,7 @@ layout(location = 3) in vec2 fragUv;
 
 layout(location = 0) out vec4 outColor;
 
-#include "global_ubo.glsl"
+#include "model_push.glsl"
 
 layout(set = 0, binding = 1) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 2) uniform samplerCube prefilteredMap;
@@ -37,13 +37,6 @@ layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessMap;
 layout(set = 1, binding = 3) uniform sampler2D emissiveMap;
 
-layout(push_constant) uniform Push {
-    mat4 modelMatrix;
-    mat4 normalMatrix;
-    vec4 baseColorFactor;
-    vec4 emissiveAndMetallic;
-    vec4 roughnessNormalOcclusion;
-} push;
 
 const float PI = 3.14159265359;
 
