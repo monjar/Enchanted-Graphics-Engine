@@ -108,7 +108,6 @@ namespace ege {
 
         Device& device;
         uint32_t frames = 0;
-        VkExtent2D lastExtent{0, 0};
         VkExtent2D pyramidExtent{0, 0};
 
         std::vector<Target> targets;

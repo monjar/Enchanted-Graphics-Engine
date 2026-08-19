@@ -952,7 +952,8 @@ namespace ege {
                 // occlusion system owns, imported so that it outlives the
                 // frame that fills it, and left in TRANSFER_SRC_OPTIMAL for
                 // the copy that follows the graph.
-                if (occlusionCulling.enabled) {
+                if (occlusionCulling.enabled &&
+                    occlusionCulling.readbackImage(frameIndex) != VK_NULL_HANDLE) {
                     const uint32_t reductions = OcclusionSystem::reductionSteps(renderExtent);
 
                     std::vector<FrameGraphResource> pyramidLevels(reductions);

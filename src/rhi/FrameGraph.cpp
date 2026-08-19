@@ -513,7 +513,14 @@ namespace ege {
             barrier.srcStage = resource.state.stage;
             barrier.srcAccess = resource.state.access & allWrites;
             barrier.dstStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            barrier.dstAccess = VK_ACCESS_2_NONE;
+            // A layout transition is itself a write, and whatever the image's
+            // owner does next has to be able to see it. For a swapchain image
+            // that is the presentation engine; for an image handed over to be
+            // copied out of, it is the copy recorded right after the graph
+            // finishes, which is a transfer read in the same command buffer.
+            // An empty destination access scope makes the transition available
+            // to nothing at all.
+            barrier.dstAccess = VK_ACCESS_2_MEMORY_READ_BIT;
             finishingBarriers.push_back(barrier);
         }
 

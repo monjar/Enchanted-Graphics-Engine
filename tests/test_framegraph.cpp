@@ -218,6 +218,10 @@ TEST_CASE("the backbuffer ends the frame in its declared final layout") {
     CHECK(present.oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     CHECK(present.newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     CHECK(present.srcAccess == VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    // And the transition is made visible to whatever the owner does next -
+    // presenting it, or the copy the frame recorder and the occlusion
+    // readback both record once the graph has finished.
+    CHECK((present.dstAccess & VK_ACCESS_2_MEMORY_READ_BIT) != 0);
 }
 
 TEST_CASE("the first writer clears, a second writer loads") {

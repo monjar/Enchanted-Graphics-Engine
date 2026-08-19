@@ -140,20 +140,28 @@ namespace ege {
         if (renderExtent.width == 0 || renderExtent.height == 0) {
             return;
         }
-        if (renderExtent.width == lastExtent.width && renderExtent.height == lastExtent.height) {
+
+        // What matters is the size of the level that comes back, not the size
+        // of the frame. Halving four or five times means a whole range of
+        // frame sizes shares one pyramid size, so dragging an editor panel
+        // crosses far fewer of these boundaries than it does frame sizes.
+        const VkExtent2D wanted = stepExtent(renderExtent, reductionSteps(renderExtent) - 1u);
+        if (wanted.width == pyramidExtent.width && wanted.height == pyramidExtent.height) {
             return;
         }
 
-        // A window resize is rare and the images may still be referenced by a
-        // command buffer that has not retired, so this waits rather than
-        // tracking which. Everything read back so far described a frame at the
-        // old size and is discarded with them.
+        // The images may still be referenced by a command buffer that has not
+        // retired, so this waits rather than tracking which. That is a stall,
+        // and the reason it is acceptable is the paragraph above: it happens
+        // when the pyramid's own size changes, not on every frame of a drag.
+        // The editor's viewport image retires its old copies on a delay
+        // instead, which is what to copy if this ever becomes noticeable.
         vkDeviceWaitIdle(device.device());
         destroyTargets();
+        // Everything read back so far described a frame at the old size.
         current = OcclusionSnapshot{};
 
-        lastExtent = renderExtent;
-        pyramidExtent = stepExtent(renderExtent, reductionSteps(renderExtent) - 1u);
+        pyramidExtent = wanted;
 
         for (Target& target : targets) {
             VkImageCreateInfo imageInfo{};
@@ -197,8 +205,10 @@ namespace ege {
         }
 
         EGE_DEBUG(
-            "Occlusion pyramid: {} reduction(s) down to {}x{}",
+            "Occlusion pyramid: {} reduction(s) from {}x{} down to {}x{}",
             reductionSteps(renderExtent),
+            renderExtent.width,
+            renderExtent.height,
             pyramidExtent.width,
             pyramidExtent.height);
     }
