@@ -37,6 +37,7 @@
 #include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
 #include "scene/Systems.hpp"
+#include "scene/TransformInterpolation.hpp"
 #include "script/BehaviorRegistry.hpp"
 #include "script/Behaviors.hpp"
 #include "script/Script.hpp"
@@ -49,6 +50,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <stdexcept>
 
 namespace ege {
@@ -121,9 +123,10 @@ namespace ege {
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 8)
-                // Two storage buffers per frame: the scene's lights and the
-                // per-cluster lists culled from them.
-                .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 2)
+                // Three storage buffers per frame: the scene's lights, the
+                // per-cluster lists culled from them, and the transforms of
+                // everything being drawn.
+                .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 3)
                 .build();
 
         // Four image samplers per material, and room for a reasonable number
@@ -141,6 +144,10 @@ namespace ege {
         // GPU objects first.
         AssetDatabase& assets = AssetDatabase::instance();
         assets.attachDevice(device, *materialPool, *materialSetLayout);
+        // And somewhere to load: from here, an asset asked for asynchronously
+        // is read, decoded and uploaded on a worker rather than on whichever
+        // frame happened to reference it first.
+        assets.attachJobSystem(jobs);
         assets.scan(assetRoot());
 
         loadScene();
@@ -189,6 +196,21 @@ namespace ege {
             lightBuffers[i]->map();
         }
 
+        // Where every drawn object's transform goes, in submission order, for
+        // both the depth pre-pass and the shading pass to index by instance.
+        // Host visible and one per frame in flight, on the same terms as the
+        // light buffer beside it: the CPU rewrites the whole thing each frame.
+        std::vector<std::unique_ptr<Buffer>> instanceBuffers(SwapChain::MAX_FRAMES_IN_FLIGHT);
+        for (size_t i = 0; i < instanceBuffers.size(); i++) {
+            instanceBuffers[i] = std::make_unique<Buffer>(
+                device,
+                sizeof(GpuInstance),
+                maxDrawInstances,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+            instanceBuffers[i]->map();
+        }
+
         auto globalSetLayout =
             DescriptorSetLayout::Builder(device)
                 // Compute as well as graphics: the light culling pass binds
@@ -231,12 +253,15 @@ namespace ege {
                 // from the depth buffer before anything shaded.
                 .addBinding(
                     10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // Every drawn object's transform, indexed by the instance.
+                .addBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < globalDescriptorSets.size(); i++) {
             auto bufferInfo = uboBuffers[i]->descriptorInfo();
             auto lightInfo = lightBuffers[i]->descriptorInfo();
+            auto instanceInfo = instanceBuffers[i]->descriptorInfo();
             // The lighting maps are generated once and never change, so they
             // are written alongside the per-frame buffer and left alone.
             auto irradianceInfo = environmentLighting.irradianceInfo();
@@ -250,6 +275,7 @@ namespace ege {
                 .writeImage(3, &brdfLutInfo)
                 .writeImage(4, &environmentInfo)
                 .writeBuffer(6, &lightInfo)
+                .writeBuffer(11, &instanceInfo)
                 .build(globalDescriptorSets[i]);
         }
 
@@ -435,6 +461,14 @@ namespace ege {
             // what the step integrates; contacts are delivered after it,
             // when the poses they describe are the poses the world shows.
             while (time.consumeFixedStep()) {
+                // Where everything the fixed step moves is now, before it
+                // moves. The renderer draws between this and where the step
+                // leaves it, so a sixty hertz simulation does not look like
+                // sixty hertz on a faster display. Recorded inside the loop
+                // rather than once a frame, so a frame that runs two steps
+                // interpolates from the second rather than the first.
+                recordPreviousTransforms(world);
+
                 if (playMode.consumeTick()) {
                     scripts.fixedTick(world, time.fixedStep());
                     const std::vector<EntityContact> contacts =
@@ -444,6 +478,12 @@ namespace ege {
             }
             if (playMode.isPlaying()) {
                 scripts.tick(world, frameTime);
+            } else {
+                // Nothing is stepping, so there is nothing to interpolate
+                // towards. Keeping the recorded pose level with the real one
+                // means a gizmo drag in edit mode draws where it is dragged
+                // rather than a fraction behind.
+                recordPreviousTransforms(world);
             }
 
             if (window.input().wasPressed(Key::F1)) {
@@ -473,6 +513,13 @@ namespace ege {
             }
 
             reloadChangedAssets(assetWatcher);
+
+            // Assets that finished loading on a worker since the last frame.
+            // Anything holding a reference to one is still drawing nothing,
+            // so this is what makes it appear.
+            if (!AssetDatabase::instance().takeLoaded().empty()) {
+                systems::refreshAssetReferences(world);
+            }
 
             // After the scripts, before anything reads geometry: a behaviour
             // that rewrote a surface this tick wants it drawn this frame.
@@ -514,6 +561,7 @@ namespace ege {
                 FrameInfo frameInfo{
                     frameIndex,
                     frameTime,
+                    time.fixedAlpha(),
                     commandBuffer,
                     camera,
                     globalDescriptorSets[frameIndex],
@@ -693,7 +741,8 @@ namespace ege {
                 // Which objects are visible, gathered once for the frame: the
                 // depth pre-pass and the shading pass both draw this list, and
                 // they have to draw the same one.
-                pbrRenderSystem.prepare(frameInfo, occlusionCulling.snapshot());
+                pbrRenderSystem.prepare(
+                    frameInfo, occlusionCulling.snapshot(), *instanceBuffers[frameIndex]);
 
                 // render: declare the frame, then let the graph run it. The
                 // declarations are cheap enough to restate every frame, and
@@ -939,7 +988,9 @@ namespace ege {
                     [&](VkCommandBuffer cmd, const FrameGraphResources&) {
                         frameInfo.commandBuffer = cmd;
                         pbrRenderSystem.renderDepthPrePass(
-                            frameInfo, uboBuffers[frameIndex]->descriptorInfo());
+                            frameInfo,
+                            uboBuffers[frameIndex]->descriptorInfo(),
+                            instanceBuffers[frameIndex]->descriptorInfo());
                     });
 
                 // The depth pyramid, halved until it is small enough to be
@@ -1190,7 +1241,7 @@ namespace ege {
             }
         }
 
-        vkDeviceWaitIdle(device.device());
+        device.waitIdle();
     }
 
     void Application::loadScene() {
@@ -1394,6 +1445,53 @@ namespace ege {
             makeMaterial("BlueSphere", glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
             glm::vec3{.5f});
+
+        // A band of gravel around the outside of the floor: one mesh, one
+        // material, a hundred and twenty of them. It is here because a scene
+        // of eighteen objects says nothing about instancing - every one of
+        // them has a material of its own, so every one is its own draw
+        // whatever the renderer does. These share both, so they are one draw
+        // call between them, and the editor's `drawn` and `batches` counts
+        // show the difference directly.
+        //
+        // Scattered from a fixed seed rather than at random. The demo tour is
+        // recorded frame for frame in CI, and a scene that differs between
+        // runs is a scene no recorded frame can be compared against.
+        {
+            const MaterialRef gravelMaterial =
+                makeMaterial("Gravel", glm::vec3{0.38f, 0.35f, 0.32f}, 0.f, 0.9f);
+
+            // A small linear congruential generator, written out rather than
+            // pulled from <random>, because what matters here is that the
+            // same numbers come out on every platform - and the standard
+            // library's distributions are explicitly not required to.
+            uint32_t seed = 20260819u;
+            auto nextUnit = [&seed]() {
+                seed = seed * 1664525u + 1013904223u;
+                return static_cast<float>(seed >> 8u) / static_cast<float>(1u << 24u);
+            };
+
+            constexpr int gravelCount = 120;
+            for (int i = 0; i < gravelCount; i++) {
+                // An annulus around the exhibits: far enough out not to stand
+                // in front of anything, inside the floor's own eight-unit
+                // span so nothing floats over the edge.
+                const float angle =
+                    (static_cast<float>(i) + nextUnit()) / gravelCount * glm::two_pi<float>();
+                const float radius = 2.9f + nextUnit() * 0.95f;
+                const float size = 0.07f + nextUnit() * 0.09f;
+
+                addMesh(
+                    "Gravel" + std::to_string(i),
+                    box,
+                    gravelMaterial,
+                    // Remember -Y is up: resting on the floor at y = .5 means
+                    // sitting half a stone's height above it.
+                    {radius * std::cos(angle), 0.5f - size * 0.5f, radius * std::sin(angle)},
+                    glm::vec3{size},
+                    {0.f, nextUnit() * glm::two_pi<float>(), 0.f});
+            }
+        }
 
         // Directly behind the rippling sheet, and there for that reason: this
         // is the one thing in the scene that spends most of the tour entirely
@@ -1599,6 +1697,11 @@ namespace ege {
 
         AssetDatabase& assets = AssetDatabase::instance();
 
+        // Nothing may be loading while the record list is rewritten under it.
+        // A load in flight holds a pointer into that list, and a rescan can
+        // move it.
+        jobs.waitForAll();
+
         // Rescan first: a file that has just appeared has no id yet, and a
         // sidecar that has just appeared beside one is how an id arrives.
         bool structural = false;
@@ -1616,7 +1719,7 @@ namespace ege {
         // frame after someone saves a file is invisible - the alternative is
         // versioning every asset for the sake of an event that happens when a
         // human presses Ctrl+S.
-        vkDeviceWaitIdle(device.device());
+        device.waitIdle();
 
         std::error_code errorCode;
         for (const FileWatcher::Event& change : changes) {
@@ -1627,12 +1730,19 @@ namespace ege {
                 continue;
             }
             if (const AssetRecord* record = assets.findByPath(relative)) {
-                assets.reload(record->id);
+                const Guid id = record->id;
+                assets.reload(id);
+                // A material comes back rewritten in place by the call above
+                // and needs nothing more. A mesh or a texture was dropped
+                // rather than rebuilt, and rebuilding it is a file read, a
+                // decode and an upload - which now happens on a worker while
+                // the frame carries on, and lands through takeLoaded.
+                assets.requestAsync(id);
             }
         }
 
-        // A mesh cannot be reloaded in place, so anything holding one has to
-        // be pointed at the rebuilt version.
+        // Whatever came back in place is live already; the rest arrives over
+        // the next frames and is picked up there.
         systems::refreshAssetReferences(world);
     }
 
@@ -1657,24 +1767,42 @@ namespace ege {
             }
         }
 
+        // Parsing is the slow half and needs no device, so every file is read
+        // and decoded at once across the workers. Instantiating is the other
+        // half - GPU objects and entities - and stays here, because the world
+        // is not thread safe and because two imports racing to catalogue their
+        // sub-assets would be two threads writing one record list.
+        //
+        // A parse that throws is caught here rather than in the job, so that
+        // one bad file does not take down the ones beside it or the procedural
+        // scene they would have joined.
+        struct PendingImport {
+            const AssetRecord* record = nullptr;
+            std::future<GltfSceneData> parsed;
+        };
+
+        std::vector<PendingImport> pending;
+        pending.reserve(scenes.size());
         for (const AssetRecord& record : scenes) {
             const std::filesystem::path path = assetRoot() / record.path;
+            pending.push_back(
+                {&record, jobs.submit([path]() { return gltf::parseFile(path.string()); })});
+        }
 
-            // One bad file should not take down the ones beside it, or the
-            // procedural scene it would have joined.
+        for (PendingImport& import : pending) {
             try {
-                const GltfSceneData scene = gltf::parseFile(path.string());
+                const GltfSceneData scene = import.parsed.get();
                 const gltf::ImportStats stats = gltf::instantiate(
                     device,
                     world,
                     scene,
                     *materialPool,
                     *materialSetLayout,
-                    record.name,
-                    record.id);
+                    import.record->name,
+                    import.record->id);
                 EGE_INFO(
                     "Imported {}: {} entities, {} meshes, {} materials, {} textures",
-                    record.path.string(),
+                    import.record->path.string(),
                     stats.entities,
                     stats.meshes,
                     stats.materials,

@@ -5,7 +5,10 @@
 #include <vk_mem_alloc.h>
 
 // std lib headers
+#include <mutex>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace ege {
@@ -42,7 +45,30 @@ namespace ege {
         Device(Device&&) = delete;
         Device& operator=(Device&&) = delete;
 
-        VkCommandPool getCommandPool() { return commandPool; }
+        // The command pool belonging to the calling thread, created the first
+        // time that thread asks for one.
+        //
+        // A VkCommandPool is externally synchronized: allocating from one on
+        // two threads at once is undefined, and so is freeing while another
+        // thread allocates. One pool per thread is the arrangement Vulkan
+        // expects, and it is what lets an asset be uploaded from a worker
+        // while the main thread is recording the frame.
+        VkCommandPool commandPool();
+
+        // Held for the duration of any submission to the graphics queue.
+        //
+        // A VkQueue is externally synchronized too, and unlike the pools it
+        // cannot be duplicated: the frame's submit and an upload's submit are
+        // the same queue and have to take turns. Every caller of
+        // vkQueueSubmit, vkQueuePresentKHR or vkQueueWaitIdle takes this.
+        [[nodiscard]] std::unique_lock<std::mutex> lockGraphicsQueue() {
+            return std::unique_lock<std::mutex>{queueMutex};
+        }
+
+        // Waits for everything the device is doing. Host synchronization on
+        // this is the same as on a submission - it is one for every queue at
+        // once - so it goes through the same lock rather than around it.
+        void waitIdle();
 
         VkDevice device() const { return device_; }
 
@@ -141,7 +167,6 @@ namespace ege {
         void createLogicalDevice();
         void createAllocator();
         void createPipelineCache();
-        void createCommandPool();
 
         // helper functions
         bool isDeviceSuitable(VkPhysicalDevice device);
@@ -159,7 +184,13 @@ namespace ege {
         VkDebugUtilsMessengerEXT debugMessenger;
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
         Window& window;
-        VkCommandPool commandPool;
+
+        // One pool per thread that has asked for one, made on demand and kept
+        // until the device goes away. Guarded because the map itself is shared
+        // even though what it hands out is not.
+        std::mutex poolMutex;
+        std::unordered_map<std::thread::id, VkCommandPool> commandPools;
+        std::mutex queueMutex;
 
         VkDevice device_;
         VmaAllocator vmaAllocator = VK_NULL_HANDLE;

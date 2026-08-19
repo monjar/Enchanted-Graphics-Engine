@@ -2,6 +2,7 @@
 
 #include "core/Log.hpp"
 #include "scene/Components.hpp"
+#include "scene/TransformInterpolation.hpp"
 
 namespace ege {
 
@@ -222,6 +223,19 @@ namespace ege {
             refreshed->worldMatrix = parentMatrix * local;
             refreshed->dirty = false;
             return refreshed->worldMatrix;
+        }
+
+        glm::mat4 renderMatrix(World& world, EntityId entity, float alpha) {
+            const glm::mat4 local = renderTransform(world, entity, alpha).mat4();
+
+            const Hierarchy* node = world.find<Hierarchy>(entity);
+            if (node == nullptr || node->parent.isNull()) {
+                return local;
+            }
+            // find<Hierarchy> again after the recursion for the same reason
+            // worldMatrix does it: a component pool can reallocate.
+            const EntityId parent = node->parent;
+            return renderMatrix(world, parent, alpha) * local;
         }
 
         void resolveTransforms(World& world) {

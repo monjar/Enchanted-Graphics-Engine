@@ -225,15 +225,23 @@ textures are immutable once uploaded, so those are rebuilt and the world's
 references are repointed. A broken edit costs you the edit — the parse failure
 is logged and the previous version keeps drawing.
 
-Script hot reload is not here yet, and needs one specific thing:
-`Enchanted` is a static library, so a `dlopen`'d script module would get its
-own copies of the type, component and behaviour registries and nothing
-registered across the boundary would be visible. That is a build change to the
-whole project, and it is its own piece of work.
+Script hot reload is not here yet, but the thing that stood in its way is
+gone: `Enchanted` builds as a shared library now, so a `dlopen`'d script
+module and the engine that loads it share one type registry, one component
+registry and one behaviour registry rather than getting a set each. What is
+left is the loading itself.
 
-Still to come: GPU instancing, per-thread command pools and the async asset
-loading they unblock, the standalone editor application, script hot reload,
-skeletal animation, character controllers and physics constraints.
+Objects sharing a mesh and a material go out as one instanced draw rather
+than one each, and the transforms they are drawn with live in a buffer the
+vertex shader indexes rather than in push constants. Assets load on the job
+system's workers - every thread has a command pool of its own, so an upload
+no longer has to happen on the frame that asked for it. And what the fixed
+step moves is drawn between its steps rather than on them, so a sixty hertz
+simulation does not look like sixty hertz on a faster display.
+
+Still to come: indirect draws and GPU-driven culling, the standalone editor
+application, script hot reload, skeletal animation, character controllers and
+physics constraints.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -341,9 +349,11 @@ cmake/          dependency, warning and shader modules
 docs/           roadmap and design notes
 ```
 
-The engine builds as a static library (`Enchanted`, aliased `ege::engine`);
+The engine builds as a shared library (`Enchanted`, aliased `ege::engine`);
 the executable is just `app/main.cpp`. Tests link the library directly, and
-the editor and standalone runtime will do the same.
+the editor and standalone runtime will do the same. `-DEGE_SHARED_ENGINE=OFF`
+builds it static instead, which is the right answer for anything shipping a
+single self-contained binary and not loading script modules.
 
 ## Conventions
 

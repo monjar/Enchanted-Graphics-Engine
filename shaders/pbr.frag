@@ -8,7 +8,8 @@ layout(location = 3) in vec2 fragUv;
 
 layout(location = 0) out vec4 outColor;
 
-#include "model_push.glsl"
+#include "global_ubo.glsl"
+#include "material_push.glsl"
 
 layout(set = 0, binding = 1) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 2) uniform samplerCube prefilteredMap;

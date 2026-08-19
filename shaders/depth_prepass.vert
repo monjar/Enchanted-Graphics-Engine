@@ -16,13 +16,15 @@
 
 layout(location = 0) in vec3 position;
 
-#include "model_push.glsl"
+#include "model_instances.glsl"
 
 // See modelClipPosition: this is what lets the shading pass compare EQUAL
 // against what this pass wrote.
 invariant gl_Position;
 
 void main() {
-    vec4 positionWorld = push.modelMatrix * vec4(position, 1.0);
+    Instance instance = instanceBuffer.instances[gl_InstanceIndex];
+
+    vec4 positionWorld = instance.modelMatrix * vec4(position, 1.0);
     gl_Position = modelClipPosition(positionWorld);
 }

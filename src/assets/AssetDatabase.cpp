@@ -1,5 +1,6 @@
 #include "assets/AssetDatabase.hpp"
 
+#include "core/JobSystem.hpp"
 #include "core/Log.hpp"
 #include "reflect/Serialization.hpp"
 
@@ -215,7 +216,10 @@ namespace ege {
         record.name = name;
         record.builtin = true;
         catalogue(std::move(record));
-        meshes[id] = std::move(asset);
+        {
+            const std::lock_guard<std::mutex> lock{cacheMutex};
+            meshes[id] = std::move(asset);
+        }
         return id;
     }
 
@@ -227,7 +231,10 @@ namespace ege {
         record.name = name;
         record.builtin = true;
         catalogue(std::move(record));
-        materials[id] = std::move(asset);
+        {
+            const std::lock_guard<std::mutex> lock{cacheMutex};
+            materials[id] = std::move(asset);
+        }
         return id;
     }
 
@@ -239,14 +246,27 @@ namespace ege {
         record.name = name;
         record.builtin = true;
         catalogue(std::move(record));
-        textures[id] = std::move(asset);
+        {
+            const std::lock_guard<std::mutex> lock{cacheMutex};
+            textures[id] = std::move(asset);
+        }
         return id;
     }
 
+    template<typename T>
+    std::optional<std::shared_ptr<T>> AssetDatabase::cached(
+        const std::unordered_map<Guid, std::shared_ptr<T>>& cache, Guid id) const {
+        const std::lock_guard<std::mutex> lock{cacheMutex};
+        const auto found = cache.find(id);
+        if (found == cache.end()) {
+            return std::nullopt;
+        }
+        return found->second;
+    }
+
     std::shared_ptr<Model> AssetDatabase::mesh(Guid id) {
-        const auto cached = meshes.find(id);
-        if (cached != meshes.end()) {
-            return cached->second;
+        if (const auto hit = cached(meshes, id)) {
+            return *hit;
         }
 
         const AssetRecord* record = find(id);
@@ -264,21 +284,22 @@ namespace ege {
         try {
             std::shared_ptr<Model> loaded =
                 Model::createModelFromFile(*device, (assetRoot / record->path).string());
+            const std::lock_guard<std::mutex> lock{cacheMutex};
             meshes[id] = loaded;
             return loaded;
         } catch (const std::exception& error) {
             EGE_ERROR("failed to load mesh {}: {}", record->path.string(), error.what());
             // Cached as null so a broken asset is reported once rather than
             // retried every time something references it.
+            const std::lock_guard<std::mutex> lock{cacheMutex};
             meshes[id] = nullptr;
             return nullptr;
         }
     }
 
     std::shared_ptr<Texture> AssetDatabase::texture(Guid id) {
-        const auto cached = textures.find(id);
-        if (cached != textures.end()) {
-            return cached->second;
+        if (const auto hit = cached(textures, id)) {
+            return *hit;
         }
 
         const AssetRecord* record = find(id);
@@ -292,19 +313,20 @@ namespace ege {
         try {
             std::shared_ptr<Texture> loaded =
                 Texture::fromFile(*device, (assetRoot / record->path).string());
+            const std::lock_guard<std::mutex> lock{cacheMutex};
             textures[id] = loaded;
             return loaded;
         } catch (const std::exception& error) {
             EGE_ERROR("failed to load texture {}: {}", record->path.string(), error.what());
+            const std::lock_guard<std::mutex> lock{cacheMutex};
             textures[id] = nullptr;
             return nullptr;
         }
     }
 
     std::shared_ptr<Material> AssetDatabase::material(Guid id) {
-        const auto cached = materials.find(id);
-        if (cached != materials.end()) {
-            return cached->second;
+        if (const auto hit = cached(materials, id)) {
+            return *hit;
         }
 
         const AssetRecord* record = find(id);
@@ -316,11 +338,15 @@ namespace ege {
         }
 
         try {
+            // Outside the lock: this resolves the material's textures, and a
+            // lock held across that would be one this thread already holds.
             std::shared_ptr<Material> loaded = loadMaterialFile(*record);
+            const std::lock_guard<std::mutex> lock{cacheMutex};
             materials[id] = loaded;
             return loaded;
         } catch (const std::exception& error) {
             EGE_ERROR("failed to load material {}: {}", record->path.string(), error.what());
+            const std::lock_guard<std::mutex> lock{cacheMutex};
             materials[id] = nullptr;
             return nullptr;
         }
@@ -375,11 +401,18 @@ namespace ege {
 
         switch (record->kind) {
             case AssetKind::material: {
-                const auto cached = materials.find(id);
-                if (cached == materials.end() || cached->second == nullptr) {
-                    // Never loaded, or last load failed: dropping the entry is
-                    // enough, and the next resolve tries again.
-                    materials.erase(id);
+                const std::shared_ptr<Material> live = [&]() {
+                    const std::lock_guard<std::mutex> lock{cacheMutex};
+                    const auto found = materials.find(id);
+                    if (found == materials.end() || found->second == nullptr) {
+                        // Never loaded, or the last load failed: dropping the
+                        // entry is enough, and the next resolve tries again.
+                        materials.erase(id);
+                        return std::shared_ptr<Material>{};
+                    }
+                    return found->second;
+                }();
+                if (live == nullptr) {
                     return;
                 }
                 try {
@@ -387,15 +420,17 @@ namespace ege {
                     // into the live one. Reading straight into it would leave
                     // a half-updated material visible if the file is broken.
                     const std::shared_ptr<Material> fresh = loadMaterialFile(*record);
-                    cached->second->adoptFrom(*fresh);
+                    live->adoptFrom(*fresh);
                     EGE_INFO("Reloaded material {}", record->path.string());
                 } catch (const std::exception& error) {
                     EGE_ERROR("reloading {} failed: {}", record->path.string(), error.what());
                 }
                 return;
             }
-            case AssetKind::texture:
+            case AssetKind::texture: {
+                const std::lock_guard<std::mutex> lock{cacheMutex};
                 textures.erase(id);
+            }
                 // Nothing holds a texture except the materials that sample it,
                 // and a material only learns of the new one by being read
                 // again. There are few of them and they are cheap.
@@ -406,8 +441,10 @@ namespace ege {
                 }
                 EGE_INFO("Reloaded texture {}", record->path.string());
                 return;
-            case AssetKind::mesh:
+            case AssetKind::mesh: {
+                const std::lock_guard<std::mutex> lock{cacheMutex};
                 meshes.erase(id);
+            }
                 EGE_INFO("Reloaded mesh {}", record->path.string());
                 return;
             case AssetKind::scene:
@@ -416,7 +453,95 @@ namespace ege {
         }
     }
 
+    void AssetDatabase::attachJobSystem(JobSystem& system) {
+        jobs = &system;
+    }
+
+    bool AssetDatabase::requestAsync(Guid id) {
+        const AssetRecord* record = find(id);
+        if (record == nullptr || record->path.empty() || !canLoad()) {
+            return false;
+        }
+
+        // Already there, or already known to be unloadable. Either way this
+        // call has nothing to start.
+        switch (record->kind) {
+            case AssetKind::mesh:
+                if (cached(meshes, id).has_value()) {
+                    return false;
+                }
+                break;
+            case AssetKind::texture:
+                if (cached(textures, id).has_value()) {
+                    return false;
+                }
+                break;
+            case AssetKind::material:
+                if (cached(materials, id).has_value()) {
+                    return false;
+                }
+                break;
+            case AssetKind::scene:
+            case AssetKind::unknown:
+                return false;
+        }
+
+        // Somebody else asked first. Their load is this caller's load.
+        if (!loadQueue.request(id)) {
+            return false;
+        }
+
+        if (jobs == nullptr) {
+            // No pool to hand it to, so it happens here. The caller learns of
+            // it through takeLoaded either way, only sooner.
+            loadNow(id);
+            loadQueue.finish(id);
+            return true;
+        }
+
+        jobs->submit([this, id]() {
+            loadNow(id);
+            loadQueue.finish(id);
+        });
+        return true;
+    }
+
+    void AssetDatabase::loadNow(Guid id) {
+        const AssetRecord* record = find(id);
+        if (record == nullptr) {
+            return;
+        }
+        switch (record->kind) {
+            case AssetKind::mesh:
+                mesh(id);
+                return;
+            case AssetKind::texture:
+                texture(id);
+                return;
+            case AssetKind::material:
+                material(id);
+                return;
+            case AssetKind::scene:
+            case AssetKind::unknown:
+                return;
+        }
+    }
+
+    std::vector<Guid> AssetDatabase::takeLoaded() {
+        return loadQueue.takeCompleted();
+    }
+
     void AssetDatabase::clear() {
+        // Nothing may be mid-load while the caches go away. Waiting on the
+        // whole pool is heavier than waiting on these loads alone, and this
+        // happens when a project closes rather than during a frame.
+        if (jobs != nullptr) {
+            jobs->waitForAll();
+        }
+        loadQueue.clear();
+        jobs = nullptr;
+
+        const std::lock_guard<std::mutex> lock{cacheMutex};
         records.clear();
         byId.clear();
         meshes.clear();

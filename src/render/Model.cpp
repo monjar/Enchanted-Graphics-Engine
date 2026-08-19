@@ -144,11 +144,12 @@ namespace ege {
         device.copyBuffer(stagingBuffer.getBuffer(), indexBuffer->getBuffer(), bufferSize);
     }
 
-    void Model::draw(VkCommandBuffer commandBuffer) {
+    void Model::draw(
+        VkCommandBuffer commandBuffer, uint32_t instanceCount, uint32_t firstInstance) {
         if (hasIndexBuffer) {
-            vkCmdDrawIndexed(commandBuffer, indexCount, 1, 0, 0, 0);
+            vkCmdDrawIndexed(commandBuffer, indexCount, instanceCount, 0, 0, firstInstance);
         } else {
-            vkCmdDraw(commandBuffer, vertexCount, 1, 0, 0);
+            vkCmdDraw(commandBuffer, vertexCount, instanceCount, 0, firstInstance);
         }
     }
 

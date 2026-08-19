@@ -1,5 +1,6 @@
 #pragma once
 
+#include "assets/AssetLoadQueue.hpp"
 #include "core/Guid.hpp"
 #include "render/Material.hpp"
 #include "render/Model.hpp"
@@ -8,11 +9,15 @@
 
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 namespace ege {
+
+    class JobSystem;
 
     enum class AssetKind { unknown, mesh, texture, material, scene };
 
@@ -57,6 +62,12 @@ namespace ege {
         void attachDevice(
             Device& device, DescriptorPool& materialPool, DescriptorSetLayout& materialLayout);
 
+        // Gives the database somewhere to load asynchronously. Without one,
+        // requestAsync loads on the calling thread and reports the result
+        // immediately - which is what a test with no engine around it gets,
+        // and is the same answer, only sooner.
+        void attachJobSystem(JobSystem& jobs);
+
         bool canLoad() const { return device != nullptr; }
 
         // Walks `root` and catalogues every importable file, writing a sidecar
@@ -98,6 +109,21 @@ namespace ege {
         std::shared_ptr<Material> material(Guid id);
         std::shared_ptr<Texture> texture(Guid id);
 
+        // Starts loading an asset on the job system, if it is not already
+        // loaded and not already loading. True when this call started one.
+        //
+        // Nothing blocks and nothing is returned: the asset appears in the
+        // cache when it lands, and the reference that wanted it is re-pointed
+        // by whoever calls takeLoaded. A reference that has not resolved draws
+        // nothing, which is what it already did before the asset existed.
+        bool requestAsync(Guid id);
+
+        // The assets that finished loading since the last call. The caller is
+        // expected to re-point whatever was waiting on them.
+        std::vector<Guid> takeLoaded();
+
+        std::size_t loadsInFlight() const { return loadQueue.inFlight(); }
+
         // Reloads an asset from disk after its file changed.
         //
         // A material is rewritten *inside* the object every holder already
@@ -125,7 +151,19 @@ namespace ege {
 
         std::shared_ptr<Material> loadMaterialFile(const AssetRecord& record);
 
+        // Loads on the calling thread, whichever that is, and caches the
+        // result. This is what a worker runs.
+        void loadNow(Guid id);
+
+        // Cache lookups, guarded. An engaged optional holding null is a load
+        // that was tried and failed, which is not the same as one never tried
+        // and must not be retried on every reference.
+        template<typename T>
+        std::optional<std::shared_ptr<T>> cached(
+            const std::unordered_map<Guid, std::shared_ptr<T>>& cache, Guid id) const;
+
         Device* device = nullptr;
+        JobSystem* jobs = nullptr;
         DescriptorPool* materialPool = nullptr;
         DescriptorSetLayout* materialLayout = nullptr;
         bool warnedAboutNoDevice = false;
@@ -134,9 +172,16 @@ namespace ege {
         std::vector<AssetRecord> records;
         std::unordered_map<Guid, std::size_t> byId;
 
+        // Guards the three caches and the record list against the workers.
+        // Held around lookups and insertions only, never around a load: a
+        // material's load resolves its textures, and a lock held across that
+        // would be a lock taken twice by one thread.
+        mutable std::mutex cacheMutex;
         std::unordered_map<Guid, std::shared_ptr<Model>> meshes;
         std::unordered_map<Guid, std::shared_ptr<Material>> materials;
         std::unordered_map<Guid, std::shared_ptr<Texture>> textures;
+
+        AssetLoadQueue loadQueue;
     };
 
 }  // namespace ege

@@ -65,7 +65,13 @@ namespace ege {
         const Aabb& bounds() const { return localBounds; }
 
         void bind(VkCommandBuffer commandBuffer);
-        void draw(VkCommandBuffer commandBuffer);
+
+        // `instanceCount` copies, the first of them numbered `firstInstance`.
+        // The numbering is what the shader indexes its transform buffer by, so
+        // a batch of objects sharing this mesh points at its own run of that
+        // buffer without anything per draw having to say where it starts.
+        void draw(
+            VkCommandBuffer commandBuffer, uint32_t instanceCount = 1, uint32_t firstInstance = 0);
 
         bool isDynamic() const { return dynamicVertices; }
 

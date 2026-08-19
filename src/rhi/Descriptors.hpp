@@ -4,6 +4,7 @@
 
 // std
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -80,6 +81,13 @@ namespace ege {
     private:
         Device& device;
         VkDescriptorPool descriptorPool;
+
+        // A VkDescriptorPool is externally synchronized, and materials are now
+        // built on whichever worker loaded them - so two textures finishing at
+        // once means two threads allocating a set from this pool. Updating a
+        // set is not a pool operation and needs nothing; allocating, freeing
+        // and resetting are.
+        mutable std::mutex poolMutex;
 
         friend class DescriptorWriter;
     };

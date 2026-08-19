@@ -12,6 +12,9 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <vector>
+
 namespace {
 
     struct Nested {
@@ -171,4 +174,26 @@ TEST_CASE("the engine's own transform is reflected") {
         CHECK(field.type().name() == "vec3");
         CHECK(field.tooltip() != nullptr);
     }
+}
+
+TEST_CASE("registering a type twice yields the same description") {
+    // Not a hypothetical. Type registration happens in a function-local static
+    // inside a template, and a template instantiated in two modules - the
+    // executable and the engine's shared library - gets one of those each.
+    // Both then register, and everything that identifies a type by comparing
+    // TypeInfo pointers depends on both registrations landing on one object.
+    const ege::TypeInfo& first = ege::TypeRegistry::of<int>();
+    const ege::TypeInfo& again = ege::registerType<int>();
+
+    CHECK(&first == &again);
+
+    // And the registry lists it once, not once per caller.
+    const std::vector<const ege::TypeInfo*> all = ege::TypeRegistry::instance().all();
+    const std::size_t occurrences =
+        static_cast<std::size_t>(std::count(all.begin(), all.end(), &first));
+    CHECK(occurrences == 1);
+
+    // Lookup by name finds the same one, rather than an earlier copy the
+    // second registration shadowed.
+    CHECK(ege::TypeRegistry::instance().find(first.name()) == &first);
 }

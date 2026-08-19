@@ -105,7 +105,7 @@ namespace ege {
         // The copy is somewhere in the queue; the pixels are not readable
         // until it has run. Waiting on the whole device is heavy-handed and
         // exactly right here - a recording is not trying to be fast.
-        vkDeviceWaitIdle(device.device());
+        device.waitIdle();
 
         const std::size_t pixelCount =
             static_cast<std::size_t>(imageExtent.width) * imageExtent.height;

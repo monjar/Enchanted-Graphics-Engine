@@ -33,7 +33,13 @@ ege_set_target_warnings(EnchantedTests WARNINGS_AS_ERRORS)
 # DLL, and a Windows machine without one refuses to even start the runner.
 # Delay-loading means the DLL is looked for only at the first Vulkan call,
 # which the tests never make.
-ege_delay_load_vulkan(EnchantedTests)
+#
+# Only when the engine is static, because that is when this binary is the one
+# holding those imports. With a shared engine they are in the DLL and the
+# delay-load belongs there - see the note beside the function.
+if(NOT EGE_SHARED_ENGINE)
+  ege_delay_load_vulkan(EnchantedTests)
+endif()
 
 include("${doctest_SOURCE_DIR}/scripts/cmake/doctest.cmake")
 doctest_discover_tests(EnchantedTests)

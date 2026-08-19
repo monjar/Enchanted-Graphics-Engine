@@ -103,9 +103,15 @@ namespace ege {
         submitInfo.pSignalSemaphoreInfos = &signalSemaphoreInfo;
 
         vkResetFences(device.device(), 1, &inFlightFences[currentFrame]);
-        if (vkQueueSubmit2(device.graphicsQueue(), 1, &submitInfo, inFlightFences[currentFrame]) !=
-            VK_SUCCESS) {
-            throw std::runtime_error("failed to submit draw command buffer!");
+        // The queue is shared with whatever asset uploads are in flight on the
+        // job system's workers, and a VkQueue is externally synchronized.
+        {
+            const std::unique_lock<std::mutex> lock = device.lockGraphicsQueue();
+            if (vkQueueSubmit2(
+                    device.graphicsQueue(), 1, &submitInfo, inFlightFences[currentFrame]) !=
+                VK_SUCCESS) {
+                throw std::runtime_error("failed to submit draw command buffer!");
+            }
         }
 
         VkPresentInfoKHR presentInfo = {};
@@ -120,7 +126,14 @@ namespace ege {
 
         presentInfo.pImageIndices = imageIndex;
 
-        auto result = vkQueuePresentKHR(device.presentQueue(), &presentInfo);
+        // Presentation is a queue operation like any other. The present queue
+        // is the graphics queue on every device this runs on, so it takes the
+        // same lock; if the two ever diverge this is the line that says so.
+        VkResult result = VK_SUCCESS;
+        {
+            const std::unique_lock<std::mutex> lock = device.lockGraphicsQueue();
+            result = vkQueuePresentKHR(device.presentQueue(), &presentInfo);
+        }
 
         currentFrame = (currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 

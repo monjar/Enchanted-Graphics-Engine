@@ -749,6 +749,7 @@ namespace ege {
         ImGui::Text("culled      %zu", stats.culled);
         ImGui::Text("occluded    %zu", stats.occluded);
         ImGui::Text("drawn       %zu", stats.drawn);
+        ImGui::Text("batches     %zu", stats.batches);
         ImGui::Text("mat binds   %zu", stats.materialBinds);
         if (!context.playMode.isEditing()) {
             ImGui::Separator();

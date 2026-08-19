@@ -4,6 +4,7 @@
 #include "physics/PhysicsComponents.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
+#include "scene/TransformInterpolation.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -100,6 +101,13 @@ namespace ege {
         // stay - they are the description play built the bodies from.
         world.each<RigidBody>(
             [](Entity, RigidBody& rigidBody) { rigidBody.body = invalidPhysicsBody; });
+        // Nothing is stepping these any more, and Stop is about to put their
+        // transforms back where they were before Play. Leaving a pose to
+        // interpolate away from would draw one frame sliding from where the
+        // simulation had got to towards where the scene says they belong.
+        for (const auto& [entity, record] : bodies) {
+            world.detach<PreviousTransform>(entity);
+        }
         bodies.clear();
         backend.reset();
         world.setPhysics(nullptr);
@@ -236,6 +244,11 @@ namespace ege {
             return;
         }
         bodies[entity] = BodyRecord{body, settings.motion};
+        // From here the fixed step decides where this entity is, so the
+        // renderer should draw it between steps rather than on them. The
+        // component is the opt-in; anything else moved on the fixed clock
+        // asks for one the same way.
+        beginInterpolating(world, entity);
         if (rigidBody != nullptr) {
             rigidBody->body = body;
         }
