@@ -11,7 +11,7 @@ layout(location = 1) out vec3 fragPosWorld;
 layout(location = 2) out vec3 fragNormalWorld;
 layout(location = 3) out vec2 fragUv;
 
-#include "model_push.glsl"
+#include "model_instances.glsl"
 
 // The depth pre-pass writes depth with the same expression from the same
 // shared file, and the pipeline this feeds tests EQUAL against it. See
@@ -19,10 +19,12 @@ layout(location = 3) out vec2 fragUv;
 invariant gl_Position;
 
 void main() {
-    vec4 positionWorld = push.modelMatrix * vec4(position, 1.0);
+    Instance instance = instanceBuffer.instances[gl_InstanceIndex];
+
+    vec4 positionWorld = instance.modelMatrix * vec4(position, 1.0);
     gl_Position = modelClipPosition(positionWorld);
 
-    fragNormalWorld = normalize(mat3(push.normalMatrix) * normal);
+    fragNormalWorld = normalize(mat3(instance.normalMatrix) * normal);
     fragPosWorld = positionWorld.xyz;
     fragColor = color;
     fragUv = uv;

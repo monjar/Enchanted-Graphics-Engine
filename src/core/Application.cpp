@@ -121,9 +121,10 @@ namespace ege {
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
                     VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 8)
-                // Two storage buffers per frame: the scene's lights and the
-                // per-cluster lists culled from them.
-                .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 2)
+                // Three storage buffers per frame: the scene's lights, the
+                // per-cluster lists culled from them, and the transforms of
+                // everything being drawn.
+                .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 3)
                 .build();
 
         // Four image samplers per material, and room for a reasonable number
@@ -189,6 +190,21 @@ namespace ege {
             lightBuffers[i]->map();
         }
 
+        // Where every drawn object's transform goes, in submission order, for
+        // both the depth pre-pass and the shading pass to index by instance.
+        // Host visible and one per frame in flight, on the same terms as the
+        // light buffer beside it: the CPU rewrites the whole thing each frame.
+        std::vector<std::unique_ptr<Buffer>> instanceBuffers(SwapChain::MAX_FRAMES_IN_FLIGHT);
+        for (size_t i = 0; i < instanceBuffers.size(); i++) {
+            instanceBuffers[i] = std::make_unique<Buffer>(
+                device,
+                sizeof(GpuInstance),
+                maxDrawInstances,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+            instanceBuffers[i]->map();
+        }
+
         auto globalSetLayout =
             DescriptorSetLayout::Builder(device)
                 // Compute as well as graphics: the light culling pass binds
@@ -231,12 +247,15 @@ namespace ege {
                 // from the depth buffer before anything shaded.
                 .addBinding(
                     10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // Every drawn object's transform, indexed by the instance.
+                .addBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < globalDescriptorSets.size(); i++) {
             auto bufferInfo = uboBuffers[i]->descriptorInfo();
             auto lightInfo = lightBuffers[i]->descriptorInfo();
+            auto instanceInfo = instanceBuffers[i]->descriptorInfo();
             // The lighting maps are generated once and never change, so they
             // are written alongside the per-frame buffer and left alone.
             auto irradianceInfo = environmentLighting.irradianceInfo();
@@ -250,6 +269,7 @@ namespace ege {
                 .writeImage(3, &brdfLutInfo)
                 .writeImage(4, &environmentInfo)
                 .writeBuffer(6, &lightInfo)
+                .writeBuffer(11, &instanceInfo)
                 .build(globalDescriptorSets[i]);
         }
 
@@ -693,7 +713,8 @@ namespace ege {
                 // Which objects are visible, gathered once for the frame: the
                 // depth pre-pass and the shading pass both draw this list, and
                 // they have to draw the same one.
-                pbrRenderSystem.prepare(frameInfo, occlusionCulling.snapshot());
+                pbrRenderSystem.prepare(
+                    frameInfo, occlusionCulling.snapshot(), *instanceBuffers[frameIndex]);
 
                 // render: declare the frame, then let the graph run it. The
                 // declarations are cheap enough to restate every frame, and
@@ -939,7 +960,9 @@ namespace ege {
                     [&](VkCommandBuffer cmd, const FrameGraphResources&) {
                         frameInfo.commandBuffer = cmd;
                         pbrRenderSystem.renderDepthPrePass(
-                            frameInfo, uboBuffers[frameIndex]->descriptorInfo());
+                            frameInfo,
+                            uboBuffers[frameIndex]->descriptorInfo(),
+                            instanceBuffers[frameIndex]->descriptorInfo());
                     });
 
                 // The depth pyramid, halved until it is small enough to be
@@ -1394,6 +1417,53 @@ namespace ege {
             makeMaterial("BlueSphere", glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
             glm::vec3{.5f});
+
+        // A band of gravel around the outside of the floor: one mesh, one
+        // material, a hundred and twenty of them. It is here because a scene
+        // of eighteen objects says nothing about instancing - every one of
+        // them has a material of its own, so every one is its own draw
+        // whatever the renderer does. These share both, so they are one draw
+        // call between them, and the editor's `drawn` and `batches` counts
+        // show the difference directly.
+        //
+        // Scattered from a fixed seed rather than at random. The demo tour is
+        // recorded frame for frame in CI, and a scene that differs between
+        // runs is a scene no recorded frame can be compared against.
+        {
+            const MaterialRef gravelMaterial =
+                makeMaterial("Gravel", glm::vec3{0.38f, 0.35f, 0.32f}, 0.f, 0.9f);
+
+            // A small linear congruential generator, written out rather than
+            // pulled from <random>, because what matters here is that the
+            // same numbers come out on every platform - and the standard
+            // library's distributions are explicitly not required to.
+            uint32_t seed = 20260819u;
+            auto nextUnit = [&seed]() {
+                seed = seed * 1664525u + 1013904223u;
+                return static_cast<float>(seed >> 8u) / static_cast<float>(1u << 24u);
+            };
+
+            constexpr int gravelCount = 120;
+            for (int i = 0; i < gravelCount; i++) {
+                // An annulus around the exhibits: far enough out not to stand
+                // in front of anything, inside the floor's own eight-unit
+                // span so nothing floats over the edge.
+                const float angle =
+                    (static_cast<float>(i) + nextUnit()) / gravelCount * glm::two_pi<float>();
+                const float radius = 2.9f + nextUnit() * 0.95f;
+                const float size = 0.07f + nextUnit() * 0.09f;
+
+                addMesh(
+                    "Gravel" + std::to_string(i),
+                    box,
+                    gravelMaterial,
+                    // Remember -Y is up: resting on the floor at y = .5 means
+                    // sitting half a stone's height above it.
+                    {radius * std::cos(angle), 0.5f - size * 0.5f, radius * std::sin(angle)},
+                    glm::vec3{size},
+                    {0.f, nextUnit() * glm::two_pi<float>(), 0.f});
+            }
+        }
 
         // Directly behind the rippling sheet, and there for that reason: this
         // is the one thing in the scene that spends most of the tour entirely

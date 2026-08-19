@@ -1,6 +1,7 @@
 #include "render/PbrRenderSystem.hpp"
 
 #include "core/Assert.hpp"
+#include "core/Log.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
 
@@ -12,16 +13,19 @@ namespace ege {
 
     namespace {
 
-        // Packed to fit the 128 byte push constant range every Vulkan
-        // implementation guarantees: two mat4 is already 128, so the material
-        // scalars are folded into vec4s and shared with what is left.
+        // What a draw carries with it, and all it carries.
         //
-        // Two mat4 plus three vec4 is 176 bytes, which exceeds the guaranteed
-        // minimum, so the normal matrix is sent as a mat3 padded to three vec4
-        // columns instead - 48 bytes rather than 64.
-        struct PushConstants {
-            glm::mat4 modelMatrix{1.f};
-            glm::mat4 normalMatrix{1.f};
+        // This used to lead with the object's two matrices, which put it at
+        // 176 bytes - past the 128 every Vulkan implementation is required to
+        // offer, so it was portable only by inspection of the device limit.
+        // The matrices moved into a buffer indexed by the instance, because a
+        // draw that carries its object's transform is a draw that can only
+        // ever be one object. What is left is per material rather than per
+        // object, fits with room to spare, and is read by the fragment stage
+        // alone.
+        //
+        // Mirrors the push block in shaders/material_push.glsl.
+        struct MaterialPush {
             glm::vec4 baseColorFactor{1.f};
             glm::vec4 emissiveAndMetallic{0.f, 0.f, 0.f, 0.f};
             glm::vec4 roughnessNormalOcclusion{1.f, 1.f, 1.f, 0.f};
@@ -50,21 +54,17 @@ namespace ege {
 
     void PbrRenderSystem::createPipelineLayout(
         VkDescriptorSetLayout globalSetLayout, VkDescriptorSetLayout materialSetLayout) {
-        // 128 bytes is the guaranteed minimum push constant size. Anything
-        // larger works on desktop but is not portable, so the budget is
-        // checked rather than assumed.
-        static_assert(
-            sizeof(PushConstants) <= 256, "push constants exceed a widely supported size");
-        EGE_VERIFY(
-            sizeof(PushConstants) <= device.properties.limits.maxPushConstantsSize,
-            "push constant block of {} bytes exceeds the device limit of {}",
-            sizeof(PushConstants),
-            device.properties.limits.maxPushConstantsSize);
+        // 128 bytes is the guaranteed minimum push constant size, and this
+        // now fits inside it rather than merely inside what the device
+        // happens to offer.
+        static_assert(sizeof(MaterialPush) <= 128, "push constants exceed the guaranteed minimum");
 
         VkPushConstantRange pushConstantRange{};
-        pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+        // The vertex stage reads none of this: its transform comes from the
+        // instance buffer, which is what makes a batch of objects one draw.
+        pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
         pushConstantRange.offset = 0;
-        pushConstantRange.size = sizeof(PushConstants);
+        pushConstantRange.size = sizeof(MaterialPush);
 
         // Set 0 is per frame, set 1 is per material. Ordered by update
         // frequency so that binding a material does not invalidate the global
@@ -115,17 +115,20 @@ namespace ege {
 
     void PbrRenderSystem::createDepthPipeline(
         VkFormat depthFormat, VkSampleCountFlagBits samples, uint32_t framesInFlight) {
-        // Binding 0 is the uniform block, the same number the global set uses,
-        // so the pre-pass's vertex shader includes the same declaration of it
-        // as everything else.
+        // Binding 0 is the uniform block and binding 11 the instance
+        // transforms, the same numbers the global set uses, so the pre-pass's
+        // vertex shader includes the same declarations of both as everything
+        // else does.
         depthSetLayout =
             DescriptorSetLayout::Builder(device)
                 .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
+                .addBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
                 .build();
 
         depthPool = DescriptorPool::Builder(device)
                         .setMaxSets(framesInFlight)
                         .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, framesInFlight)
+                        .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, framesInFlight)
                         .build();
 
         depthDescriptorSets.resize(framesInFlight);
@@ -135,21 +138,14 @@ namespace ege {
             }
         }
 
-        // The same push constant block as the shading pass, so the two vertex
-        // shaders can share its declaration; only the vertex stage reads it
-        // here, because the pre-pass has no fragment shader worth the name.
-        VkPushConstantRange pushRange{};
-        pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
-        pushRange.offset = 0;
-        pushRange.size = sizeof(PushConstants);
-
+        // No push constants at all. Everything the pre-pass needs to place a
+        // vertex is in the two buffers above, which is what lets its whole
+        // draw list go out as one bind and a run of instanced draws.
         const VkDescriptorSetLayout rawLayout = depthSetLayout->getDescriptorSetLayout();
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layoutInfo.setLayoutCount = 1;
         layoutInfo.pSetLayouts = &rawLayout;
-        layoutInfo.pushConstantRangeCount = 1;
-        layoutInfo.pPushConstantRanges = &pushRange;
 
         if (vkCreatePipelineLayout(device.device(), &layoutInfo, nullptr, &depthPipelineLayout) !=
             VK_SUCCESS) {
@@ -183,9 +179,11 @@ namespace ege {
             std::make_unique<Pipeline>(device, "depth_prepass.vert.spv", "shadow.frag.spv", config);
     }
 
-    void PbrRenderSystem::prepare(FrameInfo& frameInfo, const OcclusionSnapshot& occlusion) {
+    void PbrRenderSystem::prepare(
+        FrameInfo& frameInfo, const OcclusionSnapshot& occlusion, Buffer& instanceBuffer) {
         frameStats = Stats{};
         drawList.clear();
+        batches.clear();
 
         const Frustum frustum = Frustum::fromViewProjection(
             frameInfo.camera.getProjection() * frameInfo.camera.getView());
@@ -256,11 +254,63 @@ namespace ege {
             return a.model < b.model;
         });
 
+        // More objects than the transform buffer holds. Dropping the tail is
+        // the one behaviour that keeps every index the shader reads inside the
+        // buffer; the count is logged rather than silently absorbed.
+        if (drawList.size() > maxDrawInstances) {
+            EGE_WARN(
+                "{} objects to draw exceeds the {} the instance buffer holds; dropping the rest",
+                drawList.size(),
+                maxDrawInstances);
+            drawList.resize(maxDrawInstances);
+        }
+
+        buildBatches();
+
+        // Written before anything binds the buffer, and read by both passes.
+        // One flush for the whole frame's transforms rather than a push
+        // constant update per object, which is the other half of what
+        // instancing bought.
+        if (!drawList.empty()) {
+            std::vector<GpuInstance> instances(drawList.size());
+            for (std::size_t i = 0; i < drawList.size(); i++) {
+                instances[i].modelMatrix = drawList[i].modelMatrix;
+                instances[i].normalMatrix = drawList[i].normalMatrix;
+            }
+            instanceBuffer.writeToBuffer(instances.data(), instances.size() * sizeof(GpuInstance));
+            instanceBuffer.flush();
+        }
+
         gathered = true;
     }
 
+    void PbrRenderSystem::buildBatches() {
+        // The list is already sorted by material and then by mesh, which was
+        // done so that descriptor set binds do not alternate. That same order
+        // puts every set of objects sharing both next to each other, so one
+        // sweep turns runs of them into instanced draws.
+        for (std::size_t i = 0; i < drawList.size(); i++) {
+            const DrawItem& item = drawList[i];
+            if (!batches.empty() && batches.back().material == item.material &&
+                batches.back().model == item.model) {
+                batches.back().instanceCount++;
+                continue;
+            }
+
+            Batch batch{};
+            batch.materialSet = item.materialSet;
+            batch.material = item.material;
+            batch.model = item.model;
+            batch.firstInstance = static_cast<uint32_t>(i);
+            batch.instanceCount = 1;
+            batches.push_back(batch);
+        }
+    }
+
     void PbrRenderSystem::renderDepthPrePass(
-        FrameInfo& frameInfo, const VkDescriptorBufferInfo& globalUbo) {
+        FrameInfo& frameInfo,
+        const VkDescriptorBufferInfo& globalUbo,
+        const VkDescriptorBufferInfo& instances) {
         EGE_ASSERT(gathered, "prepare must run before the depth pre-pass");
         EGE_ASSERT(frameInfo.frameIndex < depthDescriptorSets.size(), "frame index out of range");
 
@@ -269,6 +319,7 @@ namespace ege {
         VkDescriptorSet& set = depthDescriptorSets[frameInfo.frameIndex];
         DescriptorWriter(*depthSetLayout, *depthPool)
             .writeBuffer(0, const_cast<VkDescriptorBufferInfo*>(&globalUbo))
+            .writeBuffer(11, const_cast<VkDescriptorBufferInfo*>(&instances))
             .overwrite(set);
 
         depthPipeline->bind(frameInfo.commandBuffer);
@@ -283,25 +334,15 @@ namespace ege {
             0,
             nullptr);
 
-        // No material binds: the pre-pass reads no textures, so the whole list
-        // draws with one pipeline and one descriptor set. The push constants
-        // still go out in full, because the range is shared with the shading
-        // pass and a partial update would leave the rest of it stale.
-        for (const DrawItem& item : drawList) {
-            PushConstants push{};
-            push.modelMatrix = item.modelMatrix;
-            push.normalMatrix = item.normalMatrix;
-
-            vkCmdPushConstants(
-                frameInfo.commandBuffer,
-                depthPipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT,
-                0,
-                sizeof(PushConstants),
-                &push);
-
-            const_cast<Model*>(item.model)->bind(frameInfo.commandBuffer);
-            const_cast<Model*>(item.model)->draw(frameInfo.commandBuffer);
+        // One pipeline, one descriptor set, nothing per draw but the mesh:
+        // the pre-pass reads no textures and no push constants, so what it
+        // costs is a vertex buffer bind and a draw per batch. The batches are
+        // the same ones the shading pass walks, in the same order, which is
+        // what keeps the two passes agreeing about which instance is which.
+        for (const Batch& batch : batches) {
+            const_cast<Model*>(batch.model)->bind(frameInfo.commandBuffer);
+            const_cast<Model*>(batch.model)
+                ->draw(frameInfo.commandBuffer, batch.instanceCount, batch.firstInstance);
         }
     }
 
@@ -322,26 +363,24 @@ namespace ege {
 
         VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
 
-        for (const DrawItem& item : drawList) {
-            if (item.materialSet != boundMaterial) {
+        for (const Batch& batch : batches) {
+            if (batch.materialSet != boundMaterial) {
                 vkCmdBindDescriptorSets(
                     frameInfo.commandBuffer,
                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                     pipelineLayout,
                     1,
                     1,
-                    &item.materialSet,
+                    &batch.materialSet,
                     0,
                     nullptr);
-                boundMaterial = item.materialSet;
+                boundMaterial = batch.materialSet;
                 frameStats.materialBinds++;
             }
 
-            const MaterialProperties& properties = item.material->properties;
+            const MaterialProperties& properties = batch.material->properties;
 
-            PushConstants push{};
-            push.modelMatrix = item.modelMatrix;
-            push.normalMatrix = item.normalMatrix;
+            MaterialPush push{};
             push.baseColorFactor = properties.baseColorFactor;
             push.emissiveAndMetallic =
                 glm::vec4{properties.emissiveFactor, properties.metallicFactor};
@@ -354,14 +393,17 @@ namespace ege {
             vkCmdPushConstants(
                 frameInfo.commandBuffer,
                 pipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                VK_SHADER_STAGE_FRAGMENT_BIT,
                 0,
-                sizeof(PushConstants),
+                sizeof(MaterialPush),
                 &push);
 
-            const_cast<Model*>(item.model)->bind(frameInfo.commandBuffer);
-            const_cast<Model*>(item.model)->draw(frameInfo.commandBuffer);
-            frameStats.drawn++;
+            const_cast<Model*>(batch.model)->bind(frameInfo.commandBuffer);
+            const_cast<Model*>(batch.model)
+                ->draw(frameInfo.commandBuffer, batch.instanceCount, batch.firstInstance);
+
+            frameStats.drawn += batch.instanceCount;
+            frameStats.batches++;
         }
 
         gathered = false;
