@@ -141,10 +141,22 @@ function(ege_delay_load_vulkan target)
   endif()
 endfunction()
 
-ege_delay_load_vulkan(EnchantedEngine)
-# The frame checker links the engine and so imports the loader, but never
-# makes a Vulkan call - it reads PNGs.
-ege_delay_load_vulkan(EnchantedFrameChecks)
+# It has to go on whichever binary actually imports the loader, and making
+# the engine shared moved that. It used to be each executable, because each
+# linked the engine's objects and inherited its imports; now the imports are
+# in the DLL and the executables have none, so a /DELAYLOAD on them is a
+# no-op the linker warns about - and the DLL, bound at load time, would drag
+# vulkan-1.dll in before a single line of any of them ran. On a machine
+# without the loader that is the process failing to start rather than a test
+# suite running: which is exactly what happened, as STATUS_DLL_NOT_FOUND out
+# of the test enumeration step.
+ege_delay_load_vulkan(Enchanted)
+if(NOT EGE_SHARED_ENGINE)
+  ege_delay_load_vulkan(EnchantedEngine)
+  # The frame checker links the engine and so imports the loader, but never
+  # makes a Vulkan call - it reads PNGs.
+  ege_delay_load_vulkan(EnchantedFrameChecks)
+endif()
 
 set_property(TARGET EnchantedEngine
   PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
