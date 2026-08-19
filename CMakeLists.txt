@@ -19,9 +19,38 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Everything next to the executables. On Windows a DLL is looked for beside
+# the binary that loads it and nowhere useful otherwise; on Linux the build
+# tree's RPATH already handles it, and having them in one place makes the two
+# platforms behave the same way.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+# The dependencies are static libraries and are about to be linked into a
+# shared one, which on ELF requires every object in them to be
+# position-independent.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+# MSVC exports nothing from a DLL unless it is asked to, and asking for it
+# one __declspec at a time across an engine's worth of classes is a
+# maintenance burden with no upside. This exports the functions
+# automatically. It does not export data symbols - which is why the type
+# registry is reached through a function rather than being one.
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 option(EGE_BUILD_TESTS "Build the test suite" ON)
+
+# Shared by default, and the reason is script hot reload rather than binary
+# size. A script module loaded with dlopen or LoadLibrary links against the
+# engine; if the engine is a static library, the module gets its own copy of
+# every registry inside it - the type registry, the component registry, the
+# behaviour registry - and nothing it registers is visible to the engine that
+# loaded it. One shared engine is what makes those registries one registry.
+#
+# Left as an option because a static build is still the right answer for
+# anything shipping a single self-contained binary and not loading modules.
+option(EGE_SHARED_ENGINE "Build the engine as a shared library" ON)
 
 include(CompilerWarnings)
 include(Dependencies)
@@ -37,7 +66,11 @@ include(Shaders)
 file(GLOB_RECURSE ENGINE_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
-add_library(Enchanted STATIC ${ENGINE_SOURCES})
+if(EGE_SHARED_ENGINE)
+  add_library(Enchanted SHARED ${ENGINE_SOURCES})
+else()
+  add_library(Enchanted STATIC ${ENGINE_SOURCES})
+endif()
 add_library(ege::engine ALIAS Enchanted)
 
 target_include_directories(Enchanted PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
