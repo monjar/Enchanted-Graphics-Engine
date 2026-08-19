@@ -49,6 +49,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <future>
 #include <stdexcept>
 
 namespace ege {
@@ -142,6 +143,10 @@ namespace ege {
         // GPU objects first.
         AssetDatabase& assets = AssetDatabase::instance();
         assets.attachDevice(device, *materialPool, *materialSetLayout);
+        // And somewhere to load: from here, an asset asked for asynchronously
+        // is read, decoded and uploaded on a worker rather than on whichever
+        // frame happened to reference it first.
+        assets.attachJobSystem(jobs);
         assets.scan(assetRoot());
 
         loadScene();
@@ -493,6 +498,13 @@ namespace ege {
             }
 
             reloadChangedAssets(assetWatcher);
+
+            // Assets that finished loading on a worker since the last frame.
+            // Anything holding a reference to one is still drawing nothing,
+            // so this is what makes it appear.
+            if (!AssetDatabase::instance().takeLoaded().empty()) {
+                systems::refreshAssetReferences(world);
+            }
 
             // After the scripts, before anything reads geometry: a behaviour
             // that rewrote a surface this tick wants it drawn this frame.
@@ -1669,6 +1681,11 @@ namespace ege {
 
         AssetDatabase& assets = AssetDatabase::instance();
 
+        // Nothing may be loading while the record list is rewritten under it.
+        // A load in flight holds a pointer into that list, and a rescan can
+        // move it.
+        jobs.waitForAll();
+
         // Rescan first: a file that has just appeared has no id yet, and a
         // sidecar that has just appeared beside one is how an id arrives.
         bool structural = false;
@@ -1697,12 +1714,19 @@ namespace ege {
                 continue;
             }
             if (const AssetRecord* record = assets.findByPath(relative)) {
-                assets.reload(record->id);
+                const Guid id = record->id;
+                assets.reload(id);
+                // A material comes back rewritten in place by the call above
+                // and needs nothing more. A mesh or a texture was dropped
+                // rather than rebuilt, and rebuilding it is a file read, a
+                // decode and an upload - which now happens on a worker while
+                // the frame carries on, and lands through takeLoaded.
+                assets.requestAsync(id);
             }
         }
 
-        // A mesh cannot be reloaded in place, so anything holding one has to
-        // be pointed at the rebuilt version.
+        // Whatever came back in place is live already; the rest arrives over
+        // the next frames and is picked up there.
         systems::refreshAssetReferences(world);
     }
 
@@ -1727,24 +1751,42 @@ namespace ege {
             }
         }
 
+        // Parsing is the slow half and needs no device, so every file is read
+        // and decoded at once across the workers. Instantiating is the other
+        // half - GPU objects and entities - and stays here, because the world
+        // is not thread safe and because two imports racing to catalogue their
+        // sub-assets would be two threads writing one record list.
+        //
+        // A parse that throws is caught here rather than in the job, so that
+        // one bad file does not take down the ones beside it or the procedural
+        // scene they would have joined.
+        struct PendingImport {
+            const AssetRecord* record = nullptr;
+            std::future<GltfSceneData> parsed;
+        };
+
+        std::vector<PendingImport> pending;
+        pending.reserve(scenes.size());
         for (const AssetRecord& record : scenes) {
             const std::filesystem::path path = assetRoot() / record.path;
+            pending.push_back(
+                {&record, jobs.submit([path]() { return gltf::parseFile(path.string()); })});
+        }
 
-            // One bad file should not take down the ones beside it, or the
-            // procedural scene it would have joined.
+        for (PendingImport& import : pending) {
             try {
-                const GltfSceneData scene = gltf::parseFile(path.string());
+                const GltfSceneData scene = import.parsed.get();
                 const gltf::ImportStats stats = gltf::instantiate(
                     device,
                     world,
                     scene,
                     *materialPool,
                     *materialSetLayout,
-                    record.name,
-                    record.id);
+                    import.record->name,
+                    import.record->id);
                 EGE_INFO(
                     "Imported {}: {} entities, {} meshes, {} materials, {} textures",
-                    record.path.string(),
+                    import.record->path.string(),
                     stats.entities,
                     stats.meshes,
                     stats.materials,

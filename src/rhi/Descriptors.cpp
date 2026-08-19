@@ -110,6 +110,8 @@ namespace ege {
         allocInfo.pSetLayouts = &descriptorSetLayout;
         allocInfo.descriptorSetCount = 1;
 
+        const std::lock_guard<std::mutex> lock{poolMutex};
+
         // Might want to create a "DescriptorPoolManager" class that handles this case, and builds
         // a new pool whenever an old pool fills up. But this is beyond our current scope
         if (vkAllocateDescriptorSets(device.device(), &allocInfo, &descriptor) != VK_SUCCESS) {
@@ -119,6 +121,7 @@ namespace ege {
     }
 
     void DescriptorPool::freeDescriptors(std::vector<VkDescriptorSet>& descriptors) const {
+        const std::lock_guard<std::mutex> lock{poolMutex};
         vkFreeDescriptorSets(
             device.device(),
             descriptorPool,
@@ -127,6 +130,7 @@ namespace ege {
     }
 
     void DescriptorPool::resetPool() {
+        const std::lock_guard<std::mutex> lock{poolMutex};
         vkResetDescriptorPool(device.device(), descriptorPool, 0);
     }
 
