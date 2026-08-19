@@ -4,6 +4,7 @@
 #include "render/FrameInfo.hpp"
 #include "render/Material.hpp"
 #include "render/Model.hpp"
+#include "render/OcclusionCulling.hpp"
 #include "rhi/Descriptors.hpp"
 #include "rhi/Pipeline.hpp"
 
@@ -44,7 +45,11 @@ namespace ege {
         // the same list, and gathering twice would risk them disagreeing about
         // what is visible - which for an EQUAL depth test means geometry that
         // shades against depth nothing wrote.
-        void prepare(FrameInfo& frameInfo);
+        //
+        // The snapshot is the depth pyramid of a frame a little while ago; an
+        // object it says was hidden then is left out. An empty one leaves
+        // everything in.
+        void prepare(FrameInfo& frameInfo, const OcclusionSnapshot& occlusion);
 
         // Depth only, from the same list, with the same vertex transform. What
         // this writes is what the shading pass tests EQUAL against.
@@ -60,6 +65,9 @@ namespace ege {
         struct Stats {
             std::size_t candidates = 0;
             std::size_t culled = 0;
+            // Inside the frustum, but standing behind something that was
+            // already covering every pixel of them.
+            std::size_t occluded = 0;
             std::size_t drawn = 0;
             std::size_t materialBinds = 0;
         };
@@ -69,6 +77,10 @@ namespace ege {
         // Culling can be turned off to check that it is not wrongly discarding
         // something - the first thing to try when geometry goes missing.
         bool cullingEnabled = true;
+        // The same switch for the occlusion test, which unlike the frustum
+        // test is answering with information a couple of frames old and is
+        // therefore the more likely of the two to be wrong.
+        bool occlusionCullingEnabled = true;
 
     private:
         void createPipelineLayout(

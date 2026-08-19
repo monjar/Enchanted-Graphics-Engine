@@ -11,9 +11,9 @@
 #include "render/Camera.hpp"
 #include "render/Ssao.hpp"
 
-#include <doctest/doctest.h>
-
 #include <glm/gtc/matrix_inverse.hpp>
+
+#include <doctest/doctest.h>
 
 #include <cmath>
 #include <vector>

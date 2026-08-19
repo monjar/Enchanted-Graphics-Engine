@@ -26,8 +26,8 @@ namespace ege {
             // a random factor as well, so that samples of neighbouring indices
             // do not all land on the same shell.
             const float alongIndex = static_cast<float>(i) / static_cast<float>(count);
-            const float scale = (0.1f + 0.9f * alongIndex * alongIndex) *
-                                (0.25f + 0.75f * unitRange(rng));
+            const float scale =
+                (0.1f + 0.9f * alongIndex * alongIndex) * (0.25f + 0.75f * unitRange(rng));
 
             // w is padding: the shader reads these out of a std140 block,
             // where a vec3 occupies a vec4's worth of space regardless.

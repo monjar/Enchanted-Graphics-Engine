@@ -183,7 +183,7 @@ namespace ege {
             std::make_unique<Pipeline>(device, "depth_prepass.vert.spv", "shadow.frag.spv", config);
     }
 
-    void PbrRenderSystem::prepare(FrameInfo& frameInfo) {
+    void PbrRenderSystem::prepare(FrameInfo& frameInfo, const OcclusionSnapshot& occlusion) {
         frameStats = Stats{};
         drawList.clear();
 
@@ -219,11 +219,22 @@ namespace ege {
                     item.normalMatrix = glm::mat4{transform.normalMatrix()};
                 }
 
-                if (cullingEnabled) {
+                if (cullingEnabled || occlusionCullingEnabled) {
                     const Aabb worldBounds =
                         renderer.mesh.get()->bounds().transformed(item.modelMatrix);
-                    if (!frustum.intersects(worldBounds)) {
+
+                    if (cullingEnabled && !frustum.intersects(worldBounds)) {
                         frameStats.culled++;
+                        return;
+                    }
+
+                    // Inside the frustum and still not worth drawing, because
+                    // the last pyramid to come back says something was covering
+                    // every pixel it could have reached. Second, because it is
+                    // the more expensive test and the frustum has already
+                    // thrown out most of what it would have looked at.
+                    if (occlusionCullingEnabled && occlusion.hides(worldBounds)) {
+                        frameStats.occluded++;
                         return;
                     }
                 }

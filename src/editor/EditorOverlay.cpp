@@ -747,6 +747,7 @@ namespace ege {
         // produces them runs after the UI is declared.
         ImGui::Text("candidates  %zu", stats.candidates);
         ImGui::Text("culled      %zu", stats.culled);
+        ImGui::Text("occluded    %zu", stats.occluded);
         ImGui::Text("drawn       %zu", stats.drawn);
         ImGui::Text("mat binds   %zu", stats.materialBinds);
         if (!context.playMode.isEditing()) {

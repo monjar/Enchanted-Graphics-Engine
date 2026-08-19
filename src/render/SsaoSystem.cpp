@@ -75,8 +75,8 @@ namespace ege {
         for (std::size_t i = 0; i < samples.size(); i++) {
             block.samples[i] = samples[i];
         }
-        block.params = glm::vec4{
-            ssaoRadius, ssaoBias, ssaoPower, static_cast<float>(ssaoSampleCount)};
+        block.params =
+            glm::vec4{ssaoRadius, ssaoBias, ssaoPower, static_cast<float>(ssaoSampleCount)};
 
         // Written once and never again, unlike the per-frame uniform buffers:
         // nothing in it depends on the camera or on the scene.
@@ -142,8 +142,7 @@ namespace ege {
         pool = DescriptorPool::Builder(device)
                    .setMaxSets(framesInFlight * 2)
                    .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, framesInFlight * 2)
-                   .addPoolSize(
-                       VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, framesInFlight * 3)
+                   .addPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, framesInFlight * 3)
                    .build();
 
         occlusionSets.resize(framesInFlight, VK_NULL_HANDLE);

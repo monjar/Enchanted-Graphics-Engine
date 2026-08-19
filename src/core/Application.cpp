@@ -20,6 +20,7 @@
 #include "render/ClusterLightSystem.hpp"
 #include "render/DynamicMesh.hpp"
 #include "render/EnvironmentLighting.hpp"
+#include "render/OcclusionSystem.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PointShadows.hpp"
 #include "render/PostProcessSystem.hpp"
@@ -296,6 +297,10 @@ namespace ege {
         // to support both rendering to and sampling.
         constexpr VkFormat occlusionFormat = VK_FORMAT_R8_UNORM;
         SsaoSystem ssao{device, occlusionFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
+
+        // The depth pyramid the draw list is culled against, built from the
+        // frame's own depth and read back a couple of frames later.
+        OcclusionSystem occlusionCulling{device, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
         // How the sun's cascades are cut. Shadows stop well short of the
         // camera's far plane on purpose: stretching four cascades over a
@@ -679,10 +684,16 @@ namespace ege {
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
+                // Whatever depth pyramid has come back by now, and the camera
+                // this frame is putting into the next one. Read before the
+                // draw list is gathered, because the list is what it decides.
+                occlusionCulling.resize(renderExtent);
+                occlusionCulling.collect(frameIndex, camera.getProjection() * camera.getView());
+
                 // Which objects are visible, gathered once for the frame: the
                 // depth pre-pass and the shading pass both draw this list, and
                 // they have to draw the same one.
-                pbrRenderSystem.prepare(frameInfo);
+                pbrRenderSystem.prepare(frameInfo, occlusionCulling.snapshot());
 
                 // render: declare the frame, then let the graph run it. The
                 // declarations are cheap enough to restate every frame, and
@@ -931,6 +942,61 @@ namespace ege {
                             frameInfo, uboBuffers[frameIndex]->descriptorInfo());
                     });
 
+                // The depth pyramid, halved until it is small enough to be
+                // worth copying back. Each level is its own image rather than
+                // a mip of one, which costs a few more passes and saves the
+                // graph having to track a layout per mip - every level here is
+                // written once, read once by the level above it, and gone.
+                //
+                // The last one is not a transient at all: it is an image the
+                // occlusion system owns, imported so that it outlives the
+                // frame that fills it, and left in TRANSFER_SRC_OPTIMAL for
+                // the copy that follows the graph.
+                if (occlusionCulling.enabled) {
+                    const uint32_t reductions = OcclusionSystem::reductionSteps(renderExtent);
+
+                    std::vector<FrameGraphResource> pyramidLevels(reductions);
+                    for (uint32_t step = 0; step + 1 < reductions; step++) {
+                        TransientImageDesc levelDesc{};
+                        levelDesc.format = OcclusionSystem::levelFormat;
+                        levelDesc.extent = OcclusionSystem::stepExtent(renderExtent, step);
+                        pyramidLevels[step] =
+                            graph.createTransient("hzb" + std::to_string(step), levelDesc);
+                    }
+                    pyramidLevels[reductions - 1] = graph.importImage(
+                        "hzbReadback",
+                        occlusionCulling.readbackImage(frameIndex),
+                        occlusionCulling.readbackView(frameIndex),
+                        OcclusionSystem::levelFormat,
+                        occlusionCulling.readbackExtent(),
+                        VkClearValue{},
+                        // What the previous frame at this index left it doing:
+                        // being copied out of.
+                        VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+                    for (uint32_t step = 0; step < reductions; step++) {
+                        const FrameGraphResource source =
+                            step == 0 ? sceneDepthResolved : pyramidLevels[step - 1];
+                        const FrameGraphResource target = pyramidLevels[step];
+                        const VkExtent2D sourceExtent =
+                            step == 0 ? renderExtent
+                                      : OcclusionSystem::stepExtent(renderExtent, step - 1);
+
+                        graph.addPass(
+                            "hzbReduce" + std::to_string(step),
+                            [source, target](FrameGraph::PassBuilder& pass) {
+                                pass.read(source, ResourceAccess::sampled);
+                                pass.write(target, ResourceAccess::colorWrite);
+                            },
+                            [&, source, step, sourceExtent](
+                                VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                                occlusionCulling.reduce(
+                                    cmd, frameIndex, step, resolved.view(source), sourceExtent);
+                            });
+                    }
+                }
+
                 // Screen-space occlusion, between the depth and the shading
                 // that reads it. Two passes: the estimate, then a blur exactly
                 // as wide as the rotation pattern the estimate used.
@@ -1107,6 +1173,9 @@ namespace ege {
 
                 graph.compile();
                 graph.execute(device, commandBuffer);
+                // The pyramid's last level, out to a buffer the frame that
+                // reuses this index will read.
+                occlusionCulling.recordCopy(commandBuffer, frameIndex);
                 if (recorder != nullptr) {
                     recorder->recordCopy(
                         commandBuffer,
@@ -1323,6 +1392,22 @@ namespace ege {
             sphere,
             makeMaterial("BlueSphere", glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
+            glm::vec3{.5f});
+
+        // Directly behind the rippling sheet, and there for that reason: this
+        // is the one thing in the scene that spends most of the tour entirely
+        // hidden behind something else, so it is the only thing occlusion
+        // culling has to decide about. Everything else here stands in the open,
+        // where the depth pyramid quite correctly says to draw it.
+        //
+        // Watch the editor's `occluded` count while the camera comes round
+        // onto the sheet: this drops out of the draw list while the sheet
+        // covers it and is back the moment the camera can see past the edge.
+        addMesh(
+            "HiddenSphere",
+            sphere,
+            makeMaterial("HiddenSphere", glm::vec3{0.85f, 0.7f, 0.2f}, 0.2f, 0.35f),
+            {2.9f, -0.5f, 3.7f},
             glm::vec3{.5f});
 
         // The physics exhibit: a tower of crates with a steel boulder hanging
