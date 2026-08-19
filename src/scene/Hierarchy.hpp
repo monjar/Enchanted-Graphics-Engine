@@ -49,6 +49,15 @@ namespace ege {
         // the dirty part of the chain.
         glm::mat4 worldMatrix(World& world, EntityId entity);
 
+        // The same composition, but from the pose each level is being drawn
+        // at rather than the pose it is simulated at - see
+        // scene/TransformInterpolation.hpp.
+        //
+        // Uncached, unlike the above. The cache is keyed on a dirty flag, and
+        // this answer changes every frame without anything having moved, so
+        // there is nothing for it to remember.
+        glm::mat4 renderMatrix(World& world, EntityId entity, float alpha);
+
         // Resolves every entity's world matrix. Called once per frame before
         // rendering.
         void resolveTransforms(World& world);

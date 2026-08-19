@@ -37,6 +37,7 @@
 #include "scene/Hierarchy.hpp"
 #include "scene/SceneSerializer.hpp"
 #include "scene/Systems.hpp"
+#include "scene/TransformInterpolation.hpp"
 #include "script/BehaviorRegistry.hpp"
 #include "script/Behaviors.hpp"
 #include "script/Script.hpp"
@@ -460,6 +461,14 @@ namespace ege {
             // what the step integrates; contacts are delivered after it,
             // when the poses they describe are the poses the world shows.
             while (time.consumeFixedStep()) {
+                // Where everything the fixed step moves is now, before it
+                // moves. The renderer draws between this and where the step
+                // leaves it, so a sixty hertz simulation does not look like
+                // sixty hertz on a faster display. Recorded inside the loop
+                // rather than once a frame, so a frame that runs two steps
+                // interpolates from the second rather than the first.
+                recordPreviousTransforms(world);
+
                 if (playMode.consumeTick()) {
                     scripts.fixedTick(world, time.fixedStep());
                     const std::vector<EntityContact> contacts =
@@ -469,6 +478,12 @@ namespace ege {
             }
             if (playMode.isPlaying()) {
                 scripts.tick(world, frameTime);
+            } else {
+                // Nothing is stepping, so there is nothing to interpolate
+                // towards. Keeping the recorded pose level with the real one
+                // means a gizmo drag in edit mode draws where it is dragged
+                // rather than a fraction behind.
+                recordPreviousTransforms(world);
             }
 
             if (window.input().wasPressed(Key::F1)) {
@@ -546,6 +561,7 @@ namespace ege {
                 FrameInfo frameInfo{
                     frameIndex,
                     frameTime,
+                    time.fixedAlpha(),
                     commandBuffer,
                     camera,
                     globalDescriptorSets[frameIndex],

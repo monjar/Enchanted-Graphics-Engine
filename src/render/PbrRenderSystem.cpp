@@ -4,6 +4,7 @@
 #include "core/Log.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
+#include "scene/TransformInterpolation.hpp"
 
 #include <algorithm>
 #include <array>
@@ -192,7 +193,7 @@ namespace ege {
         // sorting possible at all, and it keeps the Vulkan calls out of the
         // query callback where an early return would be easy to get wrong.
         frameInfo.world.each<Transform, MeshRenderer>(
-            Without<Hidden>{}, [&](Entity entity, Transform& transform, MeshRenderer& renderer) {
+            Without<Hidden>{}, [&](Entity entity, Transform&, MeshRenderer& renderer) {
                 if (!renderer.visible || !renderer.mesh.resolved() ||
                     !renderer.material.resolved()) {
                     return;
@@ -202,6 +203,13 @@ namespace ege {
 
                 DrawItem item{};
 
+                // Where it is being drawn, which is not always where it is:
+                // anything the fixed step moves is drawn between the pose it
+                // had when that step began and the pose it has now. See
+                // scene/TransformInterpolation.hpp.
+                const Transform drawn =
+                    renderTransform(frameInfo.world, entity.id(), frameInfo.fixedAlpha);
+
                 if (frameInfo.world.has<Hierarchy>(entity.id())) {
                     // Under a hierarchy the model matrix is the composed world
                     // matrix, and the inverse-scale shortcut for the normal
@@ -209,12 +217,13 @@ namespace ege {
                     // combined with a child rotation introduces shear, which is
                     // exactly the case that shortcut excludes. Fall back to the
                     // general transpose(inverse(M)).
-                    item.modelMatrix = hierarchy::worldMatrix(frameInfo.world, entity.id());
+                    item.modelMatrix =
+                        hierarchy::renderMatrix(frameInfo.world, entity.id(), frameInfo.fixedAlpha);
                     item.normalMatrix =
                         glm::mat4{glm::transpose(glm::inverse(glm::mat3{item.modelMatrix}))};
                 } else {
-                    item.modelMatrix = transform.mat4();
-                    item.normalMatrix = glm::mat4{transform.normalMatrix()};
+                    item.modelMatrix = drawn.mat4();
+                    item.normalMatrix = glm::mat4{drawn.normalMatrix()};
                 }
 
                 if (cullingEnabled || occlusionCullingEnabled) {
