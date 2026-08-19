@@ -27,6 +27,7 @@
 #include "render/ShadowMapSystem.hpp"
 #include "render/SkyboxSystem.hpp"
 #include "render/SpotShadows.hpp"
+#include "render/SsaoSystem.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/FrameGraph.hpp"
 #include "rhi/FrameRecorder.hpp"
@@ -118,7 +119,7 @@ namespace ege {
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 7)
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 8)
                 // Two storage buffers per frame: the scene's lights and the
                 // per-cluster lists culled from them.
                 .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 2)
@@ -225,6 +226,10 @@ namespace ege {
                 // Every shadow-casting spot's map, in one array.
                 .addBinding(
                     9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // How much of its surroundings each pixel can see, estimated
+                // from the depth buffer before anything shaded.
+                .addBinding(
+                    10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
@@ -284,6 +289,13 @@ namespace ege {
             sceneSamples};
 
         ShadowMapSystem shadowSystem{device, renderer.getSwapChainDepthFormat()};
+
+        // A single channel, eight bits: the occlusion estimate is one number
+        // per pixel between nothing and everything, and it is blurred before
+        // anything reads it. R8_UNORM is also a format every Vulkan device has
+        // to support both rendering to and sampling.
+        constexpr VkFormat occlusionFormat = VK_FORMAT_R8_UNORM;
+        SsaoSystem ssao{device, occlusionFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
         // How the sun's cascades are cut. Shadows stop well short of the
         // camera's far plane on purpose: stretching four cascades over a
@@ -704,6 +716,35 @@ namespace ege {
                 sceneDepthDesc.samples = sceneSamples;
                 FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", sceneDepthDesc);
 
+                // What screen-space occlusion reads. Nothing can sample a
+                // multisampled image, so with multisampling on the depth
+                // pre-pass resolves its depth into a single-sample copy - by
+                // taking one sample rather than averaging, because an averaged
+                // depth is a surface neither sample saw. With multisampling
+                // off there is nothing to resolve and this is the depth
+                // buffer itself.
+                TransientImageDesc sceneDepthResolvedDesc = sceneDepthDesc;
+                sceneDepthResolvedDesc.samples = VK_SAMPLE_COUNT_1_BIT;
+                FrameGraphResource sceneDepthResolved =
+                    multisampled ? graph.createTransient("sceneDepth1x", sceneDepthResolvedDesc)
+                                 : sceneDepth;
+
+                // The occlusion estimate and the blur that follows it. Full
+                // resolution, unlike bloom: this is read per shaded fragment
+                // to decide how dark a contact is, and halving it puts a
+                // visible step along every edge.
+                TransientImageDesc occlusionDesc{};
+                occlusionDesc.format = occlusionFormat;
+                occlusionDesc.extent = renderExtent;
+                // Nothing occludes anything until the pass runs, and a pass
+                // that is culled leaves this behind for the shading pass to
+                // read: white is "sees everything", which is the frame the
+                // engine drew before any of this existed.
+                occlusionDesc.clearValue.color = {{1.0f, 1.0f, 1.0f, 1.0f}};
+                FrameGraphResource occlusionRaw =
+                    graph.createTransient("occlusionRaw", occlusionDesc);
+                FrameGraphResource occlusion = graph.createTransient("occlusion", occlusionDesc);
+
                 // Fixed-size, not swapchain-relative: shadow quality has
                 // nothing to do with window size.
                 TransientImageDesc shadowMapDesc{};
@@ -880,11 +921,41 @@ namespace ege {
                     "depthPrePass",
                     [&](FrameGraph::PassBuilder& pass) {
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
+                        if (multisampled) {
+                            pass.resolve(sceneDepth, sceneDepthResolved);
+                        }
                     },
                     [&](VkCommandBuffer cmd, const FrameGraphResources&) {
                         frameInfo.commandBuffer = cmd;
                         pbrRenderSystem.renderDepthPrePass(
                             frameInfo, uboBuffers[frameIndex]->descriptorInfo());
+                    });
+
+                // Screen-space occlusion, between the depth and the shading
+                // that reads it. Two passes: the estimate, then a blur exactly
+                // as wide as the rotation pattern the estimate used.
+                graph.addPass(
+                    "occlusion",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(sceneDepthResolved, ResourceAccess::sampled);
+                        pass.write(occlusionRaw, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        ssao.renderOcclusion(
+                            cmd,
+                            frameIndex,
+                            uboBuffers[frameIndex]->descriptorInfo(),
+                            resolved.view(sceneDepthResolved));
+                    });
+
+                graph.addPass(
+                    "occlusionBlur",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(occlusionRaw, ResourceAccess::sampled);
+                        pass.write(occlusion, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        ssao.renderBlur(cmd, frameIndex, resolved.view(occlusionRaw));
                     });
 
                 // Light culling, before anything shades. Not a raster pass at
@@ -917,6 +988,7 @@ namespace ege {
                         pass.read(pointShadowMaps, ResourceAccess::sampled);
                         pass.read(spotShadowMaps, ResourceAccess::sampled);
                         pass.read(clusterList, ResourceAccess::storageRead);
+                        pass.read(occlusion, ResourceAccess::sampled);
                         pass.write(sceneColorMs, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
                         if (multisampled) {
@@ -952,11 +1024,17 @@ namespace ege {
                         spotShadowInfo.imageView = resolved.view(spotShadowMaps);
                         spotShadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+                        VkDescriptorImageInfo occlusionInfo{};
+                        occlusionInfo.sampler = ssao.resultSampler();
+                        occlusionInfo.imageView = resolved.view(occlusion);
+                        occlusionInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
                         DescriptorWriter(*globalSetLayout, *globalPool)
                             .writeImage(5, &shadowInfo)
                             .writeBuffer(7, &clusterInfo)
                             .writeImage(8, &pointShadowInfo)
                             .writeImage(9, &spotShadowInfo)
+                            .writeImage(10, &occlusionInfo)
                             .overwrite(globalDescriptorSets[frameIndex]);
 
                         frameInfo.commandBuffer = cmd;
