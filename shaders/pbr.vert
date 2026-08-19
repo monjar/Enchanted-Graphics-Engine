@@ -11,19 +11,16 @@ layout(location = 1) out vec3 fragPosWorld;
 layout(location = 2) out vec3 fragNormalWorld;
 layout(location = 3) out vec2 fragUv;
 
-#include "global_ubo.glsl"
+#include "model_push.glsl"
 
-layout(push_constant) uniform Push {
-    mat4 modelMatrix;
-    mat4 normalMatrix;
-    vec4 baseColorFactor;
-    vec4 emissiveAndMetallic;   // rgb emissive, a metallic
-    vec4 roughnessNormalOcclusion;  // r roughness, g normal scale, b occlusion
-} push;
+// The depth pre-pass writes depth with the same expression from the same
+// shared file, and the pipeline this feeds tests EQUAL against it. See
+// modelClipPosition for why both halves of that are needed.
+invariant gl_Position;
 
 void main() {
     vec4 positionWorld = push.modelMatrix * vec4(position, 1.0);
-    gl_Position = ubo.projection * ubo.view * positionWorld;
+    gl_Position = modelClipPosition(positionWorld);
 
     fragNormalWorld = normalize(mat3(push.normalMatrix) * normal);
     fragPosWorld = positionWorld.xyz;

@@ -218,6 +218,10 @@ TEST_CASE("the backbuffer ends the frame in its declared final layout") {
     CHECK(present.oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     CHECK(present.newLayout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
     CHECK(present.srcAccess == VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT);
+    // And the transition is made visible to whatever the owner does next -
+    // presenting it, or the copy the frame recorder and the occlusion
+    // readback both record once the graph has finished.
+    CHECK((present.dstAccess & VK_ACCESS_2_MEMORY_READ_BIT) != 0);
 }
 
 TEST_CASE("the first writer clears, a second writer loads") {
@@ -899,4 +903,202 @@ TEST_CASE("single-sample attachments name no resolve at all") {
             CHECK(attachment.resolveResourceIndex == FrameGraphResource::invalidIndex);
         }
     }
+}
+
+// ---- depth pre-pass --------------------------------------------------------
+//
+// Depth laid down by one pass and tested against by another is the first
+// producer/consumer pair in this engine that is not a read at all. Nothing
+// samples the pre-pass's output; the scene pass consumes it by loading it and
+// comparing against it, which the graph has to recognise or it culls the
+// producer and discards its result.
+
+namespace {
+
+    TransientImageDesc multisampledDepthDesc() {
+        TransientImageDesc desc = depthDesc();
+        desc.samples = VK_SAMPLE_COUNT_4_BIT;
+        return desc;
+    }
+
+}  // namespace
+
+TEST_CASE("a pass whose depth a later pass loads is not culled") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", depthDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "depthPrePass",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(sceneDepth, ResourceAccess::depthWrite); },
+        noopExecute);
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.write(sceneColor, ResourceAccess::colorWrite);
+            pass.write(sceneDepth, ResourceAccess::depthWrite);
+        },
+        noopExecute);
+    graph.addPass(
+        "post",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(sceneColor, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    // Three passes, in order: the pre-pass writes nothing anyone samples, so
+    // liveness has to come from the scene pass loading its depth.
+    REQUIRE(graph.compiledPasses().size() == 3);
+    CHECK(graph.passName(graph.compiledPasses()[0].passIndex) == "depthPrePass");
+
+    const FrameGraph::CompiledPass& prePass = graph.compiledPasses()[0];
+    REQUIRE(prePass.depthAttachment.has_value());
+    CHECK(prePass.depthAttachment->loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+    // And storing it is the whole point: discarded depth means the scene pass
+    // tests EQUAL against an empty buffer and draws nothing at all.
+    CHECK(prePass.depthAttachment->storeOp == VK_ATTACHMENT_STORE_OP_STORE);
+
+    const FrameGraph::CompiledPass& scene = graph.compiledPasses()[1];
+    REQUIRE(scene.depthAttachment.has_value());
+    CHECK(scene.depthAttachment->loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);
+    // Nothing loads it after the scene pass, so this one still discards.
+    CHECK(scene.depthAttachment->storeOp == VK_ATTACHMENT_STORE_OP_DONT_CARE);
+}
+
+TEST_CASE("a writer kept alive only by a later writer still gets its barrier") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", depthDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "depthPrePass",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(sceneDepth, ResourceAccess::depthWrite); },
+        noopExecute);
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.write(sceneColor, ResourceAccess::colorWrite);
+            pass.write(sceneDepth, ResourceAccess::depthWrite);
+        },
+        noopExecute);
+    graph.addPass(
+        "post",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(sceneColor, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    // The pre-pass discards whatever the recycled physical image held.
+    const auto& preBarriers = graph.compiledPasses()[0].barriers;
+    const bool discards = std::any_of(
+        preBarriers.begin(), preBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == sceneDepth.index &&
+                   barrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && barrier.firstUse;
+        });
+    CHECK(discards);
+
+    // Same layout on both sides, but write-after-write across two passes is
+    // still a hazard: without the barrier the scene pass's depth test can
+    // read what the pre-pass has not finished writing.
+    const auto& sceneBarriers = graph.compiledPasses()[1].barriers;
+    const bool ordered = std::any_of(
+        sceneBarriers.begin(), sceneBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == sceneDepth.index &&
+                   (barrier.srcAccess & VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT) != 0;
+        });
+    CHECK(ordered);
+}
+
+TEST_CASE("a multisampled depth attachment resolves like a colour one") {
+    // What single-sample consumers of depth - screen-space occlusion, the
+    // occlusion pyramid - read, since neither can sample a multisampled image.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource sceneColor = graph.createTransient("sceneColor", colorDesc());
+    FrameGraphResource depthMs = graph.createTransient("sceneDepthMs", multisampledDepthDesc());
+    FrameGraphResource depthResolved = graph.createTransient("sceneDepth", depthDesc());
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "depthPrePass",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.write(depthMs, ResourceAccess::depthWrite);
+            pass.resolve(depthMs, depthResolved);
+        },
+        noopExecute);
+    graph.addPass(
+        "occlusion",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(depthResolved, ResourceAccess::sampled);
+            pass.write(sceneColor, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+    graph.addPass(
+        "post",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(sceneColor, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 3);
+    const FrameGraph::CompiledPass& prePass = graph.compiledPasses()[0];
+    // The resolve target is named by the depth attachment, not attached
+    // beside it - a pass has one depth attachment and this is still one.
+    REQUIRE(prePass.depthAttachment.has_value());
+    CHECK(prePass.depthAttachment->resourceIndex == depthMs.index);
+    CHECK(prePass.depthAttachment->resolveResourceIndex == depthResolved.index);
+    CHECK(prePass.colorAttachments.empty());
+
+    // And the resolved copy is readable afterwards on the same terms as a
+    // resolved colour target: the resolve is what wrote it.
+    const auto& occlusionBarriers = graph.compiledPasses()[1].barriers;
+    const bool becomesReadable = std::any_of(
+        occlusionBarriers.begin(),
+        occlusionBarriers.end(),
+        [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == depthResolved.index &&
+                   barrier.newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        });
+    CHECK(becomesReadable);
+}
+
+TEST_CASE("resolving depth into colour, or colour into depth, is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource depthMs = graph.createTransient("depthMs", multisampledDepthDesc());
+    FrameGraphResource colorMs = graph.createTransient("colorMs", multisampledColorDesc());
+    FrameGraphResource color = graph.createTransient("color", colorDesc());
+    FrameGraphResource depth = graph.createTransient("depth", depthDesc());
+    importBackbuffer(graph);
+
+    CHECK_THROWS_AS(
+        graph.addPass(
+            "depth into colour",
+            [&](FrameGraph::PassBuilder& pass) { pass.resolve(depthMs, color); },
+            noopExecute),
+        std::logic_error);
+
+    CHECK_THROWS_AS(
+        graph.addPass(
+            "colour into depth",
+            [&](FrameGraph::PassBuilder& pass) { pass.resolve(colorMs, depth); },
+            noopExecute),
+        std::logic_error);
 }

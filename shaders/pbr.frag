@@ -8,7 +8,7 @@ layout(location = 3) in vec2 fragUv;
 
 layout(location = 0) out vec4 outColor;
 
-#include "global_ubo.glsl"
+#include "model_push.glsl"
 
 layout(set = 0, binding = 1) uniform samplerCube irradianceMap;
 layout(set = 0, binding = 2) uniform samplerCube prefilteredMap;
@@ -21,6 +21,9 @@ layout(set = 0, binding = 8) uniform samplerCubeArrayShadow pointShadowMaps;
 // bounded angle, so unlike a point light it needs no cube and unlike the sun
 // it needs no cascades - one ordinary projective lookup covers it.
 layout(set = 0, binding = 9) uniform sampler2DArrayShadow spotShadowMaps;
+// How much of its surroundings each pixel can see, estimated from the depth
+// buffer before anything shaded. See src/render/Ssao.hpp.
+layout(set = 0, binding = 10) uniform sampler2D ambientOcclusionMap;
 
 layout(std430, set = 0, binding = 6) readonly buffer LightBuffer {
     Light lights[];
@@ -37,13 +40,6 @@ layout(set = 1, binding = 1) uniform sampler2D normalMap;
 layout(set = 1, binding = 2) uniform sampler2D metallicRoughnessMap;
 layout(set = 1, binding = 3) uniform sampler2D emissiveMap;
 
-layout(push_constant) uniform Push {
-    mat4 modelMatrix;
-    mat4 normalMatrix;
-    vec4 baseColorFactor;
-    vec4 emissiveAndMetallic;
-    vec4 roughnessNormalOcclusion;
-} push;
 
 const float PI = 3.14159265359;
 
@@ -381,8 +377,22 @@ void main() {
     vec2 brdf = texture(brdfLut, vec2(NdotV, roughness)).rg;
     vec3 specularAmbient = prefiltered * (F0 * brdf.x + brdf.y);
 
+    // Screen-space occlusion, on top of whatever the material's own occlusion
+    // map says. Sampled at this pixel's own place on screen, which is what
+    // gl_FragCoord is - the occlusion map is the size of the frame, not of
+    // anything to do with this surface's own texture coordinates.
+    //
+    // The ambient term only. Occlusion is a statement about how much of the
+    // environment a point can see, and the environment is what the ambient
+    // term is; a direct light either reaches the point or is blocked by a
+    // shadow map that already knows about it. Multiplying it into the whole
+    // sum instead is the usual mistake, and it puts a grey smear along every
+    // contact that the sun is lighting perfectly well.
+    float screenOcclusion =
+        texture(ambientOcclusionMap, gl_FragCoord.xy / max(ubo.screenSize.xy, vec2(1.0))).r;
+
     vec3 ambient = (diffuseAmbient + specularAmbient) * ubo.ambientLightColor.rgb *
-                   ubo.ambientLightColor.w * occlusion;
+                   ubo.ambientLightColor.w * occlusion * screenOcclusion;
 
     vec3 emissive = texture(emissiveMap, fragUv).rgb * push.emissiveAndMetallic.rgb;
 

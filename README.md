@@ -53,6 +53,29 @@ down as the attachment is stored, so geometry edges are smooth rather than
 staircased. A device that cannot manage it says so and the renderer runs
 single-sampled instead.
 
+Depth goes down first, in a pass that writes nothing else, and the shading
+pass then tests `EQUAL` with depth writes off — so the clustered fragment
+shader, which samples four environment maps and walks a whole cluster of
+lights, runs once per visible pixel rather than once per layer of geometry
+standing over it. Both passes compute the vertex position from the same
+shared expression and both declare `invariant gl_Position`, because a
+comparison for exact equality against depth written by a different
+calculation is a comparison that fails.
+
+That depth is then read twice more. **Screen-space ambient occlusion**
+samples the hemisphere over each surface and darkens the image-based ambient
+where a point cannot see much of its surroundings, which is what makes an
+object read as touching the floor rather than hovering over it; only the
+ambient term, because a direct light either reaches a point or is stopped by
+a shadow map that already knows. And a **depth pyramid** is built from it —
+halved until it is a few tens of thousands of floats, then copied back — so
+the next frames can skip drawing objects that were entirely behind something
+else. The verdict is a couple of frames old, which is the price of applying
+it on the CPU where the draws are actually issued. The scene has one thing
+for it to decide about — a sphere directly behind the rippling sheet, which
+drops out of the draw list while the sheet covers it and is back the moment
+the camera can see past the edge.
+
 Bright highlights bloom through a half-resolution blur chain, composited in
 linear light before the ACES tonemap.
 
@@ -208,9 +231,9 @@ own copies of the type, component and behaviour registries and nothing
 registered across the boundary would be visible. That is a build change to the
 whole project, and it is its own piece of work.
 
-Still to come: point-light and spot shadows, anti-aliasing, the standalone
-editor application, script hot reload, character controllers and physics
-constraints.
+Still to come: GPU instancing, per-thread command pools and the async asset
+loading they unblock, the standalone editor application, script hot reload,
+skeletal animation, character controllers and physics constraints.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -300,10 +323,13 @@ src/
                 colliders and the ECS sync
   rhi/          device, swapchain, graphics and compute pipelines, buffer,
                 descriptors, textures, frame graph (layered and cube images,
-                multisampled attachments, transient buffers), frame recording
+                multisampled colour and depth attachments with their resolves,
+                transient buffers), frame recording
   render/       renderer, model, camera, materials, lights, bounds,
                 environment lighting, PBR, cascaded, cube and spot shadows,
-                clustered light culling, skybox, bloom and post-process
+                clustered light culling, screen-space ambient occlusion,
+                the depth pyramid and occlusion culling, skybox, bloom and
+                post-process
   scene/        world, entities, component pools, components, hierarchy, serialization
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
                 are shared declarations, included rather than compiled

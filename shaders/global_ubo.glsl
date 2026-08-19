@@ -1,3 +1,6 @@
+#ifndef EGE_GLOBAL_UBO_GLSL
+#define EGE_GLOBAL_UBO_GLSL
+
 // The per-frame global uniform block, shared by every shader that binds set 0.
 //
 // It lives in one file because it used to live in four, and they drifted: when
@@ -58,3 +61,5 @@ layout(set = 0, binding = 0) uniform GlobalUbo {
     int numLights;
     int cascadeCount;
 } ubo;
+
+#endif  // EGE_GLOBAL_UBO_GLSL

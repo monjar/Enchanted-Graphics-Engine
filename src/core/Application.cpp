@@ -20,6 +20,7 @@
 #include "render/ClusterLightSystem.hpp"
 #include "render/DynamicMesh.hpp"
 #include "render/EnvironmentLighting.hpp"
+#include "render/OcclusionSystem.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PointShadows.hpp"
 #include "render/PostProcessSystem.hpp"
@@ -27,6 +28,7 @@
 #include "render/ShadowMapSystem.hpp"
 #include "render/SkyboxSystem.hpp"
 #include "render/SpotShadows.hpp"
+#include "render/SsaoSystem.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/FrameGraph.hpp"
 #include "rhi/FrameRecorder.hpp"
@@ -118,7 +120,7 @@ namespace ege {
                 .setMaxSets(SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT)
                 .addPoolSize(
-                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 7)
+                    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, SwapChain::MAX_FRAMES_IN_FLIGHT * 8)
                 // Two storage buffers per frame: the scene's lights and the
                 // per-cluster lists culled from them.
                 .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, SwapChain::MAX_FRAMES_IN_FLIGHT * 2)
@@ -225,6 +227,10 @@ namespace ege {
                 // Every shadow-casting spot's map, in one array.
                 .addBinding(
                     9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
+                // How much of its surroundings each pixel can see, estimated
+                // from the depth buffer before anything shaded.
+                .addBinding(
+                    10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 .build();
 
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
@@ -273,7 +279,8 @@ namespace ege {
             renderer.getSwapChainDepthFormat(),
             globalSetLayout->getDescriptorSetLayout(),
             materialSetLayout->getDescriptorSetLayout(),
-            sceneSamples};
+            sceneSamples,
+            SwapChain::MAX_FRAMES_IN_FLIGHT};
 
         SkyboxSystem skybox{
             device,
@@ -283,6 +290,17 @@ namespace ege {
             sceneSamples};
 
         ShadowMapSystem shadowSystem{device, renderer.getSwapChainDepthFormat()};
+
+        // A single channel, eight bits: the occlusion estimate is one number
+        // per pixel between nothing and everything, and it is blurred before
+        // anything reads it. R8_UNORM is also a format every Vulkan device has
+        // to support both rendering to and sampling.
+        constexpr VkFormat occlusionFormat = VK_FORMAT_R8_UNORM;
+        SsaoSystem ssao{device, occlusionFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
+
+        // The depth pyramid the draw list is culled against, built from the
+        // frame's own depth and read back a couple of frames later.
+        OcclusionSystem occlusionCulling{device, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
         // How the sun's cascades are cut. Shadows stop well short of the
         // camera's far plane on purpose: stretching four cascades over a
@@ -666,6 +684,17 @@ namespace ege {
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
+                // Whatever depth pyramid has come back by now, and the camera
+                // this frame is putting into the next one. Read before the
+                // draw list is gathered, because the list is what it decides.
+                occlusionCulling.resize(renderExtent);
+                occlusionCulling.collect(frameIndex, camera.getProjection() * camera.getView());
+
+                // Which objects are visible, gathered once for the frame: the
+                // depth pre-pass and the shading pass both draw this list, and
+                // they have to draw the same one.
+                pbrRenderSystem.prepare(frameInfo, occlusionCulling.snapshot());
+
                 // render: declare the frame, then let the graph run it. The
                 // declarations are cheap enough to restate every frame, and
                 // doing so is what lets passes appear and disappear freely.
@@ -697,6 +726,35 @@ namespace ege {
                 // a value no sample actually had.
                 sceneDepthDesc.samples = sceneSamples;
                 FrameGraphResource sceneDepth = graph.createTransient("sceneDepth", sceneDepthDesc);
+
+                // What screen-space occlusion reads. Nothing can sample a
+                // multisampled image, so with multisampling on the depth
+                // pre-pass resolves its depth into a single-sample copy - by
+                // taking one sample rather than averaging, because an averaged
+                // depth is a surface neither sample saw. With multisampling
+                // off there is nothing to resolve and this is the depth
+                // buffer itself.
+                TransientImageDesc sceneDepthResolvedDesc = sceneDepthDesc;
+                sceneDepthResolvedDesc.samples = VK_SAMPLE_COUNT_1_BIT;
+                FrameGraphResource sceneDepthResolved =
+                    multisampled ? graph.createTransient("sceneDepth1x", sceneDepthResolvedDesc)
+                                 : sceneDepth;
+
+                // The occlusion estimate and the blur that follows it. Full
+                // resolution, unlike bloom: this is read per shaded fragment
+                // to decide how dark a contact is, and halving it puts a
+                // visible step along every edge.
+                TransientImageDesc occlusionDesc{};
+                occlusionDesc.format = occlusionFormat;
+                occlusionDesc.extent = renderExtent;
+                // Nothing occludes anything until the pass runs, and a pass
+                // that is culled leaves this behind for the shading pass to
+                // read: white is "sees everything", which is the frame the
+                // engine drew before any of this existed.
+                occlusionDesc.clearValue.color = {{1.0f, 1.0f, 1.0f, 1.0f}};
+                FrameGraphResource occlusionRaw =
+                    graph.createTransient("occlusionRaw", occlusionDesc);
+                FrameGraphResource occlusion = graph.createTransient("occlusion", occlusionDesc);
 
                 // Fixed-size, not swapchain-relative: shadow quality has
                 // nothing to do with window size.
@@ -866,6 +924,107 @@ namespace ege {
                         });
                 }
 
+                // Depth before colour. Nothing samples what this produces -
+                // the scene pass consumes it by testing EQUAL against it - so
+                // the graph keeps the pass alive on the strength of that later
+                // load rather than on any read.
+                graph.addPass(
+                    "depthPrePass",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.write(sceneDepth, ResourceAccess::depthWrite);
+                        if (multisampled) {
+                            pass.resolve(sceneDepth, sceneDepthResolved);
+                        }
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                        frameInfo.commandBuffer = cmd;
+                        pbrRenderSystem.renderDepthPrePass(
+                            frameInfo, uboBuffers[frameIndex]->descriptorInfo());
+                    });
+
+                // The depth pyramid, halved until it is small enough to be
+                // worth copying back. Each level is its own image rather than
+                // a mip of one, which costs a few more passes and saves the
+                // graph having to track a layout per mip - every level here is
+                // written once, read once by the level above it, and gone.
+                //
+                // The last one is not a transient at all: it is an image the
+                // occlusion system owns, imported so that it outlives the
+                // frame that fills it, and left in TRANSFER_SRC_OPTIMAL for
+                // the copy that follows the graph.
+                if (occlusionCulling.enabled &&
+                    occlusionCulling.readbackImage(frameIndex) != VK_NULL_HANDLE) {
+                    const uint32_t reductions = OcclusionSystem::reductionSteps(renderExtent);
+
+                    std::vector<FrameGraphResource> pyramidLevels(reductions);
+                    for (uint32_t step = 0; step + 1 < reductions; step++) {
+                        TransientImageDesc levelDesc{};
+                        levelDesc.format = OcclusionSystem::levelFormat;
+                        levelDesc.extent = OcclusionSystem::stepExtent(renderExtent, step);
+                        pyramidLevels[step] =
+                            graph.createTransient("hzb" + std::to_string(step), levelDesc);
+                    }
+                    pyramidLevels[reductions - 1] = graph.importImage(
+                        "hzbReadback",
+                        occlusionCulling.readbackImage(frameIndex),
+                        occlusionCulling.readbackView(frameIndex),
+                        OcclusionSystem::levelFormat,
+                        occlusionCulling.readbackExtent(),
+                        VkClearValue{},
+                        // What the previous frame at this index left it doing:
+                        // being copied out of.
+                        VK_PIPELINE_STAGE_2_COPY_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+                    for (uint32_t step = 0; step < reductions; step++) {
+                        const FrameGraphResource source =
+                            step == 0 ? sceneDepthResolved : pyramidLevels[step - 1];
+                        const FrameGraphResource target = pyramidLevels[step];
+                        const VkExtent2D sourceExtent =
+                            step == 0 ? renderExtent
+                                      : OcclusionSystem::stepExtent(renderExtent, step - 1);
+
+                        graph.addPass(
+                            "hzbReduce" + std::to_string(step),
+                            [source, target](FrameGraph::PassBuilder& pass) {
+                                pass.read(source, ResourceAccess::sampled);
+                                pass.write(target, ResourceAccess::colorWrite);
+                            },
+                            [&, source, step, sourceExtent](
+                                VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                                occlusionCulling.reduce(
+                                    cmd, frameIndex, step, resolved.view(source), sourceExtent);
+                            });
+                    }
+                }
+
+                // Screen-space occlusion, between the depth and the shading
+                // that reads it. Two passes: the estimate, then a blur exactly
+                // as wide as the rotation pattern the estimate used.
+                graph.addPass(
+                    "occlusion",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(sceneDepthResolved, ResourceAccess::sampled);
+                        pass.write(occlusionRaw, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        ssao.renderOcclusion(
+                            cmd,
+                            frameIndex,
+                            uboBuffers[frameIndex]->descriptorInfo(),
+                            resolved.view(sceneDepthResolved));
+                    });
+
+                graph.addPass(
+                    "occlusionBlur",
+                    [&](FrameGraph::PassBuilder& pass) {
+                        pass.read(occlusionRaw, ResourceAccess::sampled);
+                        pass.write(occlusion, ResourceAccess::colorWrite);
+                    },
+                    [&](VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                        ssao.renderBlur(cmd, frameIndex, resolved.view(occlusionRaw));
+                    });
+
                 // Light culling, before anything shades. Not a raster pass at
                 // all - it declares no attachment, so the graph runs it
                 // outside vkCmdBeginRendering and derives the compute-to-
@@ -896,6 +1055,7 @@ namespace ege {
                         pass.read(pointShadowMaps, ResourceAccess::sampled);
                         pass.read(spotShadowMaps, ResourceAccess::sampled);
                         pass.read(clusterList, ResourceAccess::storageRead);
+                        pass.read(occlusion, ResourceAccess::sampled);
                         pass.write(sceneColorMs, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
                         if (multisampled) {
@@ -931,11 +1091,17 @@ namespace ege {
                         spotShadowInfo.imageView = resolved.view(spotShadowMaps);
                         spotShadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
+                        VkDescriptorImageInfo occlusionInfo{};
+                        occlusionInfo.sampler = ssao.resultSampler();
+                        occlusionInfo.imageView = resolved.view(occlusion);
+                        occlusionInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
                         DescriptorWriter(*globalSetLayout, *globalPool)
                             .writeImage(5, &shadowInfo)
                             .writeBuffer(7, &clusterInfo)
                             .writeImage(8, &pointShadowInfo)
                             .writeImage(9, &spotShadowInfo)
+                            .writeImage(10, &occlusionInfo)
                             .overwrite(globalDescriptorSets[frameIndex]);
 
                         frameInfo.commandBuffer = cmd;
@@ -1008,6 +1174,9 @@ namespace ege {
 
                 graph.compile();
                 graph.execute(device, commandBuffer);
+                // The pyramid's last level, out to a buffer the frame that
+                // reuses this index will read.
+                occlusionCulling.recordCopy(commandBuffer, frameIndex);
                 if (recorder != nullptr) {
                     recorder->recordCopy(
                         commandBuffer,
@@ -1224,6 +1393,22 @@ namespace ege {
             sphere,
             makeMaterial("BlueSphere", glm::vec3{0.2f, 0.5f, 0.95f}, 0.f, 0.15f),
             {.9f, .25f, 0.f},
+            glm::vec3{.5f});
+
+        // Directly behind the rippling sheet, and there for that reason: this
+        // is the one thing in the scene that spends most of the tour entirely
+        // hidden behind something else, so it is the only thing occlusion
+        // culling has to decide about. Everything else here stands in the open,
+        // where the depth pyramid quite correctly says to draw it.
+        //
+        // Watch the editor's `occluded` count while the camera comes round
+        // onto the sheet: this drops out of the draw list while the sheet
+        // covers it and is back the moment the camera can see past the edge.
+        addMesh(
+            "HiddenSphere",
+            sphere,
+            makeMaterial("HiddenSphere", glm::vec3{0.85f, 0.7f, 0.2f}, 0.2f, 0.35f),
+            {2.9f, -0.5f, 3.7f},
             glm::vec3{.5f});
 
         // The physics exhibit: a tower of crates with a steel boulder hanging

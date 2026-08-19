@@ -248,12 +248,22 @@ namespace ege {
                 "', which is itself multisampled"};
         }
 
+        // Depth and colour resolve into their own kind of attachment, and
+        // the format is what says which: a resolve target is written exactly
+        // as the attachment it mirrors, so it wants the same layout, the same
+        // usage and the same barriers as one.
+        const bool sourceIsDepth = (aspectFor(source.desc.format) & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
+        const bool targetIsDepth =
+            (aspectFor(destination.desc.format) & VK_IMAGE_ASPECT_DEPTH_BIT) != 0;
+        if (sourceIsDepth != targetIsDepth) {
+            throw std::logic_error{
+                "pass declared a resolve between '" + source.name + "' and '" + destination.name +
+                "', which are not both depth or both colour"};
+        }
+
         PassAccess access{};
         access.resource = target;
-        // A resolve target is written as a colour attachment - that is what
-        // the hardware does to it - so it wants the same layout, the same
-        // usage and the same barriers as one.
-        access.access = ResourceAccess::colorWrite;
+        access.access = sourceIsDepth ? ResourceAccess::depthWrite : ResourceAccess::colorWrite;
         access.isWrite = true;
         access.isResolve = true;
         access.resolveSource = multisampled;
@@ -295,18 +305,38 @@ namespace ege {
         }
 
         // Liveness, walking backwards: a pass matters if it writes an imported
-        // image, or writes something a later live pass reads. One reverse
-        // sweep suffices because writers always precede their readers in
-        // execution order.
+        // image, if it writes something a later live pass reads, or if a later
+        // live pass writes the same thing again - because a second write to a
+        // layer loads what the first left there rather than clearing it. One
+        // reverse sweep suffices because writers always precede their readers
+        // in execution order, and a later writer is seen before an earlier one.
+        //
+        // That last case is not hypothetical: a depth pre-pass produces depth
+        // nothing samples, and the pass that consumes it consumes it by
+        // testing against it. Without this the pre-pass is culled as
+        // contributing nothing, and the scene it was meant to accelerate
+        // renders against an empty depth buffer.
         passLive.assign(passes.size(), false);
         std::vector<bool> needed(resources.size(), false);
+
+        // Per resource and layer, the last live pass that writes it. Doubles
+        // as the store-op rule below: a writer that is not the last one owes
+        // its result to whoever loads it next.
+        constexpr uint32_t noWriter = UINT32_MAX;
+        std::vector<std::vector<uint32_t>> lastLiveWriter(resources.size());
+        for (size_t i = 0; i < resources.size(); i++) {
+            lastLiveWriter[i].assign(std::max(resources[i].desc.layers, 1u), noWriter);
+        }
 
         for (size_t i = passes.size(); i-- > 0;) {
             const Pass& pass = passes[i];
             bool live = false;
             for (const PassAccess& access : pass.accesses) {
-                if (access.isWrite &&
-                    (resources[access.resource.index].imported || needed[access.resource.index])) {
+                if (!access.isWrite) {
+                    continue;
+                }
+                if (resources[access.resource.index].imported || needed[access.resource.index] ||
+                    lastLiveWriter[access.resource.index][access.layer] != noWriter) {
                     live = true;
                 }
             }
@@ -315,6 +345,9 @@ namespace ege {
                 for (const PassAccess& access : pass.accesses) {
                     if (!access.isWrite) {
                         needed[access.resource.index] = true;
+                    } else if (lastLiveWriter[access.resource.index][access.layer] == noWriter) {
+                        lastLiveWriter[access.resource.index][access.layer] =
+                            static_cast<uint32_t>(i);
                     }
                 }
             }
@@ -405,7 +438,13 @@ namespace ege {
                     attachment.loadOp = resource.writtenLayers[passAccess.layer]
                                             ? VK_ATTACHMENT_LOAD_OP_LOAD
                                             : VK_ATTACHMENT_LOAD_OP_CLEAR;
-                    attachment.storeOp = (resource.imported || needed[passAccess.resource.index])
+                    // Stored when something can still observe it: the image's
+                    // owner, a later read, or a later write that will load it
+                    // rather than clear it.
+                    const bool writtenAgainLater =
+                        lastLiveWriter[passAccess.resource.index][passAccess.layer] != passIndex;
+                    attachment.storeOp = (resource.imported || needed[passAccess.resource.index] ||
+                                          writtenAgainLater)
                                              ? VK_ATTACHMENT_STORE_OP_STORE
                                              : VK_ATTACHMENT_STORE_OP_DONT_CARE;
                     attachment.clearValue = resource.desc.clearValue;
@@ -441,6 +480,11 @@ namespace ege {
                         matched = true;
                     }
                 }
+                if (compiledPass.depthAttachment.has_value() &&
+                    compiledPass.depthAttachment->resourceIndex == passAccess.resolveSource.index) {
+                    compiledPass.depthAttachment->resolveResourceIndex = passAccess.resource.index;
+                    matched = true;
+                }
                 if (!matched) {
                     throw std::logic_error{
                         "pass '" + passes[passIndex].name + "' resolves '" +
@@ -469,7 +513,14 @@ namespace ege {
             barrier.srcStage = resource.state.stage;
             barrier.srcAccess = resource.state.access & allWrites;
             barrier.dstStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
-            barrier.dstAccess = VK_ACCESS_2_NONE;
+            // A layout transition is itself a write, and whatever the image's
+            // owner does next has to be able to see it. For a swapchain image
+            // that is the presentation engine; for an image handed over to be
+            // copied out of, it is the copy recorded right after the graph
+            // finishes, which is a transfer read in the same command buffer.
+            // An empty destination access scope makes the transition available
+            // to nothing at all.
+            barrier.dstAccess = VK_ACCESS_2_MEMORY_READ_BIT;
             finishingBarriers.push_back(barrier);
         }
 
@@ -787,16 +838,17 @@ namespace ege {
 
                     // Averaging the samples happens as the attachment is
                     // stored, which is the whole economy of multisampling: no
-                    // second pass reads the large image back.
+                    // second pass reads the large image back. Whether the
+                    // multisampled image itself is kept is the planner's
+                    // decision like any other attachment's - in the ordinary
+                    // case nothing reads it after the resolve and it is
+                    // discarded.
                     if (attachment.resolveResourceIndex != FrameGraphResource::invalidIndex) {
                         PlannedAttachment resolveTarget{};
                         resolveTarget.resourceIndex = attachment.resolveResourceIndex;
                         info.resolveMode = VK_RESOLVE_MODE_AVERAGE_BIT;
                         info.resolveImageView = attachmentView(resolveTarget);
                         info.resolveImageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                        // Nothing reads the multisampled image after the
-                        // resolve, so keeping it would be pure bandwidth.
-                        info.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
                     }
 
                     colorAttachments.push_back(info);
@@ -814,6 +866,24 @@ namespace ege {
                     depthAttachment.loadOp = attachment.loadOp;
                     depthAttachment.storeOp = attachment.storeOp;
                     depthAttachment.clearValue = attachment.clearValue;
+
+                    // Depth is resolved by taking one sample rather than by
+                    // averaging: the mean of two depths is a surface neither
+                    // sample saw, which would put a false occluder halfway
+                    // through every silhouette. SAMPLE_ZERO is also the one
+                    // mode Vulkan requires every implementation to support.
+                    //
+                    // Unlike colour, the multisampled depth is normally kept:
+                    // the pass that resolves it is the depth pre-pass, and the
+                    // scene pass still tests against the full-rate original.
+                    if (attachment.resolveResourceIndex != FrameGraphResource::invalidIndex) {
+                        PlannedAttachment resolveTarget{};
+                        resolveTarget.resourceIndex = attachment.resolveResourceIndex;
+                        depthAttachment.resolveMode = VK_RESOLVE_MODE_SAMPLE_ZERO_BIT;
+                        depthAttachment.resolveImageView = attachmentView(resolveTarget);
+                        depthAttachment.resolveImageLayout =
+                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                    }
                 }
 
                 VkRenderingInfo renderingInfo{};
