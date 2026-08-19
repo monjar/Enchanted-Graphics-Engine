@@ -2,7 +2,9 @@
 
 > Living document. Describes how the project grows from a Vulkan renderer into a complete game engine.
 >
-> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4, 5, 6, 7 and 8 substantially complete. Phase 9 has started — clustered shading has landed; the rest of it, and the debts earlier phases recorded, remain.**
+> **Status: Phases 0, 1 and 3 complete. Phase 2 essentially complete. Phases 4, 5, 6, 7 and 8 substantially complete. Phase 9 has started — clustered shading has landed, and Phase 4's shadow and anti-aliasing debts are cleared.**
+>
+> **§10 is the plan from here** — written from where the engine actually is rather than from where this document originally guessed, and ordered by what unblocks what. Read that first when picking up the next piece of work.
 >
 > Each phase below carries an outcome note listing exactly what landed and what did not. The **frame graph** — for several updates the single most valuable outstanding item — is done, along with Vulkan 1.3, dynamic rendering, the **complete HDR pipeline** (float target → bloom → ACES), **image-based lighting** from a procedurally generated sky, a **sun with PCF-filtered shadows** rendered through the graph, and **glTF 2.0 import**. The **editor** now has an offscreen viewport with docked panels, hierarchy editing, a reflection-driven inspector, transform gizmos, a console, an asset browser, **Play/Pause/Step/Stop** and **undo/redo**. The **asset database** underneath it gives every asset a stable id in a `.egameta` sidecar, which is what finally lets a scene save what it draws — and what unblocked play mode and undo, both of which are world snapshots. A `--demo` camera tour and self-recorded frames make all of it demonstrable. **Scripting** landed on top of that: behaviours in C++ with reflected fields, editable in the inspector and saved into the scene, script-written geometry through `DynamicMesh`, and **asset hot reload** — edit a material file and the running scene changes. Script hot reload is the one thing Phase 7 asked for and did not get, for a stated reason: it needs the engine built as a shared library, which is its own change. **Phase 8 physics** landed next: Jolt behind an engine-owned `PhysicsWorld` confined to one translation unit, `RigidBody` and box/sphere/capsule colliders that are scenery without a body and simulated with one, two-way transform sync through the hierarchy, contacts delivered to `Behavior::onContact`, raycasts reachable from gameplay, and bitwise-pinned determinism — the demo opens with a boulder rolling down a plank into a crate tower. **Cascaded sun shadows** followed, clearing the oldest recorded debt: the frame graph learned layered images, and the fixed origin-anchored box became four camera-fitted cascades. **Phase 9 then opened with clustered shading**: the frame graph learned transient buffers, the RHI learned compute pipelines, and a compute pass now assigns lights to froxels so a fragment loops the lights that reach it rather than every light in the scene — which is what removed the sixteen-light ceiling the forward shader had. **Point-light cube shadows** followed, clearing the last of Phase 4's shadow debt: six depth passes per casting light into one cube array, sampled by direction. **MSAA** came after it, closing the anti-aliasing gap that headed the absent list since Phase 0, and **spot lights with their shadows** finished Phase 4's shadow work entirely. Next: the rest of Phase 9, or the remaining debts (FXAA/TAA, script hot reload) as need dictates.
 
@@ -624,7 +626,11 @@ Two shapes worth carrying forward:
 | 8 | Character controller walks, jumps, pushes dynamic bodies, fires triggers; the same fixed-step sim run twice is identical |
 | 9+ | RenderDoc frame captures; frame-time budgets tracked in the profiler panel |
 
-**Golden-image regression testing** from Phase 4 onward: render fixed scenes at fixed camera positions in CI and diff against committed references with a perceptual threshold. This is what keeps a renderer from silently regressing as the frame graph grows.
+~~**Golden-image regression testing** from Phase 4 onward: render fixed scenes at fixed camera positions in CI and diff against committed references with a perceptual threshold.~~ **Replaced by something narrower and more robust.** Committed reference images are a poor fit for a CI that renders on a software rasteriser: the comparison strict enough to catch a shadow landing in the wrong place is also strict enough to fail on an LLVM upgrade, and a threshold loose enough to survive one catches almost nothing.
+
+What landed instead is a **frame sanity check**: the headless run records its own frames and a tool asks whether a picture came out — is there an image, is it more than one flat colour, is it neither crushed to black nor blown out, does it have more than a handful of colours. That is deliberately the first half-second of a person looking, not a full inspection. It catches the catastrophic class — a dead pass, a lost descriptor, a shader that never bound — which is exactly the class the previous smoke test could not see, since the engine starting, rendering, not crashing and upsetting no validation layer are all true of a black screen. Subtle correctness stays where it has been all along: in the device-free unit tests, which is why the shadow, cluster and cone maths are all written to be testable without a GPU.
+
+Proven by breaking it on purpose — emptying the scene pass produced a run that was validation-clean and exited zero, and only the new check failed it.
 
 ---
 
@@ -635,3 +641,88 @@ Two shapes worth carrying forward:
 - Phase 8 (physics) only depends on Phases 1–3, so it can move earlier if gameplay matters more than visual fidelity.
 - Realistic total for Phases 0–8 solo part-time: **12–18 months**. Phases 9–10 are open-ended.
 - The sandbox project should be kept working at every step — it is the honest test of whether the engine is actually usable.
+- **Anything device-free should be written device-free.** Every renderer feature that has landed since the frame graph split the same way: the arithmetic in its own file with no Vulkan in it and a test suite that runs on a machine with no GPU, and a thin layer that hands the result to the device. Cascade fitting, cluster geometry, cube faces, cone falloff — each of those files is where the bugs actually were, and each was caught on a laptop rather than in a frame.
+- **The demo has to demonstrate the thing.** Twice now a feature landed and the pictures did not change: the cascades, because the demo fitted inside the box they replaced, and clustered shading, because three lights prove nothing about a light cap. The fix both times was to change the scene, not the wording.
+
+---
+
+## 10. The plan from here
+
+> Phases 0–8 were written before any of this existed and describe a route. This
+> section is written from where the engine actually is, and is the part to read
+> first when picking up the next piece of work. It is ordered by what unblocks
+> what, not by what would be most fun.
+
+### 10.1 What the engine is now
+
+A Vulkan 1.3 clustered-forward renderer with a frame graph that owns layered,
+cube and multisampled images and transient buffers; PBR with image-based
+lighting; three kinds of shadow (cascaded sun, cube point, projective spot);
+4× MSAA; bloom and an ACES tonemap. Underneath: a sparse-set ECS, runtime
+reflection driving serialization and the editor, a GUID asset database, C++
+scripting, and Jolt physics. Around it: 261 tests, five CI configurations, and
+a headless render that now checks its own output.
+
+### 10.2 Next, in order
+
+Each of these is a single increment — one branch, one pull request.
+
+| # | Item | Why now | Blocked by |
+|---|---|---|---|
+| 1 | **Depth pre-pass** | Clustered forward shades every fragment that survives the depth test, and the demo already has overdraw. A depth-only pass first means the scene pass shades each pixel once. It is also the prerequisite for the two items under it. | nothing |
+| 2 | **SSAO** | The single largest remaining gain in how *grounded* objects look, and the ambient term is currently unoccluded everywhere. Needs depth and normals from a pre-pass. | 1 |
+| 3 | **HZB occlusion culling** | Frustum culling is in; nothing rejects what is behind something else. The pre-pass depth is the pyramid's source. | 1 |
+| 4 | **GPU instancing** | Phase 4 left the draw list sorted by material and mesh and never merged consecutive identical draws. The groundwork is done; this is the merge. | nothing |
+| 5 | **Per-thread command pools** | Phase 6 called async asset loading a *hazard* rather than a preference: uploading from a worker needs a pool per thread, and `Device` has one. This unblocks async loading and anything else that wants to record off the main thread. | nothing |
+| 6 | **Async asset loading** | What the asset database was designed for and could not have. | 5 |
+| 7 | **Render-transform interpolation** | `Time::fixedAlpha()` has existed since Phase 1 for exactly this. Physics at 60 Hz on a 144 Hz display judders today. Lands as one change across everything the simulation moves, not as a physics special case. | nothing |
+| 8 | **Engine as a shared library** | The one thing Phase 7 asked for and did not get. A `dlopen`'d script module linked against a *static* engine gets its own copies of every registry, so nothing it registers is visible. This is a build change on every platform and deserves its own commit. | nothing |
+| 9 | **Script hot reload** | The feature 8 exists to enable, and the file watcher that drives it is already built and working. | 8 |
+| 10 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
+
+### 10.3 Deliberately not next
+
+- **TAA** — wants motion vectors, and motion vectors want a velocity buffer the
+  frame graph does not yet produce. FXAA is cheaper but MSAA already covers the
+  geometry aliasing that hurts most; the remaining aliasing is specular, which
+  neither fixes.
+- **Bindless descriptors and SPIRV-Reflect layouts** — neither blocks anything.
+  Bindless earns its cost when material count outgrows per-material sets, and
+  the worst of the coupling SPIRV-Reflect would remove is already gone.
+- **Cooked asset packaging, KTX2, BC compression** — all exist to feed
+  `EnchantedPlayer`, which is Phase 10. Building a packer before the thing that
+  unpacks it is how formats get designed against nothing.
+- **The standalone editor executable** — the panels are in-process on purpose
+  and moving them is a build-system change, not a rewrite. It buys nothing
+  until there is a project to open that is not the demo.
+- **Terrain, GI, particles, decals, volumetrics** — Phase 9 lists them and they
+  are real, but each is a phase-sized piece of work next to the ten above.
+
+### 10.4 Standing debts, with their reasons
+
+These are not scheduled because nothing needs them yet. Each is recorded so it
+is a decision rather than an oversight.
+
+| Debt | Left because |
+|---|---|
+| Tangents from glTF | The shader derives a tangent frame from screen-space derivatives, which breaks only on mirrored UVs — and no asset in the project has any. |
+| Physics constraints, shapecast, overlap, named collision layers | API surface with no caller. The backend supports all of them whenever something needs a door or a trigger volume that ignores the player. |
+| `CharacterController`, `ConvexHullCollider`, `MeshCollider` | The first belongs to the sandbox project, which Phase 10 owns; the other two want cooked hull and triangle data from a pipeline that does not exist yet. |
+| Collider gizmos and physics debug draw | Worth doing when colliders are authored in the editor rather than in code. |
+| Editor multi-select and enum drawers | Neither is load-bearing; both are an afternoon whenever they start to grate. |
+| `EventBus`, `Handle<T>`, `VirtualFileSystem` | Deferred in Phase 1 for want of a caller, and still without one. `EGE_ASSET_ROOT` and the asset database cover what the VFS was for. |
+
+### 10.5 How to pick up any of these
+
+The shape every increment in this project has taken, and the one to keep:
+
+1. Find the arithmetic and put it in its own file with no Vulkan in it.
+2. Write the tests against an independent definition — the specification, the
+   engine's own camera, a formula derived by hand — rather than against the
+   code being tested. Three of the bugs found this way were sign errors that
+   produced a plausible picture.
+3. Wire it into the frame graph, which owns barriers, layouts and attachments;
+   a feature that needs new synchronisation usually needs a new graph
+   capability instead, and that capability is testable without a GPU too.
+4. Change the demo so the feature is visible, then look at the result.
+5. Record what was learned here, including the parts that went wrong.

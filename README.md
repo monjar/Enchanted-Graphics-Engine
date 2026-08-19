@@ -1,6 +1,8 @@
 # Enchanted Graphics Engine
 
 A Vulkan game engine in C++17, built from the renderer up.
+[`docs/ROADMAP.md`](docs/ROADMAP.md) records how it got here and §10 of it is
+the plan for what comes next.
 
 ![The demo scene: metal spheres sweeping roughness, two dielectrics, an imported torus, a script-driven sheet and a crate tower awaiting its boulder, lit by a sun, forty-three point lights and a spot over the crates](docs/images/demo-scene.png)
 
@@ -14,8 +16,7 @@ The image above is the demo scene: five metal spheres sweeping roughness from
 near-mirror to fully rough, plus two dielectrics, lit by a low sun under a
 procedurally generated evening sky, three lights composing the shot, a bank
 of forty short-range accent lights over the floor and a spot aimed down at
-the crate tower. The smoothest metal
-reflects that sky — in earlier builds it was nearly black, because a mirror
+the crate tower. The smoothest metal reflects that sky — in earlier builds it was nearly black, because a mirror
 with no environment to reflect *is* nearly black, and giving it one is
 exactly what image-based lighting does. The sun casts real shadows through
 depth-only frame graph passes — four cascades fitted to the camera's own
@@ -248,10 +249,27 @@ ctest --test-dir build/default --output-on-failure
 ```
 
 The suite covers logic that needs no GPU — primitive geometry, transform
-maths, asset ids and cataloguing, scene round-trips, play mode, undo, and
-the whole physics simulation, determinism included — so it runs anywhere. Rendering is covered separately by a headless smoke test in
-CI, which draws the demo scene under lavapipe with the validation layers
-enabled and fails on any validation message.
+maths, asset ids and cataloguing, scene round-trips, play mode, undo, the
+whole physics simulation with its determinism, and the renderer's arithmetic:
+shadow cascade fitting, cluster geometry, cube faces, spot cones. Anything
+that can be answered without a device is answered here, because that is where
+the bugs have actually been.
+
+Rendering itself is covered by a headless run in CI, which draws the demo
+scene under lavapipe with the validation layers enabled, fails on any
+validation message — and then looks at the frames it recorded:
+
+```sh
+./build/default/bin/EnchantedEngine --demo --exit-after 6 --record frames --record-fps 5
+./build/default/bin/EnchantedFrameChecks frames
+```
+
+That second step is there because the first one passes on a black screen. It
+asks the questions a person asks in the first half-second: is there an image,
+is it more than one flat colour, is it neither crushed nor blown out. It does
+not try to judge whether a shadow landed in the right place — a pixel
+comparison strict enough for that would fail on a driver update instead, which
+is why that question is answered by the unit tests above.
 
 ## Controls
 
@@ -290,6 +308,8 @@ src/
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
                 are shared declarations, included rather than compiled
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
+tools/          EnchantedFrameChecks, which reads recorded frames back
+                and says whether a picture came out
 tests/          doctest suite
 cmake/          dependency, warning and shader modules
 docs/           roadmap and design notes

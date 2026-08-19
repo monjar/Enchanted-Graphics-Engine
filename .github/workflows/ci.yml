@@ -94,8 +94,13 @@ jobs:
           ASAN_OPTIONS: detect_leaks=0
         run: |
           set -o pipefail
-          timeout 120 xvfb-run -a --server-args="-screen 0 800x600x24" \
-            ./scripts/run_for.sh 8 ./build/${{ matrix.preset }}/bin/EnchantedEngine \
+          # Recording as it goes, so there is something to look at afterwards.
+          # The demo tour is deterministic while recording - a fixed step per
+          # frame - so the frames are the same on any machine fast or slow.
+          mkdir -p frames
+          timeout 180 xvfb-run -a --server-args="-screen 0 800x600x24" \
+            ./build/${{ matrix.preset }}/bin/EnchantedEngine --demo \
+            --exit-after 6 --record frames --record-fps 5 \
             2>&1 | tee render.log
 
           # Two formats, because there are two ways a message arrives. The
@@ -111,3 +116,10 @@ jobs:
             exit 1
           fi
           echo "Rendered with no validation messages."
+
+          # And then look at the picture. Everything above passes on a
+          # uniformly black frame: the engine starts, renders, does not crash
+          # and upsets no validation layer whether or not anything came out.
+          # This is the check that noticed when the scene pass was emptied on
+          # purpose, and it was the only one that did.
+          ./build/${{ matrix.preset }}/bin/EnchantedFrameChecks frames
