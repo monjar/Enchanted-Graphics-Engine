@@ -587,6 +587,12 @@ The demo scene had nothing standing behind anything, which is why it gained one 
 
 *Still not done in this phase:* screen-space reflections, volumetric fog, decals, TAA and motion vectors, GPU-driven rendering, skeletal animation, particles, terrain and global illumination.
 
+**Instancing landed after them**, spending a sort that had been sitting unspent since Phase 4. The draw list has been ordered by material and then by mesh ever since, so that binding a descriptor set did not alternate; nothing had ever merged the runs that ordering produces. Consecutive objects sharing both are now one instanced draw.
+
+What made that possible is that the transform stopped travelling with the draw. A draw carrying its object's model matrix can only ever be one object, so the matrices moved into a buffer indexed by the instance - and `gl_InstanceIndex` counts from the draw's `firstInstance` rather than from zero, which is what lets a batch point at its own run of that buffer with nothing per draw saying where it starts. Two things fell out of it: the push constant block was 176 bytes, past the 128 every implementation is required to offer and portable only by inspection of the device limit, and what is left is 48 and read by the fragment stage alone; and the depth pre-pass now has no push constants at all.
+
+The demo said nothing about any of this on its own - all eighteen of its objects have a material each, so all eighteen are batches of one whatever the renderer does - so it gained a band of gravel: a hundred and twenty stones, one mesh, one material, scattered from a fixed seed so the recorded frames still compare. Measured over the tour: 138 candidates, about 75 rejected by the frustum and a handful more by the depth pyramid, and the fifty-odd that survive go out in fourteen draw calls. That the exhibits themselves do not merge is the observation behind the material-instancing row in §10.2.
+
 ### Phase 10 — Completing the engine (ongoing)
 
 - **Audio**: 3D spatial audio, mixer, buses, occlusion.
@@ -683,10 +689,13 @@ transient buffers; PBR with image-based lighting; three kinds of shadow
 (cascaded sun, cube point, projective spot); 4× MSAA; a depth pre-pass with
 screen-space ambient occlusion and a depth pyramid built on it; bloom and an
 ACES tonemap. Draws are rejected by the frustum and by what the pyramid found
-hidden. Underneath: a sparse-set ECS, runtime reflection driving serialization
-and the editor, a GUID asset database, C++ scripting, and Jolt physics. Around
-it: 281 tests, five CI configurations, and a headless render that checks its
-own output.
+hidden, and what survives goes out instanced, one draw per mesh-and-material
+rather than one per object. Underneath: a sparse-set ECS, runtime reflection
+driving serialization and the editor, a GUID asset database that loads on the
+job system, C++ scripting, and Jolt physics drawn between its fixed steps.
+The engine is a shared library, so a script module and the engine that loads
+it would share one set of registries. Around it: 293 tests, five CI
+configurations, and a headless render that checks its own output.
 
 ### 10.2 Next, in order
 
@@ -697,22 +706,26 @@ Each of these is a single increment — one branch, one pull request.
 | ~~1~~ | ~~**Depth pre-pass**~~ | **Landed.** Depth goes down first and the scene pass tests `EQUAL` with writes off, so the clustered fragment shader runs once per visible pixel. | — |
 | ~~2~~ | ~~**SSAO**~~ | **Landed.** The hemisphere over each surface is sampled against the pre-pass depth and the image-based ambient is dimmed by what it finds. | — |
 | ~~3~~ | ~~**HZB occlusion culling**~~ | **Landed**, though not in the shape the row assumed: with no indirect draws to consume a GPU verdict, the pyramid is finished and tested on the CPU where the draws are issued, at the cost of a couple of frames of latency. | — |
-| 1 | **GPU instancing** | Phase 4 left the draw list sorted by material and mesh and never merged consecutive identical draws. The groundwork is done; this is the merge, and it is now the largest per-draw saving left. | nothing |
-| 2 | **Indirect draws** | The thing occlusion culling wanted and did not have. One `vkCmdDrawIndexedIndirect` per object with its instance count in a buffer is enough to make the occlusion verdict apply in the frame that computed it, which removes the pop-in the CPU path accepts. It also composes with 1: a merged batch is exactly an indirect draw with a count. | 1 |
-| 3 | **Per-thread command pools** | Phase 6 called async asset loading a *hazard* rather than a preference: uploading from a worker needs a pool per thread, and `Device` has one. This unblocks async loading and anything else that wants to record off the main thread. | nothing |
-| 4 | **Async asset loading** | What the asset database was designed for and could not have. | 3 |
-| 5 | **Render-transform interpolation** | `Time::fixedAlpha()` has existed since Phase 1 for exactly this. Physics at 60 Hz on a 144 Hz display judders today. Lands as one change across everything the simulation moves, not as a physics special case. | nothing |
-| 6 | **Engine as a shared library** | The one thing Phase 7 asked for and did not get. A `dlopen`'d script module linked against a *static* engine gets its own copies of every registry, so nothing it registers is visible. This is a build change on every platform and deserves its own commit. | nothing |
-| 7 | **Script hot reload** | The feature 6 exists to enable, and the file watcher that drives it is already built and working. | 6 |
-| 8 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
-| 9 | **Velocity buffer and TAA** | Moved up from "deliberately not next" now that a depth pre-pass exists to write velocity alongside depth for nothing. MSAA covers geometry aliasing; the specular aliasing left over is what TAA is actually for. | 5 |
-| 10 | **Screen-space reflections** | The depth pyramid built for occlusion culling is also what a ray-marched reflection traces against, so the expensive half already exists. Wants a velocity buffer for the reprojection, which is what puts it after 9. | 9 |
+| ~~1~~ | ~~**GPU instancing**~~ | **Landed.** Consecutive objects sharing a mesh and a material are one instanced draw, with their transforms in a buffer indexed by the instance. | — |
+| ~~3~~ | ~~**Per-thread command pools**~~ | **Landed**, along with a lock on the graphics queue and a fence per upload instead of waiting on the whole queue. | — |
+| ~~4~~ | ~~**Async asset loading**~~ | **Landed.** glTF files are parsed across the workers at startup and a hot reload rebuilds off the main thread. | — |
+| ~~5~~ | ~~**Render-transform interpolation**~~ | **Landed**, as an opt-in component rather than a physics special case: nothing is interpolated unless whatever moves it on the fixed clock says so. | — |
+| ~~6~~ | ~~**Engine as a shared library**~~ | **Landed**, with type registration made idempotent because a template's function-local static is per module and both modules register. | — |
+| 1 | **Script hot reload** | The feature the shared library exists to enable, and the file watcher that drives it is already built and working. Now the top of the list rather than blocked behind a build change. | nothing |
+| 2 | **GPU-driven two-phase occlusion culling** | Replaces the old "indirect draws" row, whose stated reason was wrong — see §10.5. Indirect draws alone do not remove the pop-in; two-phase culling does, and it needs them. Draw what was visible last frame, build the pyramid from that, test everything else against it in compute, and draw what turns out to be newly visible. No latency, nothing ever missing, and the CPU readback goes away with it. | 4 |
+| 3 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
+| 4 | **Frame graph: compute reads, imported buffers, surviving imports** | What 2 needs from the graph, and worth its own increment because each piece is a capability rather than a feature: sampling an image from a compute pass, importing a buffer the way images are imported, an indirect-read access, and an imported image that keeps its contents into the next frame instead of always entering as UNDEFINED. | nothing |
+| 5 | **Velocity buffer and TAA** | A depth pre-pass exists to write velocity alongside depth for nothing. MSAA covers geometry aliasing; the specular aliasing left over is what TAA is actually for. | nothing |
+| 6 | **Screen-space reflections** | The depth pyramid built for occlusion culling is also what a ray-marched reflection traces against, so the expensive half already exists. Wants a velocity buffer for the reprojection, which is what puts it after 5. | 5 |
+| 7 | **Material instancing** | Instancing landed and the demo showed its limit immediately: every object with a material of its own is a batch of one, and the demo's eighteen exhibits are eighteen batches. Material *parameters* in a buffer indexed like the transforms are what let objects sharing a mesh but not a tint draw together. | nothing |
+| 8 | **The standalone editor executable** | The panels are in-process on purpose and moving them is a build-system change, not a rewrite — and one that is smaller now that the engine is a shared library. | nothing |
 
 ### 10.3 Deliberately not next
 
-- **Indirect-draw-driven GPU culling in full** — meshlets, a GPU-side draw
-  stream, two-phase occlusion culling against last frame's pyramid. Each is
-  real, and each wants the plain indirect draw at row 2 to exist first.
+- **Meshlets and a GPU-side draw stream** — the far end of GPU-driven
+  rendering. Row 2 above is the part of it that pays for itself; these are the
+  part that pays once the scene is large enough to need them, and this one is
+  not.
 - **Bindless descriptors and SPIRV-Reflect layouts** — neither blocks anything.
   Bindless earns its cost when material count outgrows per-material sets, and
   the worst of the coupling SPIRV-Reflect would remove is already gone.
@@ -739,7 +752,48 @@ is a decision rather than an oversight.
 | Editor multi-select and enum drawers | Neither is load-bearing; both are an afternoon whenever they start to grate. |
 | `EventBus`, `Handle<T>`, `VirtualFileSystem` | Deferred in Phase 1 for want of a caller, and still without one. `EGE_ASSET_ROOT` and the asset database cover what the VFS was for. |
 
-### 10.5 How to pick up any of these
+### 10.5 What the last five changed about the plan
+
+Recorded because the plan was wrong about two of them, and a plan that is
+never wrong about anything is a plan nobody checked.
+
+**Indirect draws would not have removed the pop-in, and the row said they
+would.** The reasoning went: the occlusion verdict is computed this frame, so
+draw indirectly and apply it this frame. But the verdict comes from a pyramid
+built out of *this frame's depth pre-pass*, so the only passes it can reach
+are the ones after that — which is the shading pass. And the shading pass
+already skips hidden objects: it tests `EQUAL` against the pre-pass depth, so
+every fragment of something hidden fails before the fragment shader runs. The
+saving would have been the vertex work alone, and the object would still have
+popped in two frames late.
+
+What actually removes it is two phases. Draw what was visible last frame,
+build the pyramid from that partial depth, test everything against it, and
+draw whatever turns out to be newly visible. Nothing is ever missing, because
+anything wrongly skipped in the first phase is caught in the second against
+real depth, and the verdict is this frame's. Indirect draws are how the second
+phase is issued, which is the honest version of "the thing occlusion culling
+wanted" — they are a means, not the feature.
+
+**Instancing showed the demo's own limit.** A hundred and twenty gravel stones
+sharing one material collapse into one draw; the eighteen exhibits do not,
+because each was given a material of its own to show off a different corner of
+the shading model. That is not a flaw in the demo — it is what the demo is for
+— but it is why "material instancing" is now a row: parameters in a buffer
+indexed like the transforms are what let two objects that differ only by tint
+draw together.
+
+**Two things were cheaper than expected and one was not.** Per-thread command
+pools took a lock on the queue and a fence per upload with them, and that was
+all. Interpolation turned out to be a component rather than a system, because
+the question "what does the fixed step move?" has no general answer and the
+thing that moves something is the only thing that knows. The shared library
+cost an idempotent type registry: registration lives in a function-local
+static inside a template, a template instantiated in two modules gets one
+each, and both register — which was harmless while there was one module and is
+exactly the bug the shared library exists to avoid.
+
+### 10.6 How to pick up any of these
 
 The shape every increment in this project has taken, and the one to keep:
 
