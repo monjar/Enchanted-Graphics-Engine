@@ -81,6 +81,20 @@ add_executable(EnchantedEngine app/main.cpp)
 target_link_libraries(EnchantedEngine PRIVATE ege::engine)
 ege_set_target_warnings(EnchantedEngine WARNINGS_AS_ERRORS)
 
+# ---------------------------------------------------------------------------
+# EnchantedFrameChecks - looks at recorded frames and says whether a picture
+# came out.
+#
+# Not part of the test suite, because the suite deliberately never touches a
+# GPU and these frames only exist once one has rendered them. It runs in CI's
+# headless render step instead, on the frames the engine recorded there. The
+# logic it calls lives in the engine library and is unit-tested without any
+# of this.
+# ---------------------------------------------------------------------------
+add_executable(EnchantedFrameChecks tools/frame_checks.cpp)
+target_link_libraries(EnchantedFrameChecks PRIVATE ege::engine ege::stb)
+ege_set_target_warnings(EnchantedFrameChecks WARNINGS_AS_ERRORS)
+
 # On Windows the Vulkan loader is delay-loaded rather than bound at process
 # start. A machine without the loader - a CI runner with no GPU driver, say -
 # can then still start the binary and run everything up to the first actual
@@ -95,6 +109,9 @@ function(ege_delay_load_vulkan target)
 endfunction()
 
 ege_delay_load_vulkan(EnchantedEngine)
+# The frame checker links the engine and so imports the loader, but never
+# makes a Vulkan call - it reads PNGs.
+ege_delay_load_vulkan(EnchantedFrameChecks)
 
 set_property(TARGET EnchantedEngine
   PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
