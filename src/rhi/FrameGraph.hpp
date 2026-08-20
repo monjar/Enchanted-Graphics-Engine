@@ -52,6 +52,7 @@ namespace ege {
         storageWrite,        // written by a compute shader as a storage buffer
         storageRead,         // read in a fragment shader as a storage buffer
         computeStorageRead,  // read in a compute shader as a storage buffer
+        vertexRead,          // read in a vertex shader as a storage buffer
         indirectRead,        // read by the draw commands it contains
     };
 
