@@ -13,10 +13,17 @@ namespace ege {
         // Every write bit a graph resource can carry. Source access masks are
         // filtered to these: making writes available is what a memory
         // dependency is for, and read bits in a source mask are meaningless.
+        // What counts as a write, and therefore as something a later access
+        // has to be separated from. The host and memory bits are here for
+        // imports: everything the graph itself does is one of the first five,
+        // but a buffer handed in may have been filled by the CPU, and an
+        // owner describing what it last did in the general MEMORY_WRITE terms
+        // should not have that quietly ignored.
         constexpr VkAccessFlags2 allWrites =
             VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
             VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_SHADER_WRITE_BIT |
-            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+            VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT |
+            VK_ACCESS_2_HOST_WRITE_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
 
         struct AccessInfo {
             VkImageLayout layout;
@@ -43,6 +50,14 @@ namespace ege {
                         VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
+                // The same layout as the fragment read above, which is what
+                // makes a compute pass and a raster pass reading the same
+                // image cost no transition between them.
+                case ResourceAccess::computeSampled:
+                    return {
+                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT};
                 // Buffers have no layout, so these carry UNDEFINED and the
                 // barrier logic sees "layout unchanged" for them throughout.
                 case ResourceAccess::storageWrite:
@@ -55,6 +70,21 @@ namespace ege {
                         VK_IMAGE_LAYOUT_UNDEFINED,
                         VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                         VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                case ResourceAccess::computeStorageRead:
+                    return {
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                // Read by the command processor rather than by a shader, at a
+                // stage of its own that runs before the vertex shader does -
+                // which is exactly why it needs naming separately. A barrier
+                // that made a compute-written draw count visible to the vertex
+                // stage would come too late for the draw that reads it.
+                case ResourceAccess::indirectRead:
+                    return {
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
+                        VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT};
             }
             return {VK_IMAGE_LAYOUT_UNDEFINED, VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE};
         }
@@ -66,9 +96,12 @@ namespace ege {
                 case ResourceAccess::depthWrite:
                     return VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
                 case ResourceAccess::sampled:
+                case ResourceAccess::computeSampled:
                     return VK_IMAGE_USAGE_SAMPLED_BIT;
                 case ResourceAccess::storageWrite:
                 case ResourceAccess::storageRead:
+                case ResourceAccess::computeStorageRead:
+                case ResourceAccess::indirectRead:
                     return 0;
             }
             return 0;
@@ -78,17 +111,33 @@ namespace ege {
             switch (access) {
                 case ResourceAccess::storageWrite:
                 case ResourceAccess::storageRead:
+                case ResourceAccess::computeStorageRead:
                     return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+                case ResourceAccess::indirectRead:
+                    return VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
                 case ResourceAccess::colorWrite:
                 case ResourceAccess::depthWrite:
                 case ResourceAccess::sampled:
+                case ResourceAccess::computeSampled:
                     return 0;
             }
             return 0;
         }
 
         bool isBufferAccess(ResourceAccess access) {
-            return access == ResourceAccess::storageWrite || access == ResourceAccess::storageRead;
+            switch (access) {
+                case ResourceAccess::storageWrite:
+                case ResourceAccess::storageRead:
+                case ResourceAccess::computeStorageRead:
+                case ResourceAccess::indirectRead:
+                    return true;
+                case ResourceAccess::colorWrite:
+                case ResourceAccess::depthWrite:
+                case ResourceAccess::sampled:
+                case ResourceAccess::computeSampled:
+                    return false;
+            }
+            return false;
         }
 
         VkImageAspectFlags aspectFor(VkFormat format) {
@@ -130,6 +179,9 @@ namespace ege {
             res.kind == FrameGraph::ResourceKind::buffer,
             "resource '{}' is an image, not a buffer",
             res.name);
+        if (res.imported) {
+            return res.importedBuffer;
+        }
         EGE_VERIFY(
             res.physicalIndex != UINT32_MAX, "resource '{}' has no physical buffer", res.name);
         return graph.physicalBuffers[res.physicalIndex].buffer;
@@ -183,25 +235,38 @@ namespace ege {
         return FrameGraphResource{static_cast<uint32_t>(resources.size() - 1)};
     }
 
-    FrameGraphResource FrameGraph::importImage(
-        std::string name,
-        VkImage image,
-        VkImageView view,
-        VkFormat format,
-        VkExtent2D extent,
-        VkClearValue clearValue,
-        VkPipelineStageFlags2 srcStage,
-        VkImageLayout finalLayout) {
+    FrameGraphResource FrameGraph::importImage(std::string name, const ImportedImageDesc& desc) {
         Resource resource{};
         resource.name = std::move(name);
-        resource.desc.format = format;
-        resource.desc.extent = extent;
-        resource.desc.clearValue = clearValue;
+        resource.desc.format = desc.format;
+        resource.desc.extent = desc.extent;
+        resource.desc.clearValue = desc.clearValue;
         resource.imported = true;
-        resource.importedImage = image;
-        resource.importedView = view;
-        resource.importSrcStage = srcStage;
-        resource.finalLayout = finalLayout;
+        resource.importedImage = desc.image;
+        resource.importedView = desc.view;
+        resource.importSrcStage = desc.srcStage;
+        resource.importSrcAccess = desc.srcAccess;
+        resource.initialLayout = desc.initialLayout;
+        resource.finalLayout = desc.finalLayout;
+        resources.push_back(std::move(resource));
+        return FrameGraphResource{static_cast<uint32_t>(resources.size() - 1)};
+    }
+
+    FrameGraphResource FrameGraph::importBuffer(std::string name, const ImportedBufferDesc& desc) {
+        if (desc.buffer == VK_NULL_HANDLE) {
+            throw std::logic_error{"frame graph imported buffer '" + name + "' has no buffer"};
+        }
+        if (desc.size == 0) {
+            throw std::logic_error{"frame graph imported buffer '" + name + "' has no size"};
+        }
+        Resource resource{};
+        resource.name = std::move(name);
+        resource.kind = ResourceKind::buffer;
+        resource.bufferDesc.size = desc.size;
+        resource.imported = true;
+        resource.importedBuffer = desc.buffer;
+        resource.importSrcStage = desc.srcStage;
+        resource.importSrcAccess = desc.srcAccess;
         resources.push_back(std::move(resource));
         return FrameGraphResource{static_cast<uint32_t>(resources.size() - 1)};
     }
@@ -361,10 +426,18 @@ namespace ege {
             resource.bufferUsage = 0;
             resource.written = false;
             resource.firstTouch = true;
-            resource.writtenLayers.assign(resource.desc.layers, false);
             resource.physicalIndex = UINT32_MAX;
+            // A preserved import enters already holding something worth
+            // keeping, so a pass that writes it loads rather than clears -
+            // which is what "written already" means to the load-op rule
+            // below. A discardable import (the swapchain) does not.
+            const bool preserved =
+                resource.imported && resource.initialLayout != VK_IMAGE_LAYOUT_UNDEFINED;
+            resource.writtenLayers.assign(resource.desc.layers, preserved);
             if (resource.imported) {
+                resource.state.layout = resource.initialLayout;
                 resource.state.stage = resource.importSrcStage;
+                resource.state.access = resource.importSrcAccess;
             }
         }
 
@@ -502,7 +575,31 @@ namespace ege {
         finishingBarriers.clear();
         for (uint32_t resourceIndex = 0; resourceIndex < resources.size(); resourceIndex++) {
             Resource& resource = resources[resourceIndex];
-            if (!resource.imported || resource.finalLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
+            if (!resource.imported) {
+                continue;
+            }
+
+            // An imported buffer has no layout to restore, so what it is owed
+            // instead is visibility: whatever the graph wrote into it has to
+            // be readable by its owner, which is either a transfer recorded
+            // after the graph or the host once the fence is waited on. Only
+            // when the graph wrote it - a buffer the graph merely read needs
+            // nothing said about it.
+            if (resource.kind == ResourceKind::buffer) {
+                if ((resource.state.access & allWrites) == 0) {
+                    continue;
+                }
+                PlannedBarrier bufferBarrier{};
+                bufferBarrier.resourceIndex = resourceIndex;
+                bufferBarrier.srcStage = resource.state.stage;
+                bufferBarrier.srcAccess = resource.state.access & allWrites;
+                bufferBarrier.dstStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+                bufferBarrier.dstAccess = VK_ACCESS_2_MEMORY_READ_BIT;
+                finishingBarriers.push_back(bufferBarrier);
+                continue;
+            }
+
+            if (resource.finalLayout == VK_IMAGE_LAYOUT_UNDEFINED ||
                 resource.state.layout == resource.finalLayout) {
                 continue;
             }
@@ -729,8 +826,6 @@ namespace ege {
                 const Resource& resource = resources[plan.resourceIndex];
 
                 if (resource.kind == ResourceKind::buffer) {
-                    const PhysicalBuffer& physical = physicalBuffers[resource.physicalIndex];
-
                     VkBufferMemoryBarrier2 bufferBarrier{};
                     bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2;
                     bufferBarrier.srcStageMask = plan.srcStage;
@@ -739,14 +834,18 @@ namespace ege {
                     bufferBarrier.dstAccessMask = plan.dstAccess;
                     bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
                     bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                    bufferBarrier.buffer = physical.buffer;
+                    bufferBarrier.buffer = resource.imported
+                                               ? resource.importedBuffer
+                                               : physicalBuffers[resource.physicalIndex].buffer;
                     bufferBarrier.offset = 0;
                     bufferBarrier.size = VK_WHOLE_SIZE;
 
                     // The same cross-frame chain the images make, for the same
                     // reason: this frame overwrites a buffer the last frame may
-                    // still have been reading.
-                    if (plan.firstUse) {
+                    // still have been reading. Not for an imported one, whose
+                    // owner said what came before it when it handed it over.
+                    if (plan.firstUse && !resource.imported) {
+                        const PhysicalBuffer& physical = physicalBuffers[resource.physicalIndex];
                         bufferBarrier.srcStageMask = physical.lastStage;
                         bufferBarrier.srcAccessMask = physical.lastWriteAccess;
                     }

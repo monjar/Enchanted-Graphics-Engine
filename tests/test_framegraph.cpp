@@ -37,16 +37,17 @@ namespace {
         return desc;
     }
 
+    ege::ImportedImageDesc backbufferDesc() {
+        ege::ImportedImageDesc desc{};
+        desc.format = VK_FORMAT_B8G8R8A8_SRGB;
+        desc.extent = outputExtent;
+        desc.srcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+        desc.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+        return desc;
+    }
+
     FrameGraphResource importBackbuffer(FrameGraph& graph) {
-        return graph.importImage(
-            "backbuffer",
-            VK_NULL_HANDLE,
-            VK_NULL_HANDLE,
-            VK_FORMAT_B8G8R8A8_SRGB,
-            outputExtent,
-            VkClearValue{},
-            VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+        return graph.importImage("backbuffer", backbufferDesc());
     }
 
     void noopExecute(VkCommandBuffer, const ege::FrameGraphResources&) {}
@@ -1101,4 +1102,408 @@ TEST_CASE("resolving depth into colour, or colour into depth, is refused") {
             [&](FrameGraph::PassBuilder& pass) { pass.resolve(colorMs, depth); },
             noopExecute),
         std::logic_error);
+}
+
+// ---------------------------------------------------------------------------
+// Compute reads, imported buffers, and imports whose contents survive.
+//
+// The four capabilities GPU-driven culling needs from the graph: a compute
+// pass sampling an image, a compute pass reading a buffer, a draw reading the
+// commands a compute pass wrote, and something that outlives a frame.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("a compute pass sampling an image chains after the pass that drew it") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource depth = graph.createTransient("depth", depthDesc());
+    FrameGraphResource verdicts =
+        graph.createTransientBuffer("verdicts", ege::TransientBufferDesc{4096});
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "prepass",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(depth, ResourceAccess::depthWrite); },
+        noopExecute);
+    graph.addPass(
+        "cull",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(depth, ResourceAccess::computeSampled);
+            pass.write(verdicts, ResourceAccess::storageWrite);
+        },
+        noopExecute);
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(verdicts, ResourceAccess::storageRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 3);
+    const auto& cullBarriers = graph.compiledPasses()[1].barriers;
+    const bool chained = std::any_of(
+        cullBarriers.begin(), cullBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == depth.index &&
+                   barrier.newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+                   barrier.dstStage == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+                   barrier.dstAccess == VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        });
+    CHECK(chained);
+}
+
+TEST_CASE("a fragment read after a compute read of the same image needs no transition") {
+    // Both land in SHADER_READ_ONLY_OPTIMAL, and read-after-read in an
+    // unchanged layout is the one case a barrier may be elided. Getting this
+    // wrong costs a pipeline barrier per frame for nothing.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource depth = graph.createTransient("depth", depthDesc());
+    FrameGraphResource verdicts =
+        graph.createTransientBuffer("verdicts", ege::TransientBufferDesc{4096});
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "prepass",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(depth, ResourceAccess::depthWrite); },
+        noopExecute);
+    graph.addPass(
+        "cull",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(depth, ResourceAccess::computeSampled);
+            pass.write(verdicts, ResourceAccess::storageWrite);
+        },
+        noopExecute);
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(depth, ResourceAccess::sampled);
+            pass.read(verdicts, ResourceAccess::storageRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 3);
+    const auto& sceneBarriers = graph.compiledPasses()[2].barriers;
+    const bool touchesDepth = std::any_of(
+        sceneBarriers.begin(), sceneBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == depth.index;
+        });
+    CHECK_FALSE(touchesDepth);
+}
+
+TEST_CASE("draw commands written by compute are made visible at the indirect stage") {
+    // Not at the vertex stage. The command processor reads a draw's count and
+    // parameters before any shader runs, so a barrier naming the vertex stage
+    // would come too late for the draw that reads them - and would usually
+    // work anyway, until a driver that reads ahead further does not.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource commands =
+        graph.createTransientBuffer("drawCommands", ege::TransientBufferDesc{1024});
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "buildCommands",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(commands, ResourceAccess::storageWrite); },
+        noopExecute);
+    graph.addPass(
+        "drawIndirect",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(commands, ResourceAccess::indirectRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const auto& drawBarriers = graph.compiledPasses()[1].barriers;
+    const bool chained = std::any_of(
+        drawBarriers.begin(), drawBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == commands.index &&
+                   barrier.srcStage == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+                   barrier.srcAccess == VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT &&
+                   barrier.dstStage == VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT &&
+                   barrier.dstAccess == VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+        });
+    CHECK(chained);
+}
+
+TEST_CASE("one compute pass reading what another wrote is separated") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource bounds =
+        graph.createTransientBuffer("bounds", ege::TransientBufferDesc{1024});
+    FrameGraphResource verdicts =
+        graph.createTransientBuffer("verdicts", ege::TransientBufferDesc{1024});
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "gather",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(bounds, ResourceAccess::storageWrite); },
+        noopExecute);
+    graph.addPass(
+        "test",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(bounds, ResourceAccess::computeStorageRead);
+            pass.write(verdicts, ResourceAccess::storageWrite);
+        },
+        noopExecute);
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(verdicts, ResourceAccess::storageRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 3);
+    const auto& testBarriers = graph.compiledPasses()[1].barriers;
+    const bool chained = std::any_of(
+        testBarriers.begin(), testBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == bounds.index &&
+                   barrier.srcStage == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+                   barrier.dstStage == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+                   barrier.dstAccess == VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        });
+    CHECK(chained);
+}
+
+TEST_CASE("an imported buffer can be read without any pass having written it") {
+    // Which is the whole point of importing one: its contents came from
+    // somewhere the graph knows nothing about - the host, or the frame before
+    // this one. A transient read before it is written is a bug; this is not.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    ege::ImportedBufferDesc desc{};
+    desc.buffer = reinterpret_cast<VkBuffer>(0x1234);
+    desc.size = 2048;
+    desc.srcStage = VK_PIPELINE_STAGE_2_HOST_BIT;
+    desc.srcAccess = VK_ACCESS_2_HOST_WRITE_BIT;
+
+    FrameGraphResource visibility = graph.importBuffer("visibility", desc);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(visibility, ResourceAccess::storageRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 1);
+    const auto& barriers = graph.compiledPasses()[0].barriers;
+    const bool waitsForTheHost = std::any_of(
+        barriers.begin(), barriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == visibility.index &&
+                   barrier.srcStage == VK_PIPELINE_STAGE_2_HOST_BIT &&
+                   barrier.srcAccess == VK_ACCESS_2_HOST_WRITE_BIT;
+        });
+    CHECK(waitsForTheHost);
+}
+
+TEST_CASE("what the graph wrote into an imported buffer is left visible to its owner") {
+    // The buffer counterpart of an imported image's final layout transition.
+    // Without it the copy recorded after the graph, or the host read after
+    // the fence, sees whatever happens to have reached memory.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    ege::ImportedBufferDesc desc{};
+    desc.buffer = reinterpret_cast<VkBuffer>(0x1234);
+    desc.size = 2048;
+
+    FrameGraphResource readback = graph.importBuffer("readback", desc);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.write(readback, ResourceAccess::storageWrite);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    const auto& finishing = graph.finalBarriers();
+    const bool published = std::any_of(
+        finishing.begin(), finishing.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == readback.index &&
+                   barrier.srcStage == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+                   barrier.srcAccess == VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT &&
+                   barrier.dstAccess == VK_ACCESS_2_MEMORY_READ_BIT &&
+                   barrier.oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
+                   barrier.newLayout == VK_IMAGE_LAYOUT_UNDEFINED;
+        });
+    CHECK(published);
+}
+
+TEST_CASE("an imported buffer the graph only read is owed nothing at the end") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    ege::ImportedBufferDesc desc{};
+    desc.buffer = reinterpret_cast<VkBuffer>(0x1234);
+    desc.size = 2048;
+
+    FrameGraphResource visibility = graph.importBuffer("visibility", desc);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "scene",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(visibility, ResourceAccess::storageRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    const auto& finishing = graph.finalBarriers();
+    const bool mentioned = std::any_of(
+        finishing.begin(), finishing.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == visibility.index;
+        });
+    CHECK_FALSE(mentioned);
+}
+
+TEST_CASE("an imported buffer with no handle or no size is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    ege::ImportedBufferDesc noHandle{};
+    noHandle.size = 16;
+    CHECK_THROWS_AS(graph.importBuffer("noHandle", noHandle), std::logic_error);
+
+    ege::ImportedBufferDesc noSize{};
+    noSize.buffer = reinterpret_cast<VkBuffer>(0x1234);
+    CHECK_THROWS_AS(graph.importBuffer("noSize", noSize), std::logic_error);
+}
+
+TEST_CASE("an image access on an imported buffer is refused") {
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    ege::ImportedBufferDesc desc{};
+    desc.buffer = reinterpret_cast<VkBuffer>(0x1234);
+    desc.size = 16;
+    FrameGraphResource imported = graph.importBuffer("imported", desc);
+
+    graph.addPass(
+        "wrong",
+        [&](FrameGraph::PassBuilder& pass) {
+            CHECK_THROWS_AS(pass.read(imported, ResourceAccess::sampled), std::logic_error);
+        },
+        noopExecute);
+}
+
+TEST_CASE("an import whose contents survive is loaded, not cleared") {
+    // A discardable import - the swapchain - enters as UNDEFINED and the
+    // first pass to write it clears, because last frame's picture is not this
+    // frame's. An import that says which layout it is in is saying the
+    // opposite: what is in there is this frame's input.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    ege::ImportedImageDesc desc{};
+    desc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    desc.extent = outputExtent;
+    desc.srcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    desc.srcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    desc.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    desc.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    FrameGraphResource history = graph.importImage("history", desc);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "accumulate",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(history, ResourceAccess::colorWrite); },
+        noopExecute);
+    graph.addPass(
+        "present",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(history, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const auto& attachments = graph.compiledPasses()[0].colorAttachments;
+    REQUIRE(attachments.size() == 1);
+    CHECK(attachments[0].resourceIndex == history.index);
+    CHECK(attachments[0].loadOp == VK_ATTACHMENT_LOAD_OP_LOAD);
+    CHECK(attachments[0].storeOp == VK_ATTACHMENT_STORE_OP_STORE);
+}
+
+TEST_CASE("a discardable import is still cleared on its first write") {
+    // The other half of the pair above, pinned so that giving imports a
+    // preserved mode did not quietly change what the swapchain does.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+    const SceneAndPost frame = declareSceneAndPost(graph);
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const auto& attachments = graph.compiledPasses()[1].colorAttachments;
+    REQUIRE(attachments.size() == 1);
+    CHECK(attachments[0].resourceIndex == frame.backbuffer.index);
+    CHECK(attachments[0].loadOp == VK_ATTACHMENT_LOAD_OP_CLEAR);
+}
+
+TEST_CASE("a preserved import transitions from the layout it says it is in") {
+    // Not from UNDEFINED, which is the transition that is allowed to throw
+    // the contents away - and the way a driver would be within its rights to
+    // hand back an image full of nothing.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    ege::ImportedImageDesc desc{};
+    desc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+    desc.extent = outputExtent;
+    desc.srcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    desc.srcAccess = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    desc.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    desc.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    FrameGraphResource history = graph.importImage("history", desc);
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "read",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(history, ResourceAccess::sampled);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 1);
+    const auto& barriers = graph.compiledPasses()[0].barriers;
+    const bool fromItsOwnLayout = std::any_of(
+        barriers.begin(), barriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == history.index &&
+                   barrier.oldLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL &&
+                   barrier.newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+                   barrier.srcAccess == VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT && !barrier.firstUse;
+        });
+    CHECK(fromItsOwnLayout);
 }
