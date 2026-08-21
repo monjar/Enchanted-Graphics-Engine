@@ -1,9 +1,11 @@
 #include "script/ScriptSystem.hpp"
 
 #include "core/Log.hpp"
+#include "reflect/Serialization.hpp"
 #include "script/BehaviorRegistry.hpp"
 #include "script/Script.hpp"
 
+#include <nlohmann/json.hpp>
 #include <vector>
 
 namespace ege {
@@ -51,6 +53,63 @@ namespace ege {
         }
 
     }  // namespace
+
+    std::size_t ScriptSystem::rebuildInstances(World& world) {
+        const Serializer& serializer = Serializer::instance();
+        std::size_t rebuilt = 0;
+
+        // Two passes for the reason everything here is two passes: onSpawn is
+        // gameplay code and may spawn or despawn, which would invalidate the
+        // walk that found it.
+        std::vector<Invocation> respawned;
+
+        world.each<Script>([&](Entity entity, Script& script) {
+            for (Script::Slot& slot : script.behaviors) {
+                const BehaviorRegistry::Entry* entry =
+                    BehaviorRegistry::instance().find(slot.behavior);
+                if (entry == nullptr || !entry->create) {
+                    // The new module does not have this behaviour any more.
+                    // The slot keeps its name and its saved fields, so a
+                    // module that brings it back brings the data with it.
+                    continue;
+                }
+
+                // What the author wrote, on its way across. Read from the live
+                // instance rather than from savedFields so that anything the
+                // behaviour changed while playing is what carries over.
+                if (entry->type != nullptr && slot.instance != nullptr) {
+                    slot.savedFields = serializer.write(*entry->type, slot.instance.get()).dump();
+                }
+
+                const bool wasSpawned = slot.spawned;
+                slot.instance = entry->create();
+                slot.instance->owner = entity;
+                slot.instance->scene = &world;
+                slot.spawned = false;
+
+                if (entry->type != nullptr && !slot.savedFields.empty()) {
+                    const nlohmann::json fields =
+                        nlohmann::json::parse(slot.savedFields, nullptr, false);
+                    if (!fields.is_discarded()) {
+                        serializer.read(*entry->type, slot.instance.get(), fields);
+                    }
+                }
+
+                rebuilt++;
+
+                if (wasSpawned) {
+                    slot.spawned = true;
+                    respawned.push_back(Invocation{entity, slot.instance});
+                }
+            }
+        });
+
+        for (const Invocation& invocation : respawned) {
+            invocation.behavior->onSpawn();
+        }
+
+        return rebuilt;
+    }
 
     void ScriptSystem::spawnPending(World& world) {
         std::vector<Invocation> starting;

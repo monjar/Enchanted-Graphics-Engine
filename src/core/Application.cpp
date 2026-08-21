@@ -41,6 +41,7 @@
 #include "script/BehaviorRegistry.hpp"
 #include "script/Behaviors.hpp"
 #include "script/Script.hpp"
+#include "script/ScriptModule.hpp"
 #include "script/ScriptSystem.hpp"
 
 #include <glm/glm.hpp>
@@ -149,6 +150,12 @@ namespace ege {
         // frame happened to reference it first.
         assets.attachJobSystem(jobs);
         assets.scan(assetRoot());
+
+        // Before the scene, because the scene names behaviours the module
+        // registers. Without it those slots simply find nothing in the
+        // registry and do nothing, which is the same thing a scene naming a
+        // behaviour this build does not have has always done.
+        loadScriptModule();
 
         loadScene();
     }
@@ -385,7 +392,32 @@ namespace ege {
         // separate presentation mode.
         DemoTour tour = DemoTour::demoScene();
         if (options.demo) {
-            overlay.toggle();
+            if (!options.showEditor) {
+                overlay.toggle();
+            } else {
+                // The panels are the subject, so put something in them - and
+                // preferably the entity whose behaviour came out of a module
+                // loaded at runtime, which is the one thing in the inspector
+                // the engine was not built knowing about. Anything scripted
+                // will do if the module is not loaded.
+                EntityId scripted{};
+                EntityId fromModule{};
+                for (Entity entity : world.all()) {
+                    const Script* script = world.find<Script>(entity.id());
+                    if (script == nullptr || script->behaviors.empty()) {
+                        continue;
+                    }
+                    if (scripted.isNull()) {
+                        scripted = entity.id();
+                    }
+                    for (const Script::Slot& slot : script->behaviors) {
+                        if (slot.behavior.rfind("sandbox::", 0) == 0) {
+                            fromModule = entity.id();
+                        }
+                    }
+                }
+                overlay.select(fromModule.isNull() ? scripted : fromModule);
+            }
             playMode.play(world);
             EGE_INFO("Demo tour: {:.1f} seconds", tour.duration());
         }
@@ -409,6 +441,11 @@ namespace ege {
         // enough to feel immediate and long enough that a directory walk per
         // interval is free.
         FileWatcher assetWatcher{assetRoot(), std::chrono::milliseconds{500}};
+
+        // And the same for code. The module is a build artifact rather than a
+        // project file, so it is a second watcher on a second directory - the
+        // one the build writes binaries into.
+        FileWatcher scriptWatcher{moduleRoot(), std::chrono::milliseconds{500}};
 
         bool running = true;
         bool scriptsRunning = false;
@@ -513,6 +550,7 @@ namespace ege {
             }
 
             reloadChangedAssets(assetWatcher);
+            reloadChangedScripts(scriptWatcher, scripts);
 
             // Assets that finished loading on a worker since the last frame.
             // Anything holding a reference to one is still drawing nothing,
@@ -1439,6 +1477,35 @@ namespace ege {
             surface.attach<Script>(std::move(script));
         }
 
+        // A behaviour the engine does not have. `sandbox::Pulse` lives in the
+        // sandbox module, which is loaded at runtime - so this slot resolves
+        // to something only when that module is there, and the torus simply
+        // sits still when it is not. That is the whole demonstration: the
+        // scene names code the engine was not built with.
+        {
+            Entity breathing = addMesh(
+                "PulsingSphere",
+                sphere,
+                makeMaterial("Pulsing", glm::vec3{0.85f, 0.35f, 0.55f}, 0.1f, 0.3f),
+                {-0.1f, -1.15f, 1.1f},
+                glm::vec3{.4f});
+
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "sandbox::Pulse";
+            // From the registry rather than `make_shared`, because there is no
+            // such type here to construct - that is the point of the module.
+            // Without this the slot is a name and nothing else, and the
+            // inspector has no fields to show until Play makes the instance.
+            if (const BehaviorRegistry::Entry* entry =
+                    BehaviorRegistry::instance().find(slot.behavior);
+                entry != nullptr && entry->create) {
+                slot.instance = entry->create();
+            }
+            script.behaviors.push_back(std::move(slot));
+            breathing.attach<Script>(std::move(script));
+        }
+
         addMesh(
             "BlueSphere",
             sphere,
@@ -1744,6 +1811,71 @@ namespace ege {
         // Whatever came back in place is live already; the rest arrives over
         // the next frames and is picked up there.
         systems::refreshAssetReferences(world);
+    }
+
+    std::filesystem::path Application::moduleRoot() {
+#ifdef EGE_MODULE_ROOT
+        return std::filesystem::path{EGE_MODULE_ROOT};
+#else
+        return std::filesystem::path{"."};
+#endif
+    }
+
+    void Application::loadScriptModule() {
+        if (options.scriptModule == "none") {
+            EGE_INFO("Script module: none requested");
+            return;
+        }
+
+        const std::filesystem::path path =
+            options.scriptModule.empty() ? moduleRoot() / ScriptModule::fileName("EnchantedSandbox")
+                                         : std::filesystem::path{options.scriptModule};
+
+        std::string error;
+        std::unique_ptr<ScriptModule> module = ScriptModule::load(path, error);
+        if (module == nullptr) {
+            // Not fatal. A module that will not load costs the behaviours in
+            // it, and the engine has to be able to say so and keep running -
+            // it is the thing the developer is about to fix.
+            EGE_WARN("script module {} not loaded: {}", path.string(), error);
+            return;
+        }
+        scriptModules.push_back(std::move(module));
+    }
+
+    void Application::reloadChangedScripts(FileWatcher& watcher, ScriptSystem& scripts) {
+        const std::vector<FileWatcher::Event> changes = watcher.poll();
+        if (changes.empty() || scriptModules.empty()) {
+            return;
+        }
+
+        // The directory holds the engine's own library and every executable
+        // beside it, all of which a build rewrites. Only the module matters.
+        const std::filesystem::path watched = scriptModules.front()->sourcePath();
+        const bool moduleChanged =
+            std::any_of(changes.begin(), changes.end(), [&](const FileWatcher::Event& change) {
+                return change.path.filename() == watched.filename() &&
+                       change.change != FileWatcher::Change::removed;
+            });
+        if (!moduleChanged) {
+            return;
+        }
+
+        std::string error;
+        std::unique_ptr<ScriptModule> reloaded = ScriptModule::load(watched, error);
+        if (reloaded == nullptr) {
+            // A half-written file mid-link, most likely. The watcher will see
+            // it again when the build finishes.
+            EGE_WARN("script module reload failed: {}", error);
+            return;
+        }
+        scriptModules.push_back(std::move(reloaded));
+
+        // Every live instance is of a type the new module has just replaced in
+        // the registry, so every one has to be made again from the new
+        // factory. Reflected fields carry across; see rebuildInstances.
+        const std::size_t rebuilt = scripts.rebuildInstances(world);
+        EGE_INFO("Script module reloaded: {} behaviour instance(s) rebuilt", rebuilt);
     }
 
     std::filesystem::path Application::assetRoot() {

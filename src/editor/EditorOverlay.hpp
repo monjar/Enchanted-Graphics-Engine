@@ -78,6 +78,15 @@ namespace ege {
 
         bool visible() const { return overlayVisible; }
 
+        // Puts an entity in the inspector. What a click in the hierarchy does,
+        // exposed so that something other than a click can do it - the demo
+        // tour selects the entity whose behaviour came from a loaded module,
+        // because a screenshot of the editor is only worth taking if the
+        // panels have something in them.
+        void select(EntityId entity) { selected = entity; }
+
+        EntityId selection() const { return selected; }
+
         // True while a panel owns the mouse or keyboard, so the camera
         // controller can stand down instead of fighting the UI for input. The
         // scene view is not a panel in this sense: hovering it is how the

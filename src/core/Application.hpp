@@ -38,6 +38,21 @@ namespace ege {
             // rather than by the clock, so the result is the same however
             // fast the machine renders it.
             float recordFrameRate = 30.f;
+            // The script module to load, if it is not the one built beside
+            // the executable. Empty takes the default; "none" loads nothing,
+            // which is how the demo is run without it to show the difference.
+            std::string scriptModule;
+            // Keeps the editor up during the demo, with an entity selected, so
+            // that what is recorded is the engine being used rather than the
+            // picture it renders. The tour still flies the camera; the scene
+            // view is a panel like any other while the editor is up.
+            bool showEditor = false;
+            // The window to open. The default is small enough to be polite on
+            // any display; the editor wants more room than that, and a
+            // recording of the editor wants enough that its panels are not
+            // reading their own labels back in fragments.
+            int width = WIDTH;
+            int height = HEIGHT;
         };
 
         Application() : Application(Options{}) {}
@@ -57,6 +72,19 @@ namespace ege {
         // tree during development; a shipped build looks beside itself.
         static std::filesystem::path assetRoot();
 
+        // Where script modules are built. Same arrangement as assetRoot: a
+        // compile definition during development, beside the binary otherwise.
+        static std::filesystem::path moduleRoot();
+
+        // Loads the project's script module, if there is one. Behaviours it
+        // registers are available to the scene from the moment this returns,
+        // which is why it happens before the scene is built.
+        void loadScriptModule();
+
+        // Reloads it when the file changes, and rebuilds every live behaviour
+        // from what the new one registered.
+        void reloadChangedScripts(class FileWatcher& watcher, class ScriptSystem& scripts);
+
         void loadScene();
         // Acts on whatever the project directory changed since the last look.
         void reloadChangedAssets(class FileWatcher& watcher);
@@ -71,7 +99,9 @@ namespace ege {
         void verifySceneRoundTrip();
 
         Options options{};
-        Window window{WIDTH, HEIGHT, "Enchanted Engine"};
+        // Declared after options on purpose: members initialise in declaration
+        // order, so this can be built from what the command line asked for.
+        Window window{options.width, options.height, "Enchanted Engine"};
         Device device{window};
         Renderer renderer{window, device};
 
@@ -82,5 +112,9 @@ namespace ege {
         std::unique_ptr<DescriptorSetLayout> materialSetLayout{};
         JobSystem jobs{};
         World world;
+
+        // Kept for the process's lifetime, and every reload adds another -
+        // see the note on ScriptModule about why one is never let go of.
+        std::vector<std::unique_ptr<class ScriptModule>> scriptModules;
     };
 }  // namespace ege

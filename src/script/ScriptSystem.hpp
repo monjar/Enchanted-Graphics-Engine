@@ -34,6 +34,23 @@ namespace ege {
         // instances. Called when play stops - the world is about to be replaced
         // by the snapshot, and a behaviour should hear about that.
         void despawnAll(World& world);
+
+        // Rebuilds every behaviour instance from the registry, carrying its
+        // reflected fields across. Returns how many were rebuilt.
+        //
+        // This is what a script module reload comes down to. The old instances
+        // are of types the newly loaded module has replaced in the registry,
+        // so every one has to be made again from the new factory - and what a
+        // behaviour's author wrote is its reflected fields, so those are
+        // written out and read back into the replacement.
+        //
+        // What cannot survive is a behaviour's unreflected private state:
+        // Bobbing's remembered origin, Orbit's accumulated angle. The
+        // replacement gets onSpawn again instead, which is the call a
+        // behaviour already uses to work that state out from where things
+        // are - so reload lands in the same place a fresh Play would, and
+        // "reflect the state you want to keep" is a rule an author can hold.
+        std::size_t rebuildInstances(World& world);
     };
 
 }  // namespace ege

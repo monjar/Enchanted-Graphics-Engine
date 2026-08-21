@@ -90,7 +90,11 @@ target_link_libraries(Enchanted PUBLIC
   ege::jolt)
 
 target_compile_definitions(Enchanted PRIVATE
-  EGE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+  EGE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets"
+  # Where script modules are built to, so a development run finds the sandbox
+  # without being told. A shipped game would look beside its own executable;
+  # this is the same trick EGE_ASSET_ROOT plays, for the same reason.
+  EGE_MODULE_ROOT="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
 
 ege_set_target_warnings(Enchanted WARNINGS_AS_ERRORS)
 
@@ -113,6 +117,39 @@ ege_add_shaders(Enchanted "${CMAKE_CURRENT_SOURCE_DIR}/shaders")
 add_executable(EnchantedEngine app/main.cpp)
 target_link_libraries(EnchantedEngine PRIVATE ege::engine)
 ege_set_target_warnings(EnchantedEngine WARNINGS_AS_ERRORS)
+
+# ---------------------------------------------------------------------------
+# EnchantedSandbox - a project's behaviours, as a module the engine loads
+#
+# MODULE rather than SHARED: nothing links against this, it is opened by name
+# at runtime. Nothing in the engine names anything in it either - a scene
+# refers to a behaviour by the name it registered under, and whether that name
+# resolves is a question of what has been loaded.
+#
+# It exists to be rebuilt while the engine is running, which is what script
+# hot reload is: `cmake --build --preset default --target EnchantedSandbox`
+# with the demo up, and the running scene picks the new behaviour up.
+# ---------------------------------------------------------------------------
+if(EGE_SHARED_ENGINE)
+  file(GLOB_RECURSE SANDBOX_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/sandbox/*.cpp")
+
+  add_library(EnchantedSandbox MODULE ${SANDBOX_SOURCES})
+  target_link_libraries(EnchantedSandbox PRIVATE ege::engine)
+  ege_set_target_warnings(EnchantedSandbox WARNINGS_AS_ERRORS)
+
+  # Beside the executable that loads it, under whatever name the platform
+  # gives a module - libEnchantedSandbox.so, EnchantedSandbox.dll. The engine
+  # composes the same name from the same base, which is the one rule both
+  # sides have to agree on.
+  set_target_properties(EnchantedSandbox PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+
+  # Built by default, so a fresh checkout has something to load; the demo
+  # still runs without it, with the behaviours it names simply absent.
+  add_dependencies(EnchantedEngine EnchantedSandbox)
+endif()
 
 # ---------------------------------------------------------------------------
 # EnchantedFrameChecks - looks at recorded frames and says whether a picture
