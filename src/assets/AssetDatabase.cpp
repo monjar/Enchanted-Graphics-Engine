@@ -368,7 +368,7 @@ namespace ege {
                 materialFormatVersion);
         }
 
-        auto loaded = std::make_shared<Material>(*device, *materialPool, *materialLayout);
+        auto loaded = std::make_shared<Material>(*materialPool, *materialLayout);
 
         // Properties go through the same reflection-driven serializer the
         // scene uses, so a field added to MaterialProperties is readable here

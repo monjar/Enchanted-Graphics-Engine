@@ -34,7 +34,10 @@ namespace ege {
     // descriptor is a validation error rather than a default.
     class Material {
     public:
-        Material(Device& device, DescriptorPool& pool, DescriptorSetLayout& layout);
+        // No device: a material is a descriptor set and four texture
+        // references, and every device call it needs is one the pool or the
+        // layout already owns.
+        Material(DescriptorPool& pool, DescriptorSetLayout& layout);
 
         Material(const Material&) = delete;
         Material& operator=(const Material&) = delete;
@@ -69,7 +72,6 @@ namespace ege {
         static void destroyDefaults();
 
     private:
-        Device& device;
         DescriptorPool& pool;
         DescriptorSetLayout& layout;
         VkDescriptorSet set = VK_NULL_HANDLE;
