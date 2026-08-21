@@ -12,7 +12,7 @@ namespace {
         EGE_INFO("  --demo               run the scripted camera tour and close");
         EGE_INFO("  --exit-after SECONDS close after this long regardless");
         EGE_INFO("  --record DIR         write every frame there as a PNG");
-        EGE_INFO("  --record-fps N       seconds per frame while recording (default 30)");
+        EGE_INFO("  --record-fps N       frames per recorded second (default 30)");
         EGE_INFO("  --editor             keep the editor up during the demo");
         EGE_INFO("  --size W H           open a window this size (default 800 600)");
         EGE_INFO("  --script-module PATH load this module instead of the default sandbox");

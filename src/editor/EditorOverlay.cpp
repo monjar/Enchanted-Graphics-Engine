@@ -738,10 +738,18 @@ namespace ege {
     void EditorOverlay::drawStatsPanel(const Context& context) {
         const PbrRenderSystem::Stats& stats = context.stats;
         ImGui::Begin("Stats");
-        ImGui::Text(
-            "%.2f ms  (%.0f fps)",
-            static_cast<double>(context.frameTime) * 1000.0,
-            1.0 / static_cast<double>(context.frameTime));
+        // Smoothed, because a per-frame number at sixty frames a second is a
+        // blur of digits nobody can read. The first half-second has no window
+        // to smooth over yet and falls back to the frame just measured.
+        const double fps = static_cast<double>(context.framesPerSecond);
+        const double frameMilliseconds = static_cast<double>(context.measuredFrameSeconds) * 1000.0;
+        if (fps > 0.0) {
+            ImGui::Text("%.2f ms  (%.0f fps)", 1000.0 / fps, fps);
+        } else if (frameMilliseconds > 0.0) {
+            ImGui::Text("%.2f ms", frameMilliseconds);
+        } else {
+            ImGui::TextUnformatted("-- ms");
+        }
         ImGui::Separator();
         // Culling numbers describe the previous frame: the render that
         // produces them runs after the UI is declared.

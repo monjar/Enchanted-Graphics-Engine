@@ -21,21 +21,37 @@ scene rendering into a viewport panel the UI samples as a texture.
 
 Three things are worth watching.
 
-**The stats panel.** 139 candidates, most rejected by the frustum, a few more
-by the depth pyramid, and the fifty-odd survivors going out in fifteen draw
-calls - because the hundred and twenty gravel stones share a mesh and a
-material and are one instanced draw between them.
+**The stats panel.** 139 candidates every frame, most rejected by the frustum,
+a few more by the depth pyramid, and what survives going out in a fraction as
+many draw calls - because the hundred and twenty gravel stones share a mesh and
+a material and are one instanced draw between them.
+
+Its frame time belongs to the machine that made the recording, and that machine
+has no GPU: it is **lavapipe**, Mesa's software rasteriser, doing a 1280x800
+viewport with 4x MSAA, SSAO, three kinds of shadow and a depth pyramid on the
+CPU. A few hundred milliseconds a frame is what that costs and it is not what
+the engine costs on hardware. The number is honest rather than flattering on
+purpose - it is measured and unclamped, so it can report worse than the quarter
+of a second the simulation delta stops at.
 
 **The inspector.** It is showing `sandbox::Pulse`, a behaviour the engine was
 not built with. It came out of `libEnchantedSandbox.so`, which was loaded at
 runtime; the fields and their sliders are drawn from reflection the engine
 learned about at the moment the module loaded.
 
-**The pink sphere, about halfway through.** Its breathing suddenly deepens and
+**The pink sphere, a third of the way in.** Its breathing suddenly deepens and
 the console says why: the module was rebuilt while the engine was running, and
 the engine loaded the new one and rebuilt every live behaviour from it. Nothing
 restarted. `scripts/record_engine_demo.sh` records the whole thing, including
 making the edit.
+
+The recording is nine seconds out of the tour's twenty-four, at twelve frames
+a second. Both numbers are a file-size decision rather than a limit: a GIF of
+a 1280x800 editor costs roughly 45 kB a frame after quantisation, because the
+viewport is moving and frame differencing has little to hold on to, so length
+and smoothness trade directly against each other. The script records the whole
+tour and keeps the window where the sphere is large in shot, because that is
+where the reload is visible.
 
 The edit it makes is to a constant rather than to a reflected field, and that
 is the point. A field's value is carried across a reload - written out of the
@@ -99,7 +115,14 @@ driver and corrupts on another.
 
 While recording, time advances by exactly one frame's worth per frame rather
 than by the clock, so the same recording made on two machines is the same
-recording. `scripts/record_demo.sh` does the whole thing, including the GIF:
+recording. That step is what `--record-fps` sets, and it is the recording's
+frame rate rather than the engine's: a machine that renders a frame in two
+seconds and one that renders it in two milliseconds produce the same file.
+The stats panel is not fooled by it - the frame time there is measured, so on
+a software rasteriser it reads honestly slow while the recording it appears in
+still plays smoothly.
+
+`scripts/record_demo.sh` does the whole thing, including the GIF:
 
 ```sh
 ./scripts/record_demo.sh
@@ -117,7 +140,7 @@ scenes, fixed camera, the exact pixels the GPU produced.
 | `--editor` | Keep the editor up during the tour, with a scripted entity selected |
 | `--size W H` | Open a window this size. The editor wants more than the default 800×600 |
 | `--record DIR` | Write every frame there as a PNG |
-| `--record-fps N` | Seconds per frame while recording; also fixes the simulation step |
+| `--record-fps N` | Frames per recorded second; also pins the simulation step to `1/N` |
 | `--exit-after SECONDS` | Close after this long regardless |
 | `--script-module PATH` | Load this module instead of the sandbox; `none` loads no behaviours at all |
 
