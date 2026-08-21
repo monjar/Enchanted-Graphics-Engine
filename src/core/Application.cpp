@@ -592,7 +592,12 @@ namespace ege {
                 // no UI either.
                 overlay.beginFrame();
                 EditorOverlay::Context editorContext{
-                    world, camera, pbrRenderSystem.stats(), playMode, frameTime};
+                    world,
+                    camera,
+                    pbrRenderSystem.stats(),
+                    playMode,
+                    time.rawDelta(),
+                    time.framesPerSecond()};
                 overlay.buildUi(editorContext);
 
                 const uint32_t frameIndex = renderer.getFrameIndex();

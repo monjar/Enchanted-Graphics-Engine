@@ -65,7 +65,20 @@ namespace ege {
             const Camera& camera;
             const PbrRenderSystem::Stats& stats;
             PlayMode& playMode;
-            float frameTime = 0.f;
+            // What the last frame took and the rate over roughly the last
+            // half second, both measured on the clock.
+            //
+            // Deliberately not the step the simulation was advanced by.
+            // Recording pins that step to a fixed value so a tour comes out
+            // the same on a fast machine and a slow one, and printing it as a
+            // frame rate reports the capture setting as if it were
+            // performance - in the one picture anybody actually reads these
+            // numbers from. Nor the clamped delta: that stops at a quarter of
+            // a second to keep a stalled frame from launching the simulation
+            // across the room, so a panel showing it can never report worse
+            // than 4 fps however slow things get.
+            float measuredFrameSeconds = 0.f;
+            float framesPerSecond = 0.f;
         };
 
         // Declares the panels. Skipped entirely while hidden.
