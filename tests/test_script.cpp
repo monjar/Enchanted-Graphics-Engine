@@ -278,6 +278,26 @@ TEST_CASE("behaviour fields survive a save and load") {
     CHECK(recorder->label == "kept");
 }
 
+TEST_CASE("a behaviour attached by name alone saves the same twice") {
+    // A slot carrying a name and nothing else is what code attaching a
+    // behaviour writes, and what a module-provided behaviour looks like
+    // before the module has been asked to make one. Loading it builds the
+    // instance, so a save that left the defaults out would not match the save
+    // after it - and the engine's own round-trip check would call that
+    // instability without saying where it was.
+    ensureRegistered();
+
+    World world;
+    Entity entity = attachBehavior(world, "probe::Recorder");
+    REQUIRE(entity.fetch<Script>().behaviors[0].instance == nullptr);
+
+    const std::string written = SceneSerializer::toString(world);
+
+    World reloaded;
+    SceneSerializer::fromString(reloaded, written);
+    CHECK(SceneSerializer::toString(reloaded) == written);
+}
+
 TEST_CASE("a scene keeps the fields of a behaviour this build does not have") {
     // Opening a scene in a build that is missing one of its behaviours must
     // not be how that behaviour's settings get deleted.
@@ -447,6 +467,7 @@ EGE_FIELD(rate);
 EGE_REFLECT_END()
 
 TEST_CASE("re-registering a behaviour replaces it rather than adding a second") {
+    ensureRegistered();
     BehaviorRegistry& registry = BehaviorRegistry::instance();
     const std::size_t before = registry.all().size();
     const std::size_t registrationsBefore = registry.registrations();
@@ -470,6 +491,7 @@ TEST_CASE("re-registering a behaviour replaces it rather than adding a second") 
 }
 
 TEST_CASE("describing a type twice does not give it twin fields") {
+    ensureRegistered();
     // Every module instantiates the reflection template for the types it
     // touches, and each instantiation registers. Appending rather than
     // replacing would draw every field twice in the inspector and write it
@@ -484,6 +506,7 @@ TEST_CASE("describing a type twice does not give it twin fields") {
 }
 
 TEST_CASE("a reload rebuilds instances and carries the reflected fields across") {
+    ensureRegistered();
     ege::World world;
     ScriptSystem scripts;
     BehaviorRegistry& registry = BehaviorRegistry::instance();
@@ -535,6 +558,7 @@ TEST_CASE("a reload rebuilds instances and carries the reflected fields across")
 }
 
 TEST_CASE("a reload leaves alone a behaviour the new module does not have") {
+    ensureRegistered();
     // Removing a behaviour from a module must not be how the scenes using it
     // lose their settings for it.
     ege::World world;

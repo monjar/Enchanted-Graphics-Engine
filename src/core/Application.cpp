@@ -1493,6 +1493,15 @@ namespace ege {
             Script script{};
             Script::Slot slot{};
             slot.behavior = "sandbox::Pulse";
+            // From the registry rather than `make_shared`, because there is no
+            // such type here to construct - that is the point of the module.
+            // Without this the slot is a name and nothing else, and the
+            // inspector has no fields to show until Play makes the instance.
+            if (const BehaviorRegistry::Entry* entry =
+                    BehaviorRegistry::instance().find(slot.behavior);
+                entry != nullptr && entry->create) {
+                slot.instance = entry->create();
+            }
             script.behaviors.push_back(std::move(slot));
             breathing.attach<Script>(std::move(script));
         }

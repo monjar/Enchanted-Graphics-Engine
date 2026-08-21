@@ -31,6 +31,14 @@ namespace ege {
                     // Opening a scene in a build missing one of its behaviours
                     // must not be how that behaviour's data gets deleted.
                     record["fields"] = nlohmann::json::parse(slot.savedFields, nullptr, false);
+                } else if (entry != nullptr && entry->type != nullptr && entry->create) {
+                    // A slot that names a behaviour this build does have, but
+                    // was given neither an instance nor saved fields - code
+                    // that attached a behaviour by name and left it at its
+                    // defaults. Those defaults are written out, because
+                    // reading this back makes the instance, and a save that
+                    // omitted them would not match the save after it.
+                    record["fields"] = serializer.write(*entry->type, entry->create().get());
                 }
 
                 behaviors.push_back(std::move(record));
