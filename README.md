@@ -119,11 +119,11 @@ machine.
 
 ![The engine running: hierarchy, scene viewport with a gizmo, an inspector showing a behaviour loaded from a script module, live draw statistics and the console — with a script hot reload happening partway through](docs/images/engine-demo.gif)
 
-The same tour with the editor left up, which is the engine rather than the
-picture it makes. Watch the **stats** panel: 139 candidates, most of them
-rejected by the frustum, a few more by the depth pyramid, and the fifty-odd
-survivors going out in fifteen draw calls because the gravel shares a mesh and
-a material.
+The last third of the same tour with the editor left up, which is the engine
+rather than the picture it makes. Watch the **stats** panel: 139 candidates
+every frame, most of them rejected by the frustum, a few more by the depth
+pyramid, and what survives going out in a fraction as many draw calls because
+the gravel shares a mesh and a material.
 
 Partway through, the pink sphere's breathing suddenly deepens. Nothing
 restarted: `sandbox/SandboxBehaviors.cpp` was edited and its module rebuilt
@@ -133,6 +133,15 @@ inspector is showing `sandbox::Pulse` — a behaviour the engine was not built
 with, drawn from reflection the engine learned about when the module loaded.
 [`scripts/record_engine_demo.sh`](scripts/record_engine_demo.sh) records the
 whole thing, edit and all.
+
+The frame time in that panel is the recording machine's, and the recording
+machine has no GPU: this is **lavapipe**, Mesa's software rasteriser, running
+a 1280×800 viewport with 4× MSAA, SSAO, three kinds of shadow and a depth
+pyramid on the CPU. A few hundred milliseconds a frame is what that costs and
+it is not what the engine costs on hardware. The recording is smooth
+regardless, because recording advances the simulation by a fixed step per
+frame rather than by the clock — which is also what makes a recording made on
+two different machines the same recording.
 
 ## The editor
 
