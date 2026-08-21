@@ -61,10 +61,16 @@ namespace ege {
         // Function-local static: thread-safe initialisation, and independent of
         // translation unit ordering.
         static const TypeInfo* info = [] {
-            TypeInfo& created =
-                instance().add(detail::nameOf<T>(), sizeof(T), alignof(T));
+            TypeInfo& created = instance().add(detail::nameOf<T>(), sizeof(T), alignof(T));
             if constexpr (detail::Describe<T>::reflected) {
                 created.reflectedFlag = true;
+                // Cleared before describing, because this runs once per module
+                // rather than once per process: the executable and the
+                // engine's shared library each instantiate this template, and
+                // a reloaded script module describes its behaviours again.
+                // Appending to what the last one left would give every field a
+                // twin, and an inspector drawing each of them twice.
+                created.typeFields.clear();
                 TypeBuilder<T> builder{created};
                 detail::Describe<T>::apply(builder);
             }

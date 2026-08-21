@@ -47,6 +47,12 @@ namespace ege {
 
         const std::vector<Entry>& all() const { return entries; }
 
+        // How many times anything has registered, ever. Not the same as how
+        // many entries there are: re-registering a name replaces the entry
+        // rather than adding one, which is exactly what a reloaded module
+        // does, so counting entries would say a reload contributed nothing.
+        std::size_t registrations() const { return registrationCount; }
+
         // Forgets everything. Only for tests, and for the moment a reloaded
         // script module replaces the behaviours the old one registered.
         void clear();
@@ -54,6 +60,7 @@ namespace ege {
     private:
         std::vector<Entry> entries;
         std::unordered_map<std::string, std::size_t> byName;
+        std::size_t registrationCount = 0;
     };
 
 }  // namespace ege

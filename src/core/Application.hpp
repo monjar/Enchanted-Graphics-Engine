@@ -38,6 +38,10 @@ namespace ege {
             // rather than by the clock, so the result is the same however
             // fast the machine renders it.
             float recordFrameRate = 30.f;
+            // The script module to load, if it is not the one built beside
+            // the executable. Empty takes the default; "none" loads nothing,
+            // which is how the demo is run without it to show the difference.
+            std::string scriptModule;
         };
 
         Application() : Application(Options{}) {}
@@ -56,6 +60,19 @@ namespace ege {
         // Where the project's assets live. EGE_ASSET_ROOT points at the source
         // tree during development; a shipped build looks beside itself.
         static std::filesystem::path assetRoot();
+
+        // Where script modules are built. Same arrangement as assetRoot: a
+        // compile definition during development, beside the binary otherwise.
+        static std::filesystem::path moduleRoot();
+
+        // Loads the project's script module, if there is one. Behaviours it
+        // registers are available to the scene from the moment this returns,
+        // which is why it happens before the scene is built.
+        void loadScriptModule();
+
+        // Reloads it when the file changes, and rebuilds every live behaviour
+        // from what the new one registered.
+        void reloadChangedScripts(class FileWatcher& watcher, class ScriptSystem& scripts);
 
         void loadScene();
         // Acts on whatever the project directory changed since the last look.
@@ -82,5 +99,9 @@ namespace ege {
         std::unique_ptr<DescriptorSetLayout> materialSetLayout{};
         JobSystem jobs{};
         World world;
+
+        // Kept for the process's lifetime, and every reload adds another -
+        // see the note on ScriptModule about why one is never let go of.
+        std::vector<std::unique_ptr<class ScriptModule>> scriptModules;
     };
 }  // namespace ege

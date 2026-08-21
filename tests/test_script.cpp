@@ -395,3 +395,164 @@ TEST_CASE("contacts reach the behaviours on both sides, each from its own side")
     CHECK(ballLog->touches.front().normal.y < 0.f);
     CHECK(floorLog->touches.front().normal.y > 0.f);
 }
+
+// ---- reloading a script module ---------------------------------------------
+//
+// A module is a shared library, so none of what it does can be tested without
+// one - but almost nothing that can go wrong is about loading. What can go
+// wrong is what happens either side of it: a re-registered behaviour must
+// replace the old one rather than sit beside it, and the instances built from
+// the old one must be rebuilt from the new with what the author wrote intact.
+// Both are the registry and the script system, and neither needs a module.
+
+namespace {
+
+    // Two versions of one behaviour, standing in for the same type before and
+    // after a module was rebuilt. Same registered name, different code.
+    class BreathingV1 : public ege::Behavior {
+    public:
+        float rate = 1.f;
+
+        void onSpawn() override { spawns++; }
+
+        void onFixedTick(float deltaSeconds) override { travelled += rate * deltaSeconds; }
+
+        // Not reflected, so not carried across a reload - which is the rule
+        // this exists to demonstrate.
+        float travelled = 0.f;
+        int spawns = 0;
+    };
+
+    class BreathingV2 : public ege::Behavior {
+    public:
+        float rate = 1.f;
+
+        void onSpawn() override { spawns++; }
+
+        // The rebuilt version moves twice as fast: what a developer edited.
+        void onFixedTick(float deltaSeconds) override { travelled += 2.f * rate * deltaSeconds; }
+
+        float travelled = 0.f;
+        int spawns = 0;
+    };
+
+}  // namespace
+
+EGE_REFLECT(BreathingV1)
+EGE_FIELD(rate);
+EGE_REFLECT_END()
+
+EGE_REFLECT(BreathingV2)
+EGE_FIELD(rate);
+EGE_REFLECT_END()
+
+TEST_CASE("re-registering a behaviour replaces it rather than adding a second") {
+    BehaviorRegistry& registry = BehaviorRegistry::instance();
+    const std::size_t before = registry.all().size();
+    const std::size_t registrationsBefore = registry.registrations();
+
+    registry.add<BreathingV1>("test::Breathing");
+    CHECK(registry.all().size() == before + 1);
+
+    // The reload: the same name, a different type behind it.
+    registry.add<BreathingV2>("test::Breathing");
+    CHECK(registry.all().size() == before + 1);
+
+    // And the factory hands out the new one.
+    const BehaviorRegistry::Entry* entry = registry.find("test::Breathing");
+    REQUIRE(entry != nullptr);
+    const std::unique_ptr<ege::Behavior> made = entry->create();
+    CHECK(dynamic_cast<BreathingV2*>(made.get()) != nullptr);
+
+    // Both registrations count, which is how a module reports what it
+    // contributed - counting entries would say the second one did nothing.
+    CHECK(registry.registrations() == registrationsBefore + 2);
+}
+
+TEST_CASE("describing a type twice does not give it twin fields") {
+    // Every module instantiates the reflection template for the types it
+    // touches, and each instantiation registers. Appending rather than
+    // replacing would draw every field twice in the inspector and write it
+    // twice into a scene file.
+    const ege::TypeInfo& first = ege::TypeRegistry::of<BreathingV1>();
+    const std::size_t fields = first.fields().size();
+    REQUIRE(fields == 1);
+
+    const ege::TypeInfo& again = ege::registerType<BreathingV1>();
+    CHECK(&again == &first);
+    CHECK(again.fields().size() == fields);
+}
+
+TEST_CASE("a reload rebuilds instances and carries the reflected fields across") {
+    ege::World world;
+    ScriptSystem scripts;
+    BehaviorRegistry& registry = BehaviorRegistry::instance();
+
+    registry.add<BreathingV1>("test::Breathing");
+
+    Entity entity = world.spawn("Breather");
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "test::Breathing";
+    script.behaviors.push_back(std::move(slot));
+    entity.attach<Script>(std::move(script));
+
+    scripts.spawnPending(world);
+
+    {
+        Script* live = world.find<Script>(entity.id());
+        REQUIRE(live != nullptr);
+        auto* behavior = dynamic_cast<BreathingV1*>(live->behaviors[0].instance.get());
+        REQUIRE(behavior != nullptr);
+        CHECK(behavior->spawns == 1);
+        // Whatever the author set, which is what has to survive.
+        behavior->rate = 4.f;
+        // And something they did not reflect, which will not.
+        behavior->travelled = 99.f;
+    }
+
+    // The module is rebuilt: the name now means a different type.
+    registry.add<BreathingV2>("test::Breathing");
+    CHECK(scripts.rebuildInstances(world) == 1);
+
+    Script* live = world.find<Script>(entity.id());
+    REQUIRE(live != nullptr);
+    auto* rebuilt = dynamic_cast<BreathingV2*>(live->behaviors[0].instance.get());
+    REQUIRE(rebuilt != nullptr);
+
+    // The edited field came across.
+    CHECK(rebuilt->rate == doctest::Approx(4.f));
+    // The unreflected one did not, and onSpawn ran again so the behaviour
+    // could work out whatever it keeps privately from where things are now.
+    CHECK(rebuilt->travelled == doctest::Approx(0.f));
+    CHECK(rebuilt->spawns == 1);
+    // Still counted as spawned, so nothing spawns it a second time.
+    CHECK(live->behaviors[0].spawned);
+
+    // And it is running the new code: twice the distance for the same step.
+    scripts.fixedTick(world, 1.f);
+    CHECK(rebuilt->travelled == doctest::Approx(8.f));
+}
+
+TEST_CASE("a reload leaves alone a behaviour the new module does not have") {
+    // Removing a behaviour from a module must not be how the scenes using it
+    // lose their settings for it.
+    ege::World world;
+    ScriptSystem scripts;
+
+    Entity entity = world.spawn("Orphan");
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "test::NotInThisBuild";
+    slot.savedFields = R"({"rate":7.0})";
+    script.behaviors.push_back(std::move(slot));
+    entity.attach<Script>(std::move(script));
+
+    CHECK(scripts.rebuildInstances(world) == 0);
+
+    Script* live = world.find<Script>(entity.id());
+    REQUIRE(live != nullptr);
+    CHECK(live->behaviors[0].behavior == "test::NotInThisBuild");
+    CHECK(live->behaviors[0].savedFields == R"({"rate":7.0})");
+    CHECK(live->behaviors[0].instance == nullptr);
+}

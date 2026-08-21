@@ -15,6 +15,9 @@ namespace ege {
     void BehaviorRegistry::clear() {
         entries.clear();
         byName.clear();
+        // Deliberately not the registration count: it exists to measure what
+        // a module load contributed, and a test clearing the registry between
+        // cases has not un-registered anything that already happened.
     }
 
 }  // namespace ege

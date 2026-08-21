@@ -20,7 +20,8 @@ jobs:
         run: |
           clang-format --version
           clang-format --dry-run --Werror \
-            $(git ls-files 'src/*.cpp' 'src/*.hpp' 'app/*.cpp' 'tests/*.cpp')
+            $(git ls-files 'src/*.cpp' 'src/*.hpp' 'app/*.cpp' 'tests/*.cpp' \
+                           'sandbox/*.cpp' 'sandbox/*.hpp')
 
   build:
     name: ${{ matrix.name }}

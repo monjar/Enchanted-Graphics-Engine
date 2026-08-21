@@ -13,6 +13,8 @@ namespace ege {
             "a behaviour must be default-constructible: the registry creates one from a name in a "
             "scene file, with nothing else to go on");
 
+        registrationCount++;
+
         const auto existing = byName.find(name);
         Entry entry{};
         entry.name = name;

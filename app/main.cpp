@@ -13,6 +13,8 @@ namespace {
         EGE_INFO("  --exit-after SECONDS close after this long regardless");
         EGE_INFO("  --record DIR         write every frame there as a PNG");
         EGE_INFO("  --record-fps N       seconds per frame while recording (default 30)");
+        EGE_INFO("  --script-module PATH load this module instead of the default sandbox");
+        EGE_INFO("                       ('none' loads no behaviours at all)");
     }
 
 }  // namespace
@@ -30,6 +32,8 @@ int main(int argc, char** argv) {
             options.recordDirectory = argv[++index];
         } else if (argument == "--record-fps" && index + 1 < argc) {
             options.recordFrameRate = std::strtof(argv[++index], nullptr);
+        } else if (argument == "--script-module" && index + 1 < argc) {
+            options.scriptModule = argv[++index];
         } else if (argument == "--help" || argument == "-h") {
             printUsage();
             return EXIT_SUCCESS;
