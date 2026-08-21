@@ -20,3 +20,9 @@ live behaviour from it. Reflected fields carry across; anything a behaviour
 keeps privately does not, and gets `onSpawn` again instead - which is the call
 a behaviour already uses to work its private state out from where things are.
 Reflect the state you want to survive.
+
+## Seeing it happen
+
+`scripts/record_engine_demo.sh` runs the demo with the editor up, edits this
+source and rebuilds the module partway through, and assembles the result into
+`docs/images/engine-demo.gif`. It restores the source on the way out.

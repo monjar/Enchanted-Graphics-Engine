@@ -392,7 +392,32 @@ namespace ege {
         // separate presentation mode.
         DemoTour tour = DemoTour::demoScene();
         if (options.demo) {
-            overlay.toggle();
+            if (!options.showEditor) {
+                overlay.toggle();
+            } else {
+                // The panels are the subject, so put something in them - and
+                // preferably the entity whose behaviour came out of a module
+                // loaded at runtime, which is the one thing in the inspector
+                // the engine was not built knowing about. Anything scripted
+                // will do if the module is not loaded.
+                EntityId scripted{};
+                EntityId fromModule{};
+                for (Entity entity : world.all()) {
+                    const Script* script = world.find<Script>(entity.id());
+                    if (script == nullptr || script->behaviors.empty()) {
+                        continue;
+                    }
+                    if (scripted.isNull()) {
+                        scripted = entity.id();
+                    }
+                    for (const Script::Slot& slot : script->behaviors) {
+                        if (slot.behavior.rfind("sandbox::", 0) == 0) {
+                            fromModule = entity.id();
+                        }
+                    }
+                }
+                overlay.select(fromModule.isNull() ? scripted : fromModule);
+            }
             playMode.play(world);
             EGE_INFO("Demo tour: {:.1f} seconds", tour.duration());
         }

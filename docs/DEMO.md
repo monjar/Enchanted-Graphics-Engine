@@ -1,5 +1,50 @@
 # The demo
 
+There are two, and they show different things.
+
+| | What it shows |
+|---|---|
+| `--demo` | The picture. A camera tour with the editor hidden, because most of what a renderer does only becomes visible when the camera moves |
+| `--demo --editor` | The engine. The same tour with the panels up, and a script module rebuilt underneath it partway through |
+
+## The engine being used
+
+```sh
+./build/default/bin/EnchantedEngine --demo --editor --size 1280 800
+```
+
+![The engine running, with a script hot reload partway through](images/engine-demo.gif)
+
+What is on screen is the engine, not a presentation of it: the hierarchy, an
+inspector generated from reflection, live draw statistics, the console, and the
+scene rendering into a viewport panel the UI samples as a texture.
+
+Three things are worth watching.
+
+**The stats panel.** 139 candidates, most rejected by the frustum, a few more
+by the depth pyramid, and the fifty-odd survivors going out in fifteen draw
+calls - because the hundred and twenty gravel stones share a mesh and a
+material and are one instanced draw between them.
+
+**The inspector.** It is showing `sandbox::Pulse`, a behaviour the engine was
+not built with. It came out of `libEnchantedSandbox.so`, which was loaded at
+runtime; the fields and their sliders are drawn from reflection the engine
+learned about at the moment the module loaded.
+
+**The pink sphere, about halfway through.** Its breathing suddenly deepens and
+the console says why: the module was rebuilt while the engine was running, and
+the engine loaded the new one and rebuilt every live behaviour from it. Nothing
+restarted. `scripts/record_engine_demo.sh` records the whole thing, including
+making the edit.
+
+The edit it makes is to a constant rather than to a reflected field, and that
+is the point. A field's value is carried across a reload - written out of the
+instance being replaced and read back into its replacement - so changing a
+default would prove nothing. What a reload has to demonstrate is that new
+*code* is running.
+
+## The camera tour
+
 ```sh
 ./build/default/bin/EnchantedEngine --demo
 ```
@@ -69,6 +114,20 @@ scenes, fixed camera, the exact pixels the GPU produced.
 | Flag | Effect |
 |---|---|
 | `--demo` | Run the tour with the editor hidden and the scene playing, then close |
+| `--editor` | Keep the editor up during the tour, with a scripted entity selected |
+| `--size W H` | Open a window this size. The editor wants more than the default 800×600 |
 | `--record DIR` | Write every frame there as a PNG |
 | `--record-fps N` | Seconds per frame while recording; also fixes the simulation step |
 | `--exit-after SECONDS` | Close after this long regardless |
+| `--script-module PATH` | Load this module instead of the sandbox; `none` loads no behaviours at all |
+
+## Running it without the script module
+
+```sh
+./build/default/bin/EnchantedEngine --demo --script-module none
+```
+
+The pink sphere stops breathing and the log says
+`no behaviour named 'sandbox::Pulse'; skipping it`. Nothing else changes and
+nothing fails: a scene naming a behaviour the running build does not have is
+an ordinary situation, and it costs that behaviour rather than the scene.

@@ -42,6 +42,17 @@ namespace ege {
             // the executable. Empty takes the default; "none" loads nothing,
             // which is how the demo is run without it to show the difference.
             std::string scriptModule;
+            // Keeps the editor up during the demo, with an entity selected, so
+            // that what is recorded is the engine being used rather than the
+            // picture it renders. The tour still flies the camera; the scene
+            // view is a panel like any other while the editor is up.
+            bool showEditor = false;
+            // The window to open. The default is small enough to be polite on
+            // any display; the editor wants more room than that, and a
+            // recording of the editor wants enough that its panels are not
+            // reading their own labels back in fragments.
+            int width = WIDTH;
+            int height = HEIGHT;
         };
 
         Application() : Application(Options{}) {}
@@ -88,7 +99,9 @@ namespace ege {
         void verifySceneRoundTrip();
 
         Options options{};
-        Window window{WIDTH, HEIGHT, "Enchanted Engine"};
+        // Declared after options on purpose: members initialise in declaration
+        // order, so this can be built from what the command line asked for.
+        Window window{options.width, options.height, "Enchanted Engine"};
         Device device{window};
         Renderer renderer{window, device};
 

@@ -26,6 +26,15 @@ namespace sandbox {
         float amount = 0.25f;
         float radiansPerSecond = 2.5f;
 
+        // How far the code exaggerates whatever `amount` says. A constant
+        // rather than a field, and deliberately so: this is the line
+        // scripts/record_engine_demo.sh edits mid-recording to show a reload
+        // taking effect, and a *field* would prove nothing - a field's value
+        // is carried across a reload from the instance being replaced, so
+        // changing its default would change nothing visible. What a reload
+        // has to demonstrate is that new code is running.
+        static constexpr float exaggeration = 1.f;
+
         void onSpawn() override {
             if (const ege::Transform* transform = self().find<ege::Transform>()) {
                 restingScale = transform->scale;
@@ -40,7 +49,7 @@ namespace sandbox {
             if (transform == nullptr) {
                 return;
             }
-            transform->scale = restingScale * (1.f + amount * std::sin(phase));
+            transform->scale = restingScale * (1.f + exaggeration * amount * std::sin(phase));
 
             // Anything that writes a Transform has to say so: world matrices
             // are cached behind a dirty flag, and a behaviour writing one is

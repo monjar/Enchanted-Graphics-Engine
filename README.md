@@ -111,9 +111,32 @@ records its own frames — `--record DIR` writes every one as a PNG, with time
 advancing a fixed step per frame so the same recording is the same on any
 machine.
 
+## The engine, being used
+
+```sh
+./build/default/bin/EnchantedEngine --demo --editor --size 1280 800
+```
+
+![The engine running: hierarchy, scene viewport with a gizmo, an inspector showing a behaviour loaded from a script module, live draw statistics and the console — with a script hot reload happening partway through](docs/images/engine-demo.gif)
+
+The same tour with the editor left up, which is the engine rather than the
+picture it makes. Watch the **stats** panel: 139 candidates, most of them
+rejected by the frustum, a few more by the depth pyramid, and the fifty-odd
+survivors going out in fifteen draw calls because the gravel shares a mesh and
+a material.
+
+Partway through, the pink sphere's breathing suddenly deepens. Nothing
+restarted: `sandbox/SandboxBehaviors.cpp` was edited and its module rebuilt
+while the engine ran, the engine noticed the file, loaded the new one and
+rebuilt every live behaviour from it. The console says so as it happens. The
+inspector is showing `sandbox::Pulse` — a behaviour the engine was not built
+with, drawn from reflection the engine learned about when the module loaded.
+[`scripts/record_engine_demo.sh`](scripts/record_engine_demo.sh) records the
+whole thing, edit and all.
+
 ## The editor
 
-![The editor: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector showing the selected entity's material reference, asset browser and console](docs/images/editor.png)
+![The editor after a script module reload: hierarchy tree, scene viewport with a transform gizmo, reflection-driven inspector showing a behaviour that came from a runtime-loaded module, live draw statistics, asset browser and console](docs/images/editor.png)
 
 Press **F1**. The scene renders into an offscreen image the UI samples as a
 texture, so it is a **viewport** — a panel with its own aspect ratio, with the
@@ -225,11 +248,25 @@ textures are immutable once uploaded, so those are rebuilt and the world's
 references are repointed. A broken edit costs you the edit — the parse failure
 is logged and the previous version keeps drawing.
 
-Script hot reload is not here yet, but the thing that stood in its way is
-gone: `Enchanted` builds as a shared library now, so a `dlopen`'d script
-module and the engine that loads it share one type registry, one component
-registry and one behaviour registry rather than getting a set each. What is
-left is the loading itself.
+**Script hot reload works.** `sandbox/` is a project's behaviours built as a
+module the engine loads at runtime; rebuild it while the engine is running and
+the running scene picks it up. The engine reloads the module, rebuilds every
+live behaviour from what it registered, and carries each one's reflected
+fields across — what a behaviour keeps privately does not survive, and gets
+`onSpawn` again instead, which is the call it already uses to work that state
+out from where things are. Reflect the state you want to keep.
+
+Nothing in the engine names anything in the module: a scene refers to a
+behaviour by the name it registered under, and whether that name resolves is a
+question of what has been loaded. Run with `--script-module none` and the
+sphere driven by `sandbox::Pulse` simply sits there.
+
+A module is never unloaded, deliberately. Unloading invalidates every pointer
+into its code — the vtable of every live behaviour, the factory the registry
+holds, the field accessors reflection built — and the engine has no way to
+enumerate them. Fifty reloads in a session leak fifty modules, which is a few
+megabytes; the alternative is a crash at an unrelated moment later, and no
+shipped game reloads anything.
 
 Objects sharing a mesh and a material go out as one instanced draw rather
 than one each, and the transforms they are drawn with live in a buffer the
@@ -240,8 +277,8 @@ step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
 Still to come: indirect draws and GPU-driven culling, the standalone editor
-application, script hot reload, skeletal animation, character controllers and
-physics constraints.
+application, skeletal animation, character controllers and physics
+constraints.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
 exactly what has landed and what has not.
 
@@ -338,9 +375,14 @@ src/
                 clustered light culling, screen-space ambient occlusion,
                 the depth pyramid and occlusion culling, skybox, bloom and
                 post-process
-  scene/        world, entities, component pools, components, hierarchy, serialization
+  scene/        world, entities, component pools, components, hierarchy,
+                serialization, render-transform interpolation
+  script/       behaviours, the behaviour registry, and the runtime module
+                loader that makes them reloadable
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
                 are shared declarations, included rather than compiled
+sandbox/        a project's behaviours, built as a module the engine loads at
+                runtime - this is where a game's gameplay code would live
 assets/         runtime assets, resolved via EGE_ASSET_ROOT
 tools/          EnchantedFrameChecks, which reads recorded frames back
                 and says whether a picture came out

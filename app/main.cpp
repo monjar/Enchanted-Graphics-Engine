@@ -13,6 +13,8 @@ namespace {
         EGE_INFO("  --exit-after SECONDS close after this long regardless");
         EGE_INFO("  --record DIR         write every frame there as a PNG");
         EGE_INFO("  --record-fps N       seconds per frame while recording (default 30)");
+        EGE_INFO("  --editor             keep the editor up during the demo");
+        EGE_INFO("  --size W H           open a window this size (default 800 600)");
         EGE_INFO("  --script-module PATH load this module instead of the default sandbox");
         EGE_INFO("                       ('none' loads no behaviours at all)");
     }
@@ -32,6 +34,15 @@ int main(int argc, char** argv) {
             options.recordDirectory = argv[++index];
         } else if (argument == "--record-fps" && index + 1 < argc) {
             options.recordFrameRate = std::strtof(argv[++index], nullptr);
+        } else if (argument == "--editor") {
+            options.showEditor = true;
+        } else if (argument == "--size" && index + 2 < argc) {
+            options.width = std::atoi(argv[++index]);
+            options.height = std::atoi(argv[++index]);
+            if (options.width < 64 || options.height < 64) {
+                EGE_ERROR("--size wants a window of at least 64x64");
+                return EXIT_FAILURE;
+            }
         } else if (argument == "--script-module" && index + 1 < argc) {
             options.scriptModule = argv[++index];
         } else if (argument == "--help" || argument == "-h") {
