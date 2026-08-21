@@ -695,8 +695,9 @@ driving serialization and the editor, a GUID asset database that loads on the
 job system, C++ scripting, and Jolt physics drawn between its fixed steps.
 The engine is a shared library and behaviours live in a module beside it, so
 gameplay code can be rebuilt and reloaded without the engine restarting -
-which is what the editor demo shows happening. Around it: 297 tests, five CI
-configurations, and a headless render that checks its own output.
+which is what the editor demo shows happening. Around it: 298 tests, seven CI
+jobs across Linux, Windows and macOS, and a headless render that checks its
+own output.
 
 ### 10.2 Next, in order
 
@@ -713,6 +714,7 @@ Each of these is a single increment — one branch, one pull request.
 | ~~5~~ | ~~**Render-transform interpolation**~~ | **Landed**, as an opt-in component rather than a physics special case: nothing is interpolated unless whatever moves it on the fixed clock says so. | — |
 | ~~6~~ | ~~**Engine as a shared library**~~ | **Landed**, with type registration made idempotent because a template's function-local static is per module and both modules register. | — |
 | ~~1~~ | ~~**Script hot reload**~~ | **Landed.** Behaviours come from a module the engine `dlopen`s, the watcher rebuilds every instance from the new registry, and the reflected fields cross over. | — |
+| ~~-~~ | ~~**macOS builds**~~ | **Landed**, and smaller than expected: the runtime already asked for portability enumeration and enabled `VK_KHR_portability_subset`. What was missing was the build - a module suffix CMake gets wrong on Apple, a relative rpath, and a CI job. | — |
 | 1 | **GPU-driven two-phase occlusion culling** | Replaces the old "indirect draws" row, whose stated reason was wrong — see §10.5. Indirect draws alone do not remove the pop-in; two-phase culling does, and it needs them. Draw what was visible last frame, build the pyramid from that, test everything else against it in compute, and draw what turns out to be newly visible. No latency, nothing ever missing, and the CPU readback goes away with it. | 3 |
 | 2 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
 | 3 | **Frame graph: compute reads, imported buffers, surviving imports** | What 1 needs from the graph, and worth its own increment because each piece is a capability rather than a feature: sampling an image from a compute pass, importing a buffer the way images are imported, an indirect-read access, and an imported image that keeps its contents into the next frame instead of always entering as UNDEFINED. | nothing |

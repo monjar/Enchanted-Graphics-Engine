@@ -32,6 +32,20 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 # position-independent.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Find the engine library beside the binary that loaded it, by a path relative
+# to that binary rather than an absolute one baked in at link time. It is what
+# lets the build tree's bin/ directory be moved or copied and still run, and
+# it is what a script module needs: the module is opened by the executable, so
+# @loader_path resolves against the executable, and both of them are in the
+# same directory as the engine.
+if(APPLE)
+  set(CMAKE_BUILD_RPATH "@loader_path")
+  set(CMAKE_INSTALL_RPATH "@loader_path")
+else()
+  set(CMAKE_BUILD_RPATH "$ORIGIN")
+  set(CMAKE_INSTALL_RPATH "$ORIGIN")
+endif()
+
 # MSVC exports nothing from a DLL unless it is asked to, and asking for it
 # one __declspec at a time across an engine's worth of classes is a
 # maintenance burden with no upside. This exports the functions
@@ -145,6 +159,17 @@ if(EGE_SHARED_ENGINE)
   set_target_properties(EnchantedSandbox PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+
+  # Except on macOS, where CMake gives a MODULE library a .so suffix - a
+  # holdover from when a loadable bundle was distinct from a dylib, and not
+  # what anything on the platform calls a dynamic library today. The engine
+  # asks for lib<name>.dylib there, so left alone the two sides would compose
+  # different names and the module would simply never be found. Said here
+  # rather than changed there because .dylib is what a Mac developer will look
+  # for in the build directory.
+  if(APPLE)
+    set_target_properties(EnchantedSandbox PROPERTIES SUFFIX ".dylib")
+  endif()
 
   # Built by default, so a fresh checkout has something to load; the demo
   # still runs without it, with the behaviours it names simply absent.

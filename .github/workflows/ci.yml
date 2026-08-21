@@ -48,6 +48,9 @@ jobs:
           - name: Windows / Release
             os: windows-2022
             preset: default
+          - name: macOS / Release
+            os: macos-15
+            preset: default
 
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +63,22 @@ jobs:
             libvulkan-dev vulkan-validationlayers glslang-tools \
             mesa-vulkan-drivers xorg-dev libwayland-dev libxkbcommon-dev \
             xvfb
+
+      # Vulkan on macOS is MoltenVK, an implementation of it on top of Metal,
+      # and Homebrew has the pieces separately rather than as an SDK: the
+      # headers, the loader that finds the ICD, MoltenVK itself as that ICD,
+      # and glslang to compile the shaders. VULKAN_SDK is how find_package
+      # locates a loader, and Homebrew's prefix has the include/ and lib/ it
+      # expects - it is not an SDK install but it is the same shape.
+      #
+      # Unpinned, unlike the Windows SDK below, because Homebrew has no way to
+      # ask for a formula version. If this job goes red on a commit that
+      # touched nothing to do with macOS, a formula moved underneath it.
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: |
+          brew install vulkan-headers vulkan-loader molten-vk glslang
+          echo "VULKAN_SDK=$(brew --prefix)" >> "$GITHUB_ENV"
 
       # Pinned, not latest: every dependency this project builds against is
       # pinned, and the SDK was the one thing left floating. It broke exactly
@@ -87,6 +106,12 @@ jobs:
       # Renders the demo scene under lavapipe with the validation layers on and
       # fails on any validation message. This is what catches Vulkan misuse that
       # happens to work on one driver but is not actually legal.
+      #
+      # Linux only, and not because the other two cannot render. It is where a
+      # CPU implementation of Vulkan 1.3 can be apt-installed and driven from
+      # a virtual X server, which is what makes the result the same every run.
+      # The Windows and macOS jobs prove the code builds and that everything
+      # answerable without a device still answers correctly.
       - name: Headless render smoke test
         if: runner.os == 'Linux' && matrix.preset != 'tsan'
         env:
