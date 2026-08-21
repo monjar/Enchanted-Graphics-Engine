@@ -4,6 +4,16 @@
 # cover the pure logic - geometry generation, transform maths, buffer
 # alignment - so they run anywhere, including CI machines with no GPU.
 
+# CMake 4 removed compatibility with cmake_minimum_required(VERSION < 3.5),
+# and doctest 2.4.11 still asks for 2.8 - so a runner with a current CMake
+# refuses to configure it at all. This is the escape hatch CMake provides for
+# exactly that, and it is set around this one package rather than globally,
+# because the next dependency to need it should have to say so too.
+#
+# The alternative is unpinning doctest, and a test framework is the last thing
+# to float: a version bump that changes an assertion macro's behaviour would
+# look like the engine breaking.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 CPMAddPackage(
   NAME doctest
   GITHUB_REPOSITORY doctest/doctest
@@ -11,6 +21,7 @@ CPMAddPackage(
   VERSION 2.4.11
   EXCLUDE_FROM_ALL YES
 )
+unset(CMAKE_POLICY_VERSION_MINIMUM)
 ege_make_includes_system(doctest)
 ege_make_includes_system(doctest_with_main)
 
