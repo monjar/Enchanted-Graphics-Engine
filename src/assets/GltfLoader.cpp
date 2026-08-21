@@ -424,7 +424,7 @@ namespace ege::gltf {
         materials.reserve(scene.materials.size());
         for (size_t index = 0; index < scene.materials.size(); index++) {
             const GltfMaterialData& data = scene.materials[index];
-            auto material = std::make_shared<Material>(device, materialPool, materialLayout);
+            auto material = std::make_shared<Material>(materialPool, materialLayout);
             material->properties = data.properties;
             material->setBaseColor(textureAt(data.baseColorImage));
             material->setNormalMap(textureAt(data.normalImage));
@@ -481,7 +481,7 @@ namespace ege::gltf {
                 material = materials[static_cast<size_t>(primitive.material)];
             } else {
                 if (!defaultMaterial.resolved()) {
-                    auto created = std::make_shared<Material>(device, materialPool, materialLayout);
+                    auto created = std::make_shared<Material>(materialPool, materialLayout);
                     created->updateDescriptorSet();
                     const Guid id = database.addMaterial(
                         AssetDatabase::subAssetId(

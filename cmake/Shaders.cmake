@@ -18,6 +18,9 @@ find_program(EGE_GLSL_VALIDATOR
     $ENV{VULKAN_SDK}/Bin32
     /usr/bin
     /usr/local/bin
+    # Homebrew on Apple Silicon, which is not on any default search path and
+    # is where `brew install glslang` puts this on every Mac sold since 2020.
+    /opt/homebrew/bin
   DOC "glslangValidator, used to compile GLSL to SPIR-V")
 
 function(ege_add_shaders target shader_dir)

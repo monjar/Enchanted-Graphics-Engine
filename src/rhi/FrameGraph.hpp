@@ -45,11 +45,14 @@ namespace ege {
     // same operation happens at two stages. A read at a new stage is a new
     // value here rather than an argument at the call site.
     enum class ResourceAccess {
-        colorWrite,    // rendered to as a color attachment
-        depthWrite,    // rendered to as the depth attachment
-        sampled,       // read in a fragment shader through a sampler
-        storageWrite,  // written by a compute shader as a storage buffer
-        storageRead,   // read in a fragment shader as a storage buffer
+        colorWrite,          // rendered to as a color attachment
+        depthWrite,          // rendered to as the depth attachment
+        sampled,             // read in a fragment shader through a sampler
+        computeSampled,      // read in a compute shader through a sampler
+        storageWrite,        // written by a compute shader as a storage buffer
+        storageRead,         // read in a fragment shader as a storage buffer
+        computeStorageRead,  // read in a compute shader as a storage buffer
+        indirectRead,        // read by the draw commands it contains
     };
 
     // A GPU image that lives for (at most) one frame. Extent {0,0} means
@@ -89,6 +92,57 @@ namespace ege {
         VkDeviceSize size = 0;
     };
 
+    // An image the graph does not own, brought in for one frame.
+    //
+    // Gathered into a struct rather than passed as ten positional arguments,
+    // three of which are layouts and flag masks that would sit next to each
+    // other and mean entirely different things.
+    struct ImportedImageDesc {
+        VkImage image = VK_NULL_HANDLE;
+        VkImageView view = VK_NULL_HANDLE;
+        VkFormat format = VK_FORMAT_UNDEFINED;
+        VkExtent2D extent{0, 0};
+        VkClearValue clearValue{};
+
+        // What the graph's first barrier on this image has to chain after:
+        // the stage the owner last used it at, and the writes it did there.
+        // For a swapchain image that is the stage the acquire semaphore is
+        // waited at, with nothing written.
+        VkPipelineStageFlags2 srcStage = VK_PIPELINE_STAGE_2_NONE;
+        VkAccessFlags2 srcAccess = VK_ACCESS_2_NONE;
+
+        // The layout the image is in on entry, which is also what says
+        // whether its contents matter.
+        //
+        // UNDEFINED is the swapchain case: what is in there is last frame's
+        // picture for a different frame, so the transition in may discard it
+        // and the first pass to write it clears. Any other layout says the
+        // contents survived on purpose and the graph must not throw them
+        // away - a pass writing the image loads what is there instead. That
+        // is what lets a frame read what the frame before it computed, which
+        // nothing owned by the graph can do, because a transient is only
+        // guaranteed to be the same physical image while some pass keeps
+        // asking for the same description.
+        VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        // Where the graph leaves it once the last pass that touches it has.
+        VkImageLayout finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    };
+
+    // A buffer the graph does not own, brought in for one frame.
+    //
+    // The buffer counterpart of importing an image, and it exists for the
+    // same reason: something that has to outlive a frame cannot be a
+    // transient. A readback buffer the host maps, a visibility buffer a
+    // frame writes for the next frame to read, a buffer of draw commands
+    // filled by compute and consumed by an indirect draw.
+    struct ImportedBufferDesc {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize size = 0;
+        VkPipelineStageFlags2 srcStage = VK_PIPELINE_STAGE_2_NONE;
+        VkAccessFlags2 srcAccess = VK_ACCESS_2_NONE;
+    };
+
     class FrameGraph;
 
     // Resolved physical resources, handed to a pass's execute callback.
@@ -121,20 +175,16 @@ namespace ege {
 
         FrameGraphResource createTransientBuffer(std::string name, const TransientBufferDesc& desc);
 
-        // Brings an externally owned image (the swapchain image) into the
-        // graph. Its content on entry is discardable; after the last pass that
-        // touches it, the graph transitions it to finalLayout. srcStage is
-        // what the first barrier must chain after - for a swapchain image, the
-        // stage the acquire semaphore is waited at.
-        FrameGraphResource importImage(
-            std::string name,
-            VkImage image,
-            VkImageView view,
-            VkFormat format,
-            VkExtent2D extent,
-            VkClearValue clearValue,
-            VkPipelineStageFlags2 srcStage,
-            VkImageLayout finalLayout);
+        // Brings an externally owned image - the swapchain image, or anything
+        // that has to outlive a frame - into the graph. See ImportedImageDesc
+        // for what each field decides.
+        FrameGraphResource importImage(std::string name, const ImportedImageDesc& desc);
+
+        // The same for a buffer. The graph never allocates or frees it, and
+        // leaves it with a barrier making whatever it wrote visible to
+        // whoever owns it - the copy recorded after the graph, or the host
+        // read once the fence is waited on.
+        FrameGraphResource importBuffer(std::string name, const ImportedBufferDesc& desc);
 
         class PassBuilder {
         public:
@@ -273,7 +323,10 @@ namespace ege {
             // Imported-only fields.
             VkImage importedImage = VK_NULL_HANDLE;
             VkImageView importedView = VK_NULL_HANDLE;
+            VkBuffer importedBuffer = VK_NULL_HANDLE;
             VkPipelineStageFlags2 importSrcStage = VK_PIPELINE_STAGE_2_NONE;
+            VkAccessFlags2 importSrcAccess = VK_ACCESS_2_NONE;
+            VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             VkImageLayout finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
             // Filled during compile / execute.

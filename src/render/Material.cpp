@@ -55,8 +55,8 @@ namespace ege {
         defaultEmissive.reset();
     }
 
-    Material::Material(Device& deviceRef, DescriptorPool& poolRef, DescriptorSetLayout& layoutRef)
-        : device{deviceRef}, pool{poolRef}, layout{layoutRef} {
+    Material::Material(DescriptorPool& poolRef, DescriptorSetLayout& layoutRef)
+        : pool{poolRef}, layout{layoutRef} {
         EGE_VERIFY(
             defaultBaseColor != nullptr,
             "Material::createDefaults must run before any material is created");

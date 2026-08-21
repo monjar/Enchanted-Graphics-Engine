@@ -153,7 +153,14 @@ namespace ege {
         }
 
         if (physicalDevice == VK_NULL_HANDLE) {
-            throw std::runtime_error("failed to find a suitable GPU!");
+            // Every device was rejected, and isDeviceSuitable has already
+            // warned which of them failed on what. Naming the requirement
+            // here anyway, because this is the message that reaches someone
+            // who has a perfectly good GPU and a driver a version behind -
+            // most often on macOS, where MoltenVK reached Vulkan 1.3 later
+            // than the desktop drivers did.
+            throw std::runtime_error(
+                "no device supports what the engine needs; Vulkan 1.3 is required");
         }
 
         vkGetPhysicalDeviceProperties(physicalDevice, &properties);

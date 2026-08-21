@@ -307,6 +307,25 @@ cmake --build --preset default
 `glslangValidator` must be on `PATH` or in the Vulkan SDK; on Debian and
 Ubuntu it is in `glslang-tools`.
 
+Linux, Windows and macOS are all built in CI. On **macOS** there is no Vulkan
+driver as such — there is **MoltenVK**, which implements Vulkan on top of
+Metal, and Homebrew has the pieces without the SDK installer:
+
+```sh
+brew install vulkan-headers vulkan-loader molten-vk glslang
+export VULKAN_SDK="$(brew --prefix)"
+cmake --preset default
+cmake --build --preset default
+```
+
+MoltenVK is a *portability* implementation, which the Vulkan loader hides
+unless an application asks to see it; the engine asks, and enables
+`VK_KHR_portability_subset` on the device when the device says it needs it.
+Vulkan 1.3 is a hard requirement — dynamic rendering and synchronization2 are
+what the frame graph is written against — so MoltenVK needs to be recent
+enough to report it. If it is not, the engine says which version it found and
+stops, rather than failing later and less clearly.
+
 ### Presets
 
 | Preset    | What it gives you |

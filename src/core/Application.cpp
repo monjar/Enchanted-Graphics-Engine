@@ -913,23 +913,22 @@ namespace ege {
                 FrameGraphResource bloomBlurred = graph.createTransient("bloomBlurred", bloomDesc);
                 FrameGraphResource bloomFinal = graph.createTransient("bloomFinal", bloomDesc);
 
-                FrameGraphResource backbuffer = graph.importImage(
-                    "backbuffer",
-                    renderer.currentSwapChainImage(),
-                    renderer.currentSwapChainImageView(),
-                    renderer.getSwapChainColorFormat(),
-                    renderer.getSwapChainExtent(),
-                    VkClearValue{},
-                    // What the acquire semaphore is waited at, so the first
-                    // backbuffer barrier chains after the acquire.
-                    VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    // While recording, the graph hands the image over ready to
-                    // be copied and the recorder returns it to PRESENT_SRC.
-                    // Reading an image that has already been presented is the
-                    // kind of thing that works on one driver and corrupts on
-                    // another.
-                    recorder == nullptr ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-                                        : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                ImportedImageDesc backbufferDesc{};
+                backbufferDesc.image = renderer.currentSwapChainImage();
+                backbufferDesc.view = renderer.currentSwapChainImageView();
+                backbufferDesc.format = renderer.getSwapChainColorFormat();
+                backbufferDesc.extent = renderer.getSwapChainExtent();
+                // What the acquire semaphore is waited at, so the first
+                // backbuffer barrier chains after the acquire.
+                backbufferDesc.srcStage = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+                // While recording, the graph hands the image over ready to be
+                // copied and the recorder returns it to PRESENT_SRC. Reading
+                // an image that has already been presented is the kind of
+                // thing that works on one driver and corrupts on another.
+                backbufferDesc.finalLayout = recorder == nullptr
+                                                 ? VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+                                                 : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                FrameGraphResource backbuffer = graph.importImage("backbuffer", backbufferDesc);
 
                 // Where the display transform lands. With the editor up that is
                 // the viewport image the Scene panel samples, and the UI pass
@@ -938,17 +937,16 @@ namespace ege {
                 // frame is exactly what it was before the editor existed.
                 FrameGraphResource displayTarget = backbuffer;
                 if (sceneTarget.offscreen) {
-                    displayTarget = graph.importImage(
-                        "viewport",
-                        sceneTarget.image,
-                        sceneTarget.view,
-                        renderer.getSwapChainColorFormat(),
-                        sceneTarget.extent,
-                        VkClearValue{},
-                        // Last frame's UI sampled this image; writing over it
-                        // has to wait for that read to have finished.
-                        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                    ImportedImageDesc viewportDesc{};
+                    viewportDesc.image = sceneTarget.image;
+                    viewportDesc.view = sceneTarget.view;
+                    viewportDesc.format = renderer.getSwapChainColorFormat();
+                    viewportDesc.extent = sceneTarget.extent;
+                    // Last frame's UI sampled this image; writing over it has
+                    // to wait for that read to have finished.
+                    viewportDesc.srcStage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+                    viewportDesc.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                    displayTarget = graph.importImage("viewport", viewportDesc);
                 }
 
                 // One depth pass per cascade, each into its own layer. The
@@ -1058,17 +1056,18 @@ namespace ege {
                         pyramidLevels[step] =
                             graph.createTransient("hzb" + std::to_string(step), levelDesc);
                     }
-                    pyramidLevels[reductions - 1] = graph.importImage(
-                        "hzbReadback",
-                        occlusionCulling.readbackImage(frameIndex),
-                        occlusionCulling.readbackView(frameIndex),
-                        OcclusionSystem::levelFormat,
-                        occlusionCulling.readbackExtent(),
-                        VkClearValue{},
-                        // What the previous frame at this index left it doing:
-                        // being copied out of.
-                        VK_PIPELINE_STAGE_2_COPY_BIT,
-                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+                    ImportedImageDesc readbackDesc{};
+                    readbackDesc.image = occlusionCulling.readbackImage(frameIndex);
+                    readbackDesc.view = occlusionCulling.readbackView(frameIndex);
+                    readbackDesc.format = OcclusionSystem::levelFormat;
+                    readbackDesc.extent = occlusionCulling.readbackExtent();
+                    // What the previous frame at this index left it doing:
+                    // being copied out of. Its contents are not preserved -
+                    // this frame rewrites the whole level - so it enters as
+                    // UNDEFINED and the transition in may discard.
+                    readbackDesc.srcStage = VK_PIPELINE_STAGE_2_COPY_BIT;
+                    readbackDesc.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                    pyramidLevels[reductions - 1] = graph.importImage("hzbReadback", readbackDesc);
 
                     for (uint32_t step = 0; step < reductions; step++) {
                         const FrameGraphResource source =
@@ -1302,8 +1301,7 @@ namespace ege {
         auto makeMaterial =
             [this, &assets](
                 const std::string& name, glm::vec3 albedo, float metallic, float roughness) {
-                auto material =
-                    std::make_shared<Material>(device, *materialPool, *materialSetLayout);
+                auto material = std::make_shared<Material>(*materialPool, *materialSetLayout);
                 material->properties.baseColorFactor = glm::vec4{albedo, 1.f};
                 material->properties.metallicFactor = metallic;
                 material->properties.roughnessFactor = roughness;

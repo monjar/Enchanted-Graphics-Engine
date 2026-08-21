@@ -56,7 +56,11 @@ namespace ege {
         void createPipelines(VkFormat occlusionFormat);
 
         Device& device;
-        uint32_t frames = 0;
+        // Read only by the bounds assertion in the frame-indexed calls, which
+        // Release compiles out - so in a Release build nothing reads it, and
+        // clang says so. Kept rather than deleted because the check is worth
+        // having; marked rather than silenced because that is what it is.
+        [[maybe_unused]] uint32_t frames = 0;
 
         // Nearest for depth: a filtered depth is an average of two surfaces,
         // which is a surface that was never there. Linear for the occlusion

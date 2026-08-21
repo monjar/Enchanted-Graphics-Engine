@@ -58,7 +58,6 @@ namespace ege {
         namespace layers {
             constexpr JPH::ObjectLayer nonMoving = 0;
             constexpr JPH::ObjectLayer moving = 1;
-            constexpr JPH::ObjectLayer count = 2;
         }  // namespace layers
 
         namespace broadPhaseLayers {
@@ -105,7 +104,16 @@ namespace ege {
 
         // A real function rather than a lambda: a variadic lambda cannot decay
         // to the function pointer JPH::Trace is.
-        void traceToLog(const char* fmt, ...) {
+        //
+        // Declared printf-like so the compiler knows `fmt` is a format string
+        // checked at whatever called this. Without that, handing it on to
+        // vsnprintf is a non-literal format and -Wformat=2 rejects it - which
+        // clang does and GCC does not, so it surfaced the day a Mac joined CI.
+#if defined(__GNUC__) || defined(__clang__)
+        __attribute__((format(printf, 1, 2)))
+#endif
+        void
+        traceToLog(const char* fmt, ...) {
             std::va_list args;
             va_start(args, fmt);
             char buffer[1024];
