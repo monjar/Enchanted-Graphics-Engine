@@ -199,6 +199,17 @@ namespace ege {
         // rather than as a binding each. Core since Vulkan 1.0 and universal
         // on anything that reaches 1.3, but it is still opt-in.
         deviceFeatures.features.imageCubeArray = VK_TRUE;
+        // GPU-driven culling seeds one indirect command per batch, each
+        // pointing at its own window of the instance buffer - which is a
+        // non-zero firstInstance read from a buffer, and that is precisely
+        // what this feature gates. Enabled when the device has it rather
+        // than required, because the renderer has an honest life without it:
+        // culling falls back to the CPU frustum and the draws go out direct.
+        VkPhysicalDeviceFeatures supported{};
+        vkGetPhysicalDeviceFeatures(physicalDevice, &supported);
+        indirectFirstInstance = supported.drawIndirectFirstInstance == VK_TRUE;
+        deviceFeatures.features.drawIndirectFirstInstance =
+            indirectFirstInstance ? VK_TRUE : VK_FALSE;
         deviceFeatures.pNext = &features13;
 
         std::vector<const char*> enabledExtensions = deviceExtensions;
