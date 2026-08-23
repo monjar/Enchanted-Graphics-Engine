@@ -2,6 +2,7 @@
 
 #include "render/Bounds.hpp"
 #include "render/FrameInfo.hpp"
+#include "render/GpuCulling.hpp"
 #include "render/Material.hpp"
 #include "render/Model.hpp"
 #include "render/OcclusionCulling.hpp"
@@ -83,6 +84,40 @@ namespace ege {
 
         void render(FrameInfo& frameInfo);
 
+        // What the culling compute passes need to know about this frame's
+        // list: a sphere and a batch window per candidate, and one seed per
+        // batch. Built by prepare() whether or not anything consumes it -
+        // building it is a few hundred bytes of copying, and a frame that
+        // draws indirect and a frame that draws direct must otherwise agree
+        // about everything here.
+        struct CullFeed {
+            std::vector<GpuCullInput> candidates;
+            std::vector<SeedBatch> batches;
+        };
+
+        const CullFeed& cullFeed() const { return feed; }
+
+        // The same depth pass, drawing whatever a culling dispatch left in
+        // the command buffer. `firstCommandSlot` picks which of the frame's
+        // two command sets this pass consumes - the early set at slot zero,
+        // the late set a batch count along - because the early and late
+        // depth passes each draw exactly one of them.
+        void renderDepthIndirect(
+            FrameInfo& frameInfo,
+            const VkDescriptorBufferInfo& globalUbo,
+            const VkDescriptorBufferInfo& instances,
+            VkBuffer commands,
+            uint32_t firstCommandSlot);
+
+        // The shading pass, drawing both command sets: the union of what the
+        // early pass drew and what the late pass admitted is exactly the
+        // frame's visible list, and the depth both wrote is what the EQUAL
+        // test stands against. Binds and push constants go out per batch
+        // whether or not the batch kept any instances - a zero-instance
+        // indirect draw costs almost nothing, and knowing the count would
+        // mean reading back the very verdict this exists to keep on the GPU.
+        void renderIndirect(FrameInfo& frameInfo, VkBuffer commands);
+
         // Draw statistics for the frame just submitted.
         struct Stats {
             std::size_t candidates = 0;
@@ -127,6 +162,8 @@ namespace ege {
             const Model* model = nullptr;
             glm::mat4 modelMatrix{1.f};
             glm::mat4 normalMatrix{1.f};
+            // The world-space bounding sphere the culling dispatch tests.
+            glm::vec4 sphere{0.f};
         };
 
         // A run of consecutive draw items sharing a mesh and a material, which
@@ -142,9 +179,11 @@ namespace ege {
         };
 
         void buildBatches();
+        void buildCullFeed();
 
         std::vector<DrawItem> drawList;
         std::vector<Batch> batches;
+        CullFeed feed;
         Stats frameStats{};
         // Guards the order the three calls above have to happen in. Drawing
         // from a list gathered for a different frame is the kind of mistake
