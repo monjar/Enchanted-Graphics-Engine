@@ -180,8 +180,7 @@ namespace ege {
             std::make_unique<Pipeline>(device, "depth_prepass.vert.spv", "shadow.frag.spv", config);
     }
 
-    void PbrRenderSystem::prepare(
-        FrameInfo& frameInfo, const OcclusionSnapshot& occlusion, Buffer& instanceBuffer) {
+    void PbrRenderSystem::prepare(FrameInfo& frameInfo, Buffer& instanceBuffer) {
         frameStats = Stats{};
         drawList.clear();
         batches.clear();
@@ -237,16 +236,6 @@ namespace ege {
                     return;
                 }
 
-                // Inside the frustum and still not worth drawing, because
-                // the last pyramid to come back says something was covering
-                // every pixel it could have reached. Second, because it is
-                // the more expensive test and the frustum has already
-                // thrown out most of what it would have looked at.
-                if (occlusionCullingEnabled && occlusion.hides(worldBounds)) {
-                    frameStats.occluded++;
-                    return;
-                }
-
                 item.material = renderer.material.get();
                 item.materialSet = renderer.material.get()->descriptorSet();
                 item.model = renderer.mesh.get();
@@ -293,6 +282,7 @@ namespace ege {
         }
 
         gathered = true;
+        depthSetWritten = false;
     }
 
     void PbrRenderSystem::buildBatches() {
@@ -360,10 +350,17 @@ namespace ege {
         }
 
         VkDescriptorSet& set = depthDescriptorSets[frameInfo.frameIndex];
-        DescriptorWriter(*depthSetLayout, *depthPool)
-            .writeBuffer(0, const_cast<VkDescriptorBufferInfo*>(&globalUbo))
-            .writeBuffer(11, const_cast<VkDescriptorBufferInfo*>(&instances))
-            .overwrite(set);
+        // Written by whichever depth pass runs first this frame and left
+        // alone by the second: the contents are the same for both, and
+        // updating a set the first pass has bound invalidates the command
+        // buffer.
+        if (!depthSetWritten) {
+            DescriptorWriter(*depthSetLayout, *depthPool)
+                .writeBuffer(0, const_cast<VkDescriptorBufferInfo*>(&globalUbo))
+                .writeBuffer(11, const_cast<VkDescriptorBufferInfo*>(&instances))
+                .overwrite(set);
+            depthSetWritten = true;
+        }
 
         depthPipeline->bind(frameInfo.commandBuffer);
         vkCmdBindDescriptorSets(
