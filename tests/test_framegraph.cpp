@@ -1507,3 +1507,40 @@ TEST_CASE("a preserved import transitions from the layout it says it is in") {
         });
     CHECK(fromItsOwnLayout);
 }
+
+TEST_CASE("a compute-compacted buffer read by the vertex stage is separated there") {
+    // The instance buffer a culling pass compacts is read by the vertex
+    // shader, not the fragment shader - a barrier naming the fragment stage
+    // would let the vertex fetch race the compaction and win on some drivers.
+    FrameGraph graph;
+    graph.beginFrame(outputExtent);
+
+    FrameGraphResource instances =
+        graph.createTransientBuffer("instances", ege::TransientBufferDesc{4096});
+    FrameGraphResource backbuffer = importBackbuffer(graph);
+
+    graph.addPass(
+        "compact",
+        [&](FrameGraph::PassBuilder& pass) { pass.write(instances, ResourceAccess::storageWrite); },
+        noopExecute);
+    graph.addPass(
+        "draw",
+        [&](FrameGraph::PassBuilder& pass) {
+            pass.read(instances, ResourceAccess::vertexRead);
+            pass.write(backbuffer, ResourceAccess::colorWrite);
+        },
+        noopExecute);
+
+    graph.compile();
+
+    REQUIRE(graph.compiledPasses().size() == 2);
+    const auto& drawBarriers = graph.compiledPasses()[1].barriers;
+    const bool chained = std::any_of(
+        drawBarriers.begin(), drawBarriers.end(), [&](const FrameGraph::PlannedBarrier& barrier) {
+            return barrier.resourceIndex == instances.index &&
+                   barrier.srcStage == VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT &&
+                   barrier.dstStage == VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT &&
+                   barrier.dstAccess == VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        });
+    CHECK(chained);
+}

@@ -153,6 +153,19 @@ namespace ege {
         }
     }
 
+    void Model::drawIndirect(
+        VkCommandBuffer commandBuffer, VkBuffer commands, VkDeviceSize offset) {
+        // One command per call rather than a multi-draw, so nothing here
+        // depends on the multiDrawIndirect feature; the stride is therefore
+        // never read, and any multiple of four satisfies the spec.
+        if (hasIndexBuffer) {
+            vkCmdDrawIndexedIndirect(
+                commandBuffer, commands, offset, 1, sizeof(VkDrawIndexedIndirectCommand));
+        } else {
+            vkCmdDrawIndirect(commandBuffer, commands, offset, 1, sizeof(VkDrawIndirectCommand));
+        }
+    }
+
     void Model::bind(VkCommandBuffer commandBuffer) {
         VkBuffer buffers[] = {vertexBuffer->getBuffer()};
         VkDeviceSize offsets[] = {0};

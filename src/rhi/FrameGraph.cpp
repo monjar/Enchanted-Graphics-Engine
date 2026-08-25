@@ -75,6 +75,15 @@ namespace ege {
                         VK_IMAGE_LAYOUT_UNDEFINED,
                         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                         VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
+                // The vertex stage, because that is where a vertex shader
+                // pulling its transforms out of a compute-compacted buffer
+                // actually reads - a barrier naming the fragment stage would
+                // let the vertex fetch race the compaction.
+                case ResourceAccess::vertexRead:
+                    return {
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT,
+                        VK_ACCESS_2_SHADER_STORAGE_READ_BIT};
                 // Read by the command processor rather than by a shader, at a
                 // stage of its own that runs before the vertex shader does -
                 // which is exactly why it needs naming separately. A barrier
@@ -101,6 +110,7 @@ namespace ege {
                 case ResourceAccess::storageWrite:
                 case ResourceAccess::storageRead:
                 case ResourceAccess::computeStorageRead:
+                case ResourceAccess::vertexRead:
                 case ResourceAccess::indirectRead:
                     return 0;
             }
@@ -112,6 +122,7 @@ namespace ege {
                 case ResourceAccess::storageWrite:
                 case ResourceAccess::storageRead:
                 case ResourceAccess::computeStorageRead:
+                case ResourceAccess::vertexRead:
                     return VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
                 case ResourceAccess::indirectRead:
                     return VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT;
@@ -129,6 +140,7 @@ namespace ege {
                 case ResourceAccess::storageWrite:
                 case ResourceAccess::storageRead:
                 case ResourceAccess::computeStorageRead:
+                case ResourceAccess::vertexRead:
                 case ResourceAccess::indirectRead:
                     return true;
                 case ResourceAccess::colorWrite:

@@ -1,0 +1,27 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// The early half of two-phase occlusion culling: compact into the frame's
+// draws every object the late pass ruled visible last time it looked.
+//
+// This is the set the first depth pass draws, and the depth pyramid the late
+// pass tests against is built from what it writes - so this pass errs
+// happily on the side of drawing. A stale "visible" here costs one object's
+// early depth; a stale "hidden" defers the object to the late pass, which
+// rules on it against real depth this same frame. Neither mistake survives
+// the frame, which is the whole reason the verdict could move onto the GPU.
+
+layout(local_size_x = 64) in;
+
+#include "gpu_cull_common.glsl"
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= cull.counts.x) {
+        return;
+    }
+
+    if (visibility.flags[i] != 0u) {
+        appendInstance(i, inputs.at[i].batch, 0u);
+    }
+}

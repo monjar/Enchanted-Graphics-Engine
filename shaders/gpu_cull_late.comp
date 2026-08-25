@@ -1,0 +1,139 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+// The late half of two-phase occlusion culling: rule on every candidate
+// against the depth pyramid built from what the early pass drew, append the
+// newly visible to their own draws, and leave next frame's early pass its
+// verdicts.
+//
+// The test mirrors src/render/GpuCulling.cpp function for function; that copy
+// is the one the tests pin. Everything errs toward drawing: a sphere the
+// projection cannot handle, a footprint too large for the coarsest bound
+// level, a pyramid texel exactly as near as the object - all of it is
+// "visible". The one thing this pass must never do is cull something that
+// can be seen, and every branch below is written with that reading.
+
+layout(local_size_x = 64) in;
+
+#include "gpu_cull_common.glsl"
+
+layout(std430, set = 0, binding = 6) buffer Stats {
+    uint occluded;
+    uint drawnEarly;
+    uint drawnLate;
+    uint pad;
+} stats;
+
+// The pyramid's coarsest levels, finest of the four first. Individual
+// bindings rather than an array, because choosing a level per object would
+// index the array divergently - which core Vulkan does not promise to
+// support for samplers, and this engine does not ask for the feature that
+// would.
+layout(set = 0, binding = 7) uniform sampler2D pyramidLevel0;
+layout(set = 0, binding = 8) uniform sampler2D pyramidLevel1;
+layout(set = 0, binding = 9) uniform sampler2D pyramidLevel2;
+layout(set = 0, binding = 10) uniform sampler2D pyramidLevel3;
+
+const float depthMargin = 1e-5;
+const float maxSpanTexels = 4.0;
+
+// Mirrors occludedAtLevel: whether everything already drawn across the
+// rectangle is strictly nearer than the sphere's own nearest point.
+bool occludedAt(sampler2D level, ivec2 extent, vec2 minUv, vec2 maxUv, float nearestDepth) {
+    ivec2 first = clamp(ivec2(floor(minUv * vec2(extent))), ivec2(0), extent - 1);
+    ivec2 last = clamp(ivec2(floor(maxUv * vec2(extent))), first, extent - 1);
+
+    float farthest = 0.0;
+    for (int y = first.y; y <= last.y; y++) {
+        for (int x = first.x; x <= last.x; x++) {
+            farthest = max(farthest, texelFetch(level, ivec2(x, y), 0).r);
+        }
+    }
+    return farthest < nearestDepth - depthMargin;
+}
+
+// Mirrors chooseLevel: whether this level's texels are large enough to bound
+// the rectangle in maxSpanTexels of them per axis.
+bool levelFits(int level, vec2 minUv, vec2 maxUv) {
+    vec2 span = (maxUv - minUv) * vec2(cull.levelExtents[level].xy);
+    return span.x <= maxSpanTexels && span.y <= maxSpanTexels;
+}
+
+// Mirrors projectSphere. Returns visible-with-certainty as "not occluded";
+// only a sphere that projects cleanly and fails against the pyramid is
+// culled.
+bool sphereOccluded(vec4 sphere) {
+    vec3 centre = (cull.view * vec4(sphere.xyz, 1.0)).xyz;
+    float radius = sphere.w;
+
+    // Reaching the near plane means part of the sphere has no place on
+    // screen at all; those are drawn.
+    if (centre.z - radius <= cull.depthTerms.z) {
+        return false;
+    }
+
+    float nearestDepth =
+        clamp(cull.depthTerms.x + cull.depthTerms.y / (centre.z - radius), 0.0, 1.0);
+
+    // The rectangle bounding the sphere: the projection of its view-space
+    // bounding box, which contains the true silhouette. Too large a
+    // rectangle only ever prevents a cull.
+    vec2 minNdc = vec2(1e30);
+    vec2 maxNdc = vec2(-1e30);
+    for (int corner = 0; corner < 8; corner++) {
+        vec3 at = centre + radius * vec3(
+                                        ((corner & 1) != 0) ? 1.0 : -1.0,
+                                        ((corner & 2) != 0) ? 1.0 : -1.0,
+                                        ((corner & 4) != 0) ? 1.0 : -1.0);
+        vec4 clip = cull.projection * vec4(at, 1.0);
+        vec2 ndc = clip.xy / clip.w;
+        minNdc = min(minNdc, ndc);
+        maxNdc = max(maxNdc, ndc);
+    }
+    vec2 minUv = clamp(minNdc * 0.5 + 0.5, 0.0, 1.0);
+    vec2 maxUv = clamp(maxNdc * 0.5 + 0.5, 0.0, 1.0);
+
+    // The finest bound level that still fits, each sampler named by its own
+    // branch - see the note on the bindings above.
+    if (levelFits(0, minUv, maxUv)) {
+        return occludedAt(pyramidLevel0, cull.levelExtents[0].xy, minUv, maxUv, nearestDepth);
+    }
+    if (levelFits(1, minUv, maxUv)) {
+        return occludedAt(pyramidLevel1, cull.levelExtents[1].xy, minUv, maxUv, nearestDepth);
+    }
+    if (levelFits(2, minUv, maxUv)) {
+        return occludedAt(pyramidLevel2, cull.levelExtents[2].xy, minUv, maxUv, nearestDepth);
+    }
+    if (levelFits(3, minUv, maxUv)) {
+        return occludedAt(pyramidLevel3, cull.levelExtents[3].xy, minUv, maxUv, nearestDepth);
+    }
+    // Too large even for the coarsest level: enormous on screen, and drawn.
+    return false;
+}
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= cull.counts.x) {
+        return;
+    }
+
+    bool wasEarly = visibility.flags[i] != 0u;
+    bool visible = true;
+    if (cull.depthTerms.w > 0.5) {
+        visible = !sphereOccluded(inputs.at[i].sphere);
+    }
+
+    // Next frame's early pass reads this; nothing else does. Written for
+    // every candidate every frame, so a verdict can never outlive the frame
+    // after the one that formed it.
+    visibility.flags[i] = visible ? 1u : 0u;
+
+    if (visible && !wasEarly) {
+        appendInstance(i, cull.counts.y + inputs.at[i].batch, cull.counts.z);
+        atomicAdd(stats.drawnLate, 1u);
+    } else if (visible) {
+        atomicAdd(stats.drawnEarly, 1u);
+    } else {
+        atomicAdd(stats.occluded, 1u);
+    }
+}

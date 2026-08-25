@@ -2,9 +2,9 @@
 
 #include "render/Bounds.hpp"
 #include "render/FrameInfo.hpp"
+#include "render/GpuCulling.hpp"
 #include "render/Material.hpp"
 #include "render/Model.hpp"
-#include "render/OcclusionCulling.hpp"
 #include "rhi/Buffer.hpp"
 #include "rhi/Descriptors.hpp"
 #include "rhi/Pipeline.hpp"
@@ -61,14 +61,15 @@ namespace ege {
         // what is visible - which for an EQUAL depth test means geometry that
         // shades against depth nothing wrote.
         //
-        // The snapshot is the depth pyramid of a frame a little while ago; an
-        // object it says was hidden then is left out. An empty one leaves
-        // everything in.
+        // Only the frustum culls here. The occlusion verdict lives on the GPU
+        // now, where it is applied to the instance counts the draws consume -
+        // the CPU never hears it, which is exactly why nothing pops in two
+        // frames late any more.
         //
         // `instanceBuffer` is where the gathered transforms are written, in
-        // submission order, for both passes to index by instance.
-        void prepare(
-            FrameInfo& frameInfo, const OcclusionSnapshot& occlusion, Buffer& instanceBuffer);
+        // submission order - directly what the draws index when drawing
+        // direct, and the culling dispatch's input when drawing indirect.
+        void prepare(FrameInfo& frameInfo, Buffer& instanceBuffer);
 
         // Depth only, from the same list, with the same vertex transform. What
         // this writes is what the shading pass tests EQUAL against.
@@ -83,12 +84,48 @@ namespace ege {
 
         void render(FrameInfo& frameInfo);
 
+        // What the culling compute passes need to know about this frame's
+        // list: a sphere and a batch window per candidate, and one seed per
+        // batch. Built by prepare() whether or not anything consumes it -
+        // building it is a few hundred bytes of copying, and a frame that
+        // draws indirect and a frame that draws direct must otherwise agree
+        // about everything here.
+        struct CullFeed {
+            std::vector<GpuCullInput> candidates;
+            std::vector<SeedBatch> batches;
+        };
+
+        const CullFeed& cullFeed() const { return feed; }
+
+        // The same depth pass, drawing whatever a culling dispatch left in
+        // the command buffer. `firstCommandSlot` picks which of the frame's
+        // two command sets this pass consumes - the early set at slot zero,
+        // the late set a batch count along - because the early and late
+        // depth passes each draw exactly one of them.
+        void renderDepthIndirect(
+            FrameInfo& frameInfo,
+            const VkDescriptorBufferInfo& globalUbo,
+            const VkDescriptorBufferInfo& instances,
+            VkBuffer commands,
+            uint32_t firstCommandSlot);
+
+        // The shading pass, drawing both command sets: the union of what the
+        // early pass drew and what the late pass admitted is exactly the
+        // frame's visible list, and the depth both wrote is what the EQUAL
+        // test stands against. Binds and push constants go out per batch
+        // whether or not the batch kept any instances - a zero-instance
+        // indirect draw costs almost nothing, and knowing the count would
+        // mean reading back the very verdict this exists to keep on the GPU.
+        void renderIndirect(FrameInfo& frameInfo, VkBuffer commands);
+
         // Draw statistics for the frame just submitted.
         struct Stats {
             std::size_t candidates = 0;
             std::size_t culled = 0;
             // Inside the frustum, but standing behind something that was
-            // already covering every pixel of them.
+            // already covering every pixel of them. Counted by the late
+            // culling dispatch, not here - the application merges it in from
+            // the GPU's stats, a couple of frames after the fact.
             std::size_t occluded = 0;
             // Objects submitted, and the draw calls that carried them.
             // Consecutive objects sharing a mesh and a material go out as one
@@ -127,6 +164,8 @@ namespace ege {
             const Model* model = nullptr;
             glm::mat4 modelMatrix{1.f};
             glm::mat4 normalMatrix{1.f};
+            // The world-space bounding sphere the culling dispatch tests.
+            glm::vec4 sphere{0.f};
         };
 
         // A run of consecutive draw items sharing a mesh and a material, which
@@ -142,14 +181,21 @@ namespace ege {
         };
 
         void buildBatches();
+        void buildCullFeed();
 
         std::vector<DrawItem> drawList;
         std::vector<Batch> batches;
+        CullFeed feed;
         Stats frameStats{};
         // Guards the order the three calls above have to happen in. Drawing
         // from a list gathered for a different frame is the kind of mistake
         // that shows up as flicker on one machine and nothing on another.
         bool gathered = false;
+        // Whether this frame has written its depth descriptor set yet. Two
+        // depth passes share the set within a frame, and updating a set a
+        // pass has already bound invalidates the whole command buffer - the
+        // exact hazard this set was created to avoid, one level down.
+        bool depthSetWritten = false;
 
         std::unique_ptr<Pipeline> pipeline;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;

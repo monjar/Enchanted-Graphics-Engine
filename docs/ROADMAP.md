@@ -688,14 +688,16 @@ cube and multisampled images — colour and depth, with their resolves — and
 transient buffers; PBR with image-based lighting; three kinds of shadow
 (cascaded sun, cube point, projective spot); 4× MSAA; a depth pre-pass with
 screen-space ambient occlusion and a depth pyramid built on it; bloom and an
-ACES tonemap. Draws are rejected by the frustum and by what the pyramid found
-hidden, and what survives goes out instanced, one draw per mesh-and-material
-rather than one per object. Underneath: a sparse-set ECS, runtime reflection
+ACES tonemap. Occlusion culling is GPU-driven and two-phase: draw last
+frame's visible set, build the pyramid from that partial depth, rule on
+everything against it in compute, and draw what is newly visible - same
+frame, no readback, no pop-in - with each batch one indirect draw whose
+instance count the culling dispatch wrote. Underneath: a sparse-set ECS, runtime reflection
 driving serialization and the editor, a GUID asset database that loads on the
 job system, C++ scripting, and Jolt physics drawn between its fixed steps.
 The engine is a shared library and behaviours live in a module beside it, so
 gameplay code can be rebuilt and reloaded without the engine restarting -
-which is what the editor demo shows happening. Around it: 310 tests, eight CI
+which is what the editor demo shows happening. Around it: 313 tests, eight CI
 jobs across Linux, Windows and macOS, and a headless render that checks its
 own output.
 
@@ -716,12 +718,12 @@ Each of these is a single increment — one branch, one pull request.
 | ~~1~~ | ~~**Script hot reload**~~ | **Landed.** Behaviours come from a module the engine `dlopen`s, the watcher rebuilds every instance from the new registry, and the reflected fields cross over. | — |
 | ~~-~~ | ~~**macOS builds**~~ | **Landed**, and smaller than expected: the runtime already asked for portability enumeration and enabled `VK_KHR_portability_subset`. What was missing was the build - a module suffix CMake gets wrong on Apple, a relative rpath, and a CI job. | — |
 | ~~-~~ | ~~**Frame graph: compute reads, imported buffers, surviving imports**~~ | **Landed.** `computeSampled`, `computeStorageRead` and `indirectRead` accesses, `importBuffer`, and imports that state the layout they arrive in — which is how an import says its contents matter and must be loaded rather than cleared. Tested at the compile level; the caller is row 1. | — |
-| 1 | **GPU-driven two-phase occlusion culling** | Replaces the old "indirect draws" row, whose stated reason was wrong — see §10.5. Draw what was visible last frame, build the pyramid from that, test everything else against it in compute, and draw what turns out to be newly visible. No latency, nothing ever missing, and the CPU readback goes away with it. The graph now has everything it needs; see §10.6 for the shape it takes. | nothing |
-| 2 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
-| 3 | **Velocity buffer and TAA** | A depth pre-pass exists to write velocity alongside depth for nothing. MSAA covers geometry aliasing; the specular aliasing left over is what TAA is actually for. | nothing |
-| 4 | **Screen-space reflections** | The depth pyramid built for occlusion culling is also what a ray-marched reflection traces against, so the expensive half already exists. Wants a velocity buffer for the reprojection, which is what puts it after 3. | 3 |
-| 5 | **Material instancing** | Instancing landed and the demo showed its limit immediately: every object with a material of its own is a batch of one, and the demo's eighteen exhibits are eighteen batches. Material *parameters* in a buffer indexed like the transforms are what let objects sharing a mesh but not a tint draw together. | nothing |
-| 6 | **The standalone editor executable** | The panels are in-process on purpose and moving them is a build-system change, not a rewrite — and one that is smaller now that the engine is a shared library. | nothing |
+| ~~1~~ | ~~**GPU-driven two-phase occlusion culling**~~ | **Landed**, in the shape §10.6 predicted: no merged geometry buffer, each batch its own indirect draw, only the instance count moved onto the GPU. The readback, the CPU pyramid and the two frames of latency went with it, and the frames came out pixel-identical to the old path's. | — |
+| 1 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
+| 2 | **Velocity buffer and TAA** | A depth pre-pass exists to write velocity alongside depth for nothing. MSAA covers geometry aliasing; the specular aliasing left over is what TAA is actually for. | nothing |
+| 3 | **Screen-space reflections** | The depth pyramid built for occlusion culling is also what a ray-marched reflection traces against, so the expensive half already exists. Wants a velocity buffer for the reprojection, which is what puts it after 2. | 2 |
+| 4 | **Material instancing** | Instancing landed and the demo showed its limit immediately: every object with a material of its own is a batch of one, and the demo's eighteen exhibits are eighteen batches. Material *parameters* in a buffer indexed like the transforms are what let objects sharing a mesh but not a tint draw together. | nothing |
+| 5 | **The standalone editor executable** | The panels are in-process on purpose and moving them is a build-system change, not a rewrite — and one that is smaller now that the engine is a shared library. | nothing |
 | 8 | **Script reload without losing play state** | Reload rebuilds instances and carries the reflected fields; what it cannot carry is what a behaviour keeps privately, so it re-runs `onSpawn` instead. That is honest and it is not free — a behaviour halfway through something restarts. Reflecting more, or a `onReload` hook that hands the old instance to the new one, is the way out, and it is worth doing once someone has written enough behaviours to be annoyed by it. | nothing |
 
 ### 10.3 Deliberately not next
@@ -826,6 +828,18 @@ per-batch binds into one multi-draw — but that is a throughput win on a scene
 with far more batches than this one has, and it is not what removes the
 pop-in. Recorded here so the next person to read "indirect draws" does not
 conclude, as this plan once did, that the large change has to come first.
+
+**Outcome.** It landed in exactly this shape, and two details earned their
+keep. The late pass's instance windows sit a whole buffer past the early
+ones, seeded as constants on the CPU — so neither dispatch ever needs the
+other's count, and no fix-up pass exists between them. And the visibility
+history is keyed by draw-list position with no stability guarantee at all,
+because it needs none: a wrong guess draws a real object's depth early or
+defers one to the late pass, which rules on everything against real depth
+either way. The one surprise was old rather than new — two depth passes
+sharing one descriptor set, where the second write invalidated what the
+first had bound, which is the same hazard that shaped the pre-pass's set in
+the first place.
 
 ### 10.7 How to pick up any of these
 

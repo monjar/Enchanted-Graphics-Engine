@@ -70,6 +70,13 @@ namespace ege {
         // once - so it goes through the same lock rather than around it.
         void waitIdle();
 
+        // Whether indirect draw commands may carry a non-zero firstInstance,
+        // which is what lets each batch's command point at its own window of
+        // the instance buffer. Nearly universal, but still a feature - and
+        // GPU-driven culling is switched off entirely on a device without
+        // it, in favour of the direct path.
+        bool supportsIndirectFirstInstance() const { return indirectFirstInstance; }
+
         VkDevice device() const { return device_; }
 
         VkSurfaceKHR surface() { return surface_; }
@@ -193,6 +200,7 @@ namespace ege {
         std::mutex queueMutex;
 
         VkDevice device_;
+        bool indirectFirstInstance = false;
         VmaAllocator vmaAllocator = VK_NULL_HANDLE;
         VkPipelineCache cache = VK_NULL_HANDLE;
         VkSurfaceKHR surface_;

@@ -20,6 +20,7 @@
 #include "render/ClusterLightSystem.hpp"
 #include "render/DynamicMesh.hpp"
 #include "render/EnvironmentLighting.hpp"
+#include "render/GpuCullSystem.hpp"
 #include "render/OcclusionSystem.hpp"
 #include "render/PbrRenderSystem.hpp"
 #include "render/PointShadows.hpp"
@@ -264,11 +265,32 @@ namespace ege {
                 .addBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
                 .build();
 
+        // Whether the occlusion verdict runs on the GPU, which is a question
+        // of one feature: indirect commands carrying their own firstInstance,
+        // without which no batch could point at its own window of the
+        // compacted buffer. Nearly universal - but a device without it keeps
+        // an honest renderer: frustum culling on the CPU and direct draws,
+        // which is the whole engine as it stood before any of this.
+        const bool gpuCulling = device.supportsIndirectFirstInstance();
+        std::unique_ptr<GpuCullSystem> gpuCull;
+        if (gpuCulling) {
+            gpuCull = std::make_unique<GpuCullSystem>(device, SwapChain::MAX_FRAMES_IN_FLIGHT);
+        } else {
+            EGE_WARN(
+                "drawIndirectFirstInstance is not supported; occlusion culling is off "
+                "and draws go out direct");
+        }
+
         std::vector<VkDescriptorSet> globalDescriptorSets(SwapChain::MAX_FRAMES_IN_FLIGHT);
         for (size_t i = 0; i < globalDescriptorSets.size(); i++) {
             auto bufferInfo = uboBuffers[i]->descriptorInfo();
             auto lightInfo = lightBuffers[i]->descriptorInfo();
-            auto instanceInfo = instanceBuffers[i]->descriptorInfo();
+            // What the vertex shaders index: the culling dispatch's compacted
+            // output when the verdict is on the GPU, the CPU-written list
+            // otherwise. Decided once, because the set is written once.
+            auto instanceInfo = gpuCull
+                                    ? gpuCull->instances(static_cast<uint32_t>(i)).descriptorInfo()
+                                    : instanceBuffers[i]->descriptorInfo();
             // The lighting maps are generated once and never change, so they
             // are written alongside the per-frame buffer and left alone.
             auto irradianceInfo = environmentLighting.irradianceInfo();
@@ -331,8 +353,7 @@ namespace ege {
         constexpr VkFormat occlusionFormat = VK_FORMAT_R8_UNORM;
         SsaoSystem ssao{device, occlusionFormat, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
-        // The depth pyramid the draw list is culled against, built from the
-        // frame's own depth and read back a couple of frames later.
+        // Builds the depth pyramid the late culling dispatch rules against.
         OcclusionSystem occlusionCulling{device, SwapChain::MAX_FRAMES_IN_FLIGHT};
 
         // How the sun's cascades are cut. Shadows stop well short of the
@@ -591,13 +612,18 @@ namespace ege {
                 // Render must pair, and a frame skipped for resize renders
                 // no UI either.
                 overlay.beginFrame();
+                // The panel's numbers, merged from where each is actually
+                // counted: candidates and the frustum's rejections on the
+                // CPU, the occlusion verdict on the GPU - a couple of frames
+                // after the fact, which the panel already says.
+                PbrRenderSystem::Stats panelStats = pbrRenderSystem.stats();
+                if (gpuCull) {
+                    const GpuCullStatsData& counted = gpuCull->lastStats();
+                    panelStats.occluded = counted.occluded;
+                    panelStats.drawn = counted.drawnEarly + counted.drawnLate;
+                }
                 EditorOverlay::Context editorContext{
-                    world,
-                    camera,
-                    pbrRenderSystem.stats(),
-                    playMode,
-                    time.rawDelta(),
-                    time.framesPerSecond()};
+                    world, camera, panelStats, playMode, time.rawDelta(), time.framesPerSecond()};
                 overlay.buildUi(editorContext);
 
                 const uint32_t frameIndex = renderer.getFrameIndex();
@@ -775,17 +801,37 @@ namespace ege {
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
-                // Whatever depth pyramid has come back by now, and the camera
-                // this frame is putting into the next one. Read before the
-                // draw list is gathered, because the list is what it decides.
-                occlusionCulling.resize(renderExtent);
-                occlusionCulling.collect(frameIndex, camera.getProjection() * camera.getView());
+                // Which objects are candidates, gathered once for the frame:
+                // every pass that draws draws this list, and they have to
+                // draw the same one.
+                pbrRenderSystem.prepare(frameInfo, *instanceBuffers[frameIndex]);
 
-                // Which objects are visible, gathered once for the frame: the
-                // depth pre-pass and the shading pass both draw this list, and
-                // they have to draw the same one.
-                pbrRenderSystem.prepare(
-                    frameInfo, occlusionCulling.snapshot(), *instanceBuffers[frameIndex]);
+                // Which of the pyramid's levels the late dispatch will rule
+                // against: the chain's coarsest four, finest of them first.
+                // A window small enough to have fewer levels repeats its
+                // coarsest, which only ever means two names for one answer.
+                const uint32_t reductions = OcclusionSystem::reductionSteps(renderExtent);
+                std::array<uint32_t, gpuCullBoundLevels> boundSteps{};
+                std::array<glm::uvec2, gpuCullBoundLevels> boundExtents{};
+                for (uint32_t j = 0; j < gpuCullBoundLevels; j++) {
+                    const uint32_t firstBound =
+                        reductions > gpuCullBoundLevels ? reductions - gpuCullBoundLevels : 0u;
+                    boundSteps[j] = std::min(firstBound + j, reductions - 1u);
+                    const VkExtent2D extent =
+                        OcclusionSystem::stepExtent(renderExtent, boundSteps[j]);
+                    boundExtents[j] = {extent.width, extent.height};
+                }
+
+                if (gpuCull) {
+                    gpuCull->setLevelExtents(boundExtents);
+                    gpuCull->feed(
+                        frameIndex,
+                        pbrRenderSystem.cullFeed().candidates,
+                        pbrRenderSystem.cullFeed().batches,
+                        camera.getView(),
+                        camera.getProjection(),
+                        pbrRenderSystem.occlusionCullingEnabled);
+                }
 
                 // render: declare the frame, then let the graph run it. The
                 // declarations are cheap enough to restate every frame, and
@@ -830,6 +876,14 @@ namespace ege {
                 sceneDepthResolvedDesc.samples = VK_SAMPLE_COUNT_1_BIT;
                 FrameGraphResource sceneDepthResolved =
                     multisampled ? graph.createTransient("sceneDepth1x", sceneDepthResolvedDesc)
+                                 : sceneDepth;
+
+                // What the pyramid is built from: the early depth phase's
+                // resolve when multisampling forces one, the depth buffer
+                // itself otherwise - read mid-frame, between the two depth
+                // phases, which the graph turns into ordinary transitions.
+                FrameGraphResource hzbInput =
+                    multisampled ? graph.createTransient("hzbInput", sceneDepthResolvedDesc)
                                  : sceneDepth;
 
                 // The occlusion estimate and the blur that follows it. Full
@@ -1014,64 +1068,94 @@ namespace ege {
                         });
                 }
 
-                // Depth before colour. Nothing samples what this produces -
-                // the scene pass consumes it by testing EQUAL against it - so
-                // the graph keeps the pass alive on the strength of that later
-                // load rather than on any read.
-                graph.addPass(
-                    "depthPrePass",
-                    [&](FrameGraph::PassBuilder& pass) {
-                        pass.write(sceneDepth, ResourceAccess::depthWrite);
-                        if (multisampled) {
-                            pass.resolve(sceneDepth, sceneDepthResolved);
-                        }
-                    },
-                    [&](VkCommandBuffer cmd, const FrameGraphResources&) {
-                        frameInfo.commandBuffer = cmd;
-                        pbrRenderSystem.renderDepthPrePass(
-                            frameInfo,
-                            uboBuffers[frameIndex]->descriptorInfo(),
-                            instanceBuffers[frameIndex]->descriptorInfo());
-                    });
+                // Depth before colour - in two phases when the verdict runs
+                // on the GPU, one when it does not. The early phase draws
+                // what was visible last frame; the pyramid is built from that
+                // partial depth; the late dispatch rules on every candidate
+                // against it; and the late phase draws whatever it newly
+                // admitted. Together the two phases write the union, which is
+                // exactly what the scene pass tests EQUAL against - and
+                // nothing anywhere waits for a verdict to travel.
+                FrameGraphResource cullCommands{};
+                FrameGraphResource cullInstances{};
+                if (gpuCull) {
+                    ImportedBufferDesc commandsDesc{};
+                    commandsDesc.buffer = gpuCull->commands(frameIndex).getBuffer();
+                    commandsDesc.size = gpuCull->commands(frameIndex).getBufferSize();
+                    // Seeded by the host after this index's fence; the
+                    // submission itself makes host writes visible, so there
+                    // is nothing for the first barrier to chain after.
+                    cullCommands = graph.importBuffer("cullCommands", commandsDesc);
 
-                // The depth pyramid, halved until it is small enough to be
-                // worth copying back. Each level is its own image rather than
-                // a mip of one, which costs a few more passes and saves the
-                // graph having to track a layout per mip - every level here is
-                // written once, read once by the level above it, and gone.
-                //
-                // The last one is not a transient at all: it is an image the
-                // occlusion system owns, imported so that it outlives the
-                // frame that fills it, and left in TRANSFER_SRC_OPTIMAL for
-                // the copy that follows the graph.
-                if (occlusionCulling.enabled &&
-                    occlusionCulling.readbackImage(frameIndex) != VK_NULL_HANDLE) {
-                    const uint32_t reductions = OcclusionSystem::reductionSteps(renderExtent);
+                    ImportedBufferDesc instancesDesc{};
+                    instancesDesc.buffer = gpuCull->instances(frameIndex).getBuffer();
+                    instancesDesc.size = gpuCull->instances(frameIndex).getBufferSize();
+                    cullInstances = graph.importBuffer("cullInstances", instancesDesc);
 
+                    ImportedBufferDesc visibilityDesc{};
+                    visibilityDesc.buffer = gpuCull->visibilityBuffer().getBuffer();
+                    visibilityDesc.size = gpuCull->visibilityBuffer().getBufferSize();
+                    // The one buffer with a past that is not fenced away:
+                    // the previous frame's late dispatch wrote it, and that
+                    // frame may still be in flight.
+                    visibilityDesc.srcStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+                    visibilityDesc.srcAccess = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+                    FrameGraphResource cullVisibility =
+                        graph.importBuffer("cullVisibility", visibilityDesc);
+
+                    ImportedBufferDesc statsDesc{};
+                    statsDesc.buffer = gpuCull->statsBuffer(frameIndex).getBuffer();
+                    statsDesc.size = gpuCull->statsBuffer(frameIndex).getBufferSize();
+                    FrameGraphResource cullStats = graph.importBuffer("cullStats", statsDesc);
+
+                    graph.addPass(
+                        "earlyCull",
+                        [&](FrameGraph::PassBuilder& pass) {
+                            pass.read(cullVisibility, ResourceAccess::computeStorageRead);
+                            pass.write(cullCommands, ResourceAccess::storageWrite);
+                            pass.write(cullInstances, ResourceAccess::storageWrite);
+                        },
+                        [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                            gpuCull->recordEarly(
+                                cmd, frameIndex, instanceBuffers[frameIndex]->descriptorInfo());
+                        });
+
+                    graph.addPass(
+                        "depthEarly",
+                        [&](FrameGraph::PassBuilder& pass) {
+                            pass.read(cullCommands, ResourceAccess::indirectRead);
+                            pass.read(cullInstances, ResourceAccess::vertexRead);
+                            pass.write(sceneDepth, ResourceAccess::depthWrite);
+                            if (multisampled) {
+                                pass.resolve(sceneDepth, hzbInput);
+                            }
+                        },
+                        [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                            frameInfo.commandBuffer = cmd;
+                            pbrRenderSystem.renderDepthIndirect(
+                                frameInfo,
+                                uboBuffers[frameIndex]->descriptorInfo(),
+                                gpuCull->instances(frameIndex).descriptorInfo(),
+                                gpuCull->commands(frameIndex).getBuffer(),
+                                0);
+                        });
+
+                    // The pyramid, halved from the early phase's depth until
+                    // the whole screen is a handful of texels. Each level is
+                    // its own image rather than a mip of one, which costs a
+                    // few more passes and saves the graph a layout per mip.
                     std::vector<FrameGraphResource> pyramidLevels(reductions);
-                    for (uint32_t step = 0; step + 1 < reductions; step++) {
+                    for (uint32_t step = 0; step < reductions; step++) {
                         TransientImageDesc levelDesc{};
                         levelDesc.format = OcclusionSystem::levelFormat;
                         levelDesc.extent = OcclusionSystem::stepExtent(renderExtent, step);
                         pyramidLevels[step] =
                             graph.createTransient("hzb" + std::to_string(step), levelDesc);
                     }
-                    ImportedImageDesc readbackDesc{};
-                    readbackDesc.image = occlusionCulling.readbackImage(frameIndex);
-                    readbackDesc.view = occlusionCulling.readbackView(frameIndex);
-                    readbackDesc.format = OcclusionSystem::levelFormat;
-                    readbackDesc.extent = occlusionCulling.readbackExtent();
-                    // What the previous frame at this index left it doing:
-                    // being copied out of. Its contents are not preserved -
-                    // this frame rewrites the whole level - so it enters as
-                    // UNDEFINED and the transition in may discard.
-                    readbackDesc.srcStage = VK_PIPELINE_STAGE_2_COPY_BIT;
-                    readbackDesc.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                    pyramidLevels[reductions - 1] = graph.importImage("hzbReadback", readbackDesc);
 
                     for (uint32_t step = 0; step < reductions; step++) {
                         const FrameGraphResource source =
-                            step == 0 ? sceneDepthResolved : pyramidLevels[step - 1];
+                            step == 0 ? hzbInput : pyramidLevels[step - 1];
                         const FrameGraphResource target = pyramidLevels[step];
                         const VkExtent2D sourceExtent =
                             step == 0 ? renderExtent
@@ -1089,6 +1173,71 @@ namespace ege {
                                     cmd, frameIndex, step, resolved.view(source), sourceExtent);
                             });
                     }
+
+                    graph.addPass(
+                        "lateCull",
+                        [&](FrameGraph::PassBuilder& pass) {
+                            for (uint32_t j = 0; j < gpuCullBoundLevels; j++) {
+                                pass.read(
+                                    pyramidLevels[boundSteps[j]], ResourceAccess::computeSampled);
+                            }
+                            pass.write(cullCommands, ResourceAccess::storageWrite);
+                            pass.write(cullInstances, ResourceAccess::storageWrite);
+                            pass.write(cullVisibility, ResourceAccess::storageWrite);
+                            pass.write(cullStats, ResourceAccess::storageWrite);
+                        },
+                        [&, pyramidLevels, boundSteps](
+                            VkCommandBuffer cmd, const FrameGraphResources& resolved) {
+                            std::array<VkImageView, gpuCullBoundLevels> levelViews{};
+                            for (uint32_t j = 0; j < gpuCullBoundLevels; j++) {
+                                levelViews[j] = resolved.view(pyramidLevels[boundSteps[j]]);
+                            }
+                            gpuCull->recordLate(
+                                cmd,
+                                frameIndex,
+                                instanceBuffers[frameIndex]->descriptorInfo(),
+                                levelViews);
+                        });
+
+                    graph.addPass(
+                        "depthLate",
+                        [&](FrameGraph::PassBuilder& pass) {
+                            pass.read(cullCommands, ResourceAccess::indirectRead);
+                            pass.read(cullInstances, ResourceAccess::vertexRead);
+                            pass.write(sceneDepth, ResourceAccess::depthWrite);
+                            if (multisampled) {
+                                pass.resolve(sceneDepth, sceneDepthResolved);
+                            }
+                        },
+                        [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                            frameInfo.commandBuffer = cmd;
+                            pbrRenderSystem.renderDepthIndirect(
+                                frameInfo,
+                                uboBuffers[frameIndex]->descriptorInfo(),
+                                gpuCull->instances(frameIndex).descriptorInfo(),
+                                gpuCull->commands(frameIndex).getBuffer(),
+                                gpuCull->batchCount(frameIndex));
+                        });
+                } else {
+                    // Depth in one direct pass. Nothing samples what this
+                    // produces - the scene pass consumes it by testing EQUAL
+                    // against it - so the graph keeps the pass alive on the
+                    // strength of that later load rather than on any read.
+                    graph.addPass(
+                        "depthPrePass",
+                        [&](FrameGraph::PassBuilder& pass) {
+                            pass.write(sceneDepth, ResourceAccess::depthWrite);
+                            if (multisampled) {
+                                pass.resolve(sceneDepth, sceneDepthResolved);
+                            }
+                        },
+                        [&](VkCommandBuffer cmd, const FrameGraphResources&) {
+                            frameInfo.commandBuffer = cmd;
+                            pbrRenderSystem.renderDepthPrePass(
+                                frameInfo,
+                                uboBuffers[frameIndex]->descriptorInfo(),
+                                instanceBuffers[frameIndex]->descriptorInfo());
+                        });
                 }
 
                 // Screen-space occlusion, between the depth and the shading
@@ -1149,6 +1298,10 @@ namespace ege {
                         pass.read(spotShadowMaps, ResourceAccess::sampled);
                         pass.read(clusterList, ResourceAccess::storageRead);
                         pass.read(occlusion, ResourceAccess::sampled);
+                        if (gpuCull) {
+                            pass.read(cullCommands, ResourceAccess::indirectRead);
+                            pass.read(cullInstances, ResourceAccess::vertexRead);
+                        }
                         pass.write(sceneColorMs, ResourceAccess::colorWrite);
                         pass.write(sceneDepth, ResourceAccess::depthWrite);
                         if (multisampled) {
@@ -1198,7 +1351,12 @@ namespace ege {
                             .overwrite(globalDescriptorSets[frameIndex]);
 
                         frameInfo.commandBuffer = cmd;
-                        pbrRenderSystem.render(frameInfo);
+                        if (gpuCull) {
+                            pbrRenderSystem.renderIndirect(
+                                frameInfo, gpuCull->commands(frameIndex).getBuffer());
+                        } else {
+                            pbrRenderSystem.render(frameInfo);
+                        }
                         // After the geometry: the depth test rejects every
                         // covered pixel, so the sky shades only what remains.
                         skybox.render(cmd, frameInfo.globalDescriptorSet);
@@ -1267,9 +1425,6 @@ namespace ege {
 
                 graph.compile();
                 graph.execute(device, commandBuffer);
-                // The pyramid's last level, out to a buffer the frame that
-                // reuses this index will read.
-                occlusionCulling.recordCopy(commandBuffer, frameIndex);
                 if (recorder != nullptr) {
                     recorder->recordCopy(
                         commandBuffer,

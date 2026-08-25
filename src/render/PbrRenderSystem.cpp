@@ -180,8 +180,7 @@ namespace ege {
             std::make_unique<Pipeline>(device, "depth_prepass.vert.spv", "shadow.frag.spv", config);
     }
 
-    void PbrRenderSystem::prepare(
-        FrameInfo& frameInfo, const OcclusionSnapshot& occlusion, Buffer& instanceBuffer) {
+    void PbrRenderSystem::prepare(FrameInfo& frameInfo, Buffer& instanceBuffer) {
         frameStats = Stats{};
         drawList.clear();
         batches.clear();
@@ -226,24 +225,15 @@ namespace ege {
                     item.normalMatrix = glm::mat4{drawn.normalMatrix()};
                 }
 
-                if (cullingEnabled || occlusionCullingEnabled) {
-                    const Aabb worldBounds =
-                        renderer.mesh.get()->bounds().transformed(item.modelMatrix);
+                const Aabb worldBounds =
+                    renderer.mesh.get()->bounds().transformed(item.modelMatrix);
+                // The culling dispatch tests spheres, and the sphere is
+                // cheapest here, where the world box was just built anyway.
+                item.sphere = boundingSphere(worldBounds);
 
-                    if (cullingEnabled && !frustum.intersects(worldBounds)) {
-                        frameStats.culled++;
-                        return;
-                    }
-
-                    // Inside the frustum and still not worth drawing, because
-                    // the last pyramid to come back says something was covering
-                    // every pixel it could have reached. Second, because it is
-                    // the more expensive test and the frustum has already
-                    // thrown out most of what it would have looked at.
-                    if (occlusionCullingEnabled && occlusion.hides(worldBounds)) {
-                        frameStats.occluded++;
-                        return;
-                    }
+                if (cullingEnabled && !frustum.intersects(worldBounds)) {
+                    frameStats.culled++;
+                    return;
                 }
 
                 item.material = renderer.material.get();
@@ -275,6 +265,7 @@ namespace ege {
         }
 
         buildBatches();
+        buildCullFeed();
 
         // Written before anything binds the buffer, and read by both passes.
         // One flush for the whole frame's transforms rather than a push
@@ -291,6 +282,7 @@ namespace ege {
         }
 
         gathered = true;
+        depthSetWritten = false;
     }
 
     void PbrRenderSystem::buildBatches() {
@@ -314,6 +306,157 @@ namespace ege {
             batch.instanceCount = 1;
             batches.push_back(batch);
         }
+    }
+
+    void PbrRenderSystem::buildCullFeed() {
+        feed.candidates.clear();
+        feed.batches.clear();
+        feed.candidates.reserve(drawList.size());
+        feed.batches.reserve(batches.size());
+
+        for (std::size_t b = 0; b < batches.size(); b++) {
+            const Batch& batch = batches[b];
+
+            SeedBatch seed{};
+            seed.drawCount = batch.model->drawCount();
+            seed.firstInstance = batch.firstInstance;
+            seed.indexed = batch.model->indexed();
+            feed.batches.push_back(seed);
+
+            // Every item of the batch, tagged with the batch it belongs to
+            // and where the batch's window begins - the two things the
+            // culling shader needs and must not derive, because the command's
+            // own firstInstance field moves with the draw's layout.
+            for (uint32_t i = 0; i < batch.instanceCount; i++) {
+                GpuCullInput input{};
+                input.sphere = drawList[batch.firstInstance + i].sphere;
+                input.batch = static_cast<uint32_t>(b);
+                input.batchFirst = batch.firstInstance;
+                feed.candidates.push_back(input);
+            }
+        }
+    }
+
+    void PbrRenderSystem::renderDepthIndirect(
+        FrameInfo& frameInfo,
+        const VkDescriptorBufferInfo& globalUbo,
+        const VkDescriptorBufferInfo& instances,
+        VkBuffer commands,
+        uint32_t firstCommandSlot) {
+        EGE_ASSERT(gathered, "prepare must run before an indirect depth pass");
+        EGE_ASSERT(frameInfo.frameIndex < depthDescriptorSets.size(), "frame index out of range");
+        if (batches.empty()) {
+            return;
+        }
+
+        VkDescriptorSet& set = depthDescriptorSets[frameInfo.frameIndex];
+        // Written by whichever depth pass runs first this frame and left
+        // alone by the second: the contents are the same for both, and
+        // updating a set the first pass has bound invalidates the command
+        // buffer.
+        if (!depthSetWritten) {
+            DescriptorWriter(*depthSetLayout, *depthPool)
+                .writeBuffer(0, const_cast<VkDescriptorBufferInfo*>(&globalUbo))
+                .writeBuffer(11, const_cast<VkDescriptorBufferInfo*>(&instances))
+                .overwrite(set);
+            depthSetWritten = true;
+        }
+
+        depthPipeline->bind(frameInfo.commandBuffer);
+        vkCmdBindDescriptorSets(
+            frameInfo.commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            depthPipelineLayout,
+            0,
+            1,
+            &set,
+            0,
+            nullptr);
+
+        // The same walk the direct pass makes, with each draw's instance
+        // count read out of what the culling dispatch wrote rather than out
+        // of the batch. A batch the cull emptied still issues its draw; a
+        // zero-instance draw is the command processor reading five words.
+        for (std::size_t b = 0; b < batches.size(); b++) {
+            const_cast<Model*>(batches[b].model)->bind(frameInfo.commandBuffer);
+            const VkDeviceSize offset =
+                VkDeviceSize{(firstCommandSlot + b) * drawCommandWords} * sizeof(uint32_t);
+            const_cast<Model*>(batches[b].model)
+                ->drawIndirect(frameInfo.commandBuffer, commands, offset);
+        }
+    }
+
+    void PbrRenderSystem::renderIndirect(FrameInfo& frameInfo, VkBuffer commands) {
+        EGE_ASSERT(gathered, "prepare must run before the scene pass");
+
+        pipeline->bind(frameInfo.commandBuffer);
+
+        vkCmdBindDescriptorSets(
+            frameInfo.commandBuffer,
+            VK_PIPELINE_BIND_POINT_GRAPHICS,
+            pipelineLayout,
+            0,
+            1,
+            &frameInfo.globalDescriptorSet,
+            0,
+            nullptr);
+
+        VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
+
+        for (std::size_t b = 0; b < batches.size(); b++) {
+            const Batch& batch = batches[b];
+            if (batch.materialSet != boundMaterial) {
+                vkCmdBindDescriptorSets(
+                    frameInfo.commandBuffer,
+                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pipelineLayout,
+                    1,
+                    1,
+                    &batch.materialSet,
+                    0,
+                    nullptr);
+                boundMaterial = batch.materialSet;
+                frameStats.materialBinds++;
+            }
+
+            const MaterialProperties& properties = batch.material->properties;
+
+            MaterialPush push{};
+            push.baseColorFactor = properties.baseColorFactor;
+            push.emissiveAndMetallic =
+                glm::vec4{properties.emissiveFactor, properties.metallicFactor};
+            push.roughnessNormalOcclusion = glm::vec4{
+                properties.roughnessFactor,
+                properties.normalScale,
+                properties.occlusionStrength,
+                0.f};
+
+            vkCmdPushConstants(
+                frameInfo.commandBuffer,
+                pipelineLayout,
+                VK_SHADER_STAGE_FRAGMENT_BIT,
+                0,
+                sizeof(MaterialPush),
+                &push);
+
+            const_cast<Model*>(batch.model)->bind(frameInfo.commandBuffer);
+
+            // Both command sets: what the early pass drew and what the late
+            // pass admitted. Their union is exactly the frame's visible
+            // list, because the late pass appends only what the early one
+            // did not draw.
+            const VkDeviceSize earlyOffset = VkDeviceSize{b * drawCommandWords} * sizeof(uint32_t);
+            const VkDeviceSize lateOffset =
+                VkDeviceSize{(batches.size() + b) * drawCommandWords} * sizeof(uint32_t);
+            const_cast<Model*>(batch.model)
+                ->drawIndirect(frameInfo.commandBuffer, commands, earlyOffset);
+            const_cast<Model*>(batch.model)
+                ->drawIndirect(frameInfo.commandBuffer, commands, lateOffset);
+
+            frameStats.batches++;
+        }
+
+        gathered = false;
     }
 
     void PbrRenderSystem::renderDepthPrePass(

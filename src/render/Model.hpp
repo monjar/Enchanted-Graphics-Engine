@@ -73,6 +73,19 @@ namespace ege {
         void draw(
             VkCommandBuffer commandBuffer, uint32_t instanceCount = 1, uint32_t firstInstance = 0);
 
+        // The same draw, with its parameters read out of a buffer the GPU
+        // wrote. `commands` must hold a VkDrawIndexedIndirectCommand at
+        // `offset` for an indexed model and a VkDrawIndirectCommand for a
+        // plain one - which of the two is wanted is what indexed() is for.
+        void drawIndirect(VkCommandBuffer commandBuffer, VkBuffer commands, VkDeviceSize offset);
+
+        // What one instance of this model draws - index count when indexed,
+        // vertex count otherwise - which is what an indirect command is
+        // seeded with.
+        uint32_t drawCount() const { return hasIndexBuffer ? indexCount : vertexCount; }
+
+        bool indexed() const { return hasIndexBuffer; }
+
         bool isDynamic() const { return dynamicVertices; }
 
         // Rewrites the vertices of a dynamic model in place, and with them the
