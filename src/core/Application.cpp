@@ -1,5 +1,6 @@
 #include "core/Application.hpp"
 
+#include "anim/AnimationSystem.hpp"
 #include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
 #include "core/DemoTour.hpp"
@@ -219,6 +220,20 @@ namespace ege {
             instanceBuffers[i]->map();
         }
 
+        // The frame's skinning matrices, every animated entity's end to end,
+        // rewritten by the animation system each frame. Per frame in flight
+        // for the same reason the instance buffers are.
+        std::vector<std::unique_ptr<Buffer>> paletteBuffers(SwapChain::MAX_FRAMES_IN_FLIGHT);
+        for (size_t i = 0; i < paletteBuffers.size(); i++) {
+            paletteBuffers[i] = std::make_unique<Buffer>(
+                device,
+                sizeof(glm::mat4),
+                AnimationSystem::paletteCapacity,
+                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+            paletteBuffers[i]->map();
+        }
+
         auto globalSetLayout =
             DescriptorSetLayout::Builder(device)
                 // Compute as well as graphics: the light culling pass binds
@@ -263,6 +278,8 @@ namespace ege {
                     10, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, VK_SHADER_STAGE_FRAGMENT_BIT)
                 // Every drawn object's transform, indexed by the instance.
                 .addBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
+                // The skinning palette the skinned vertex shaders blend.
+                .addBinding(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
                 .build();
 
         // Whether the occlusion verdict runs on the GPU, which is a question
@@ -291,6 +308,7 @@ namespace ege {
             auto instanceInfo = gpuCull
                                     ? gpuCull->instances(static_cast<uint32_t>(i)).descriptorInfo()
                                     : instanceBuffers[i]->descriptorInfo();
+            auto paletteInfo = paletteBuffers[i]->descriptorInfo();
             // The lighting maps are generated once and never change, so they
             // are written alongside the per-frame buffer and left alone.
             auto irradianceInfo = environmentLighting.irradianceInfo();
@@ -305,6 +323,7 @@ namespace ege {
                 .writeImage(4, &environmentInfo)
                 .writeBuffer(6, &lightInfo)
                 .writeBuffer(11, &instanceInfo)
+                .writeBuffer(12, &paletteInfo)
                 .build(globalDescriptorSets[i]);
         }
 
@@ -355,6 +374,10 @@ namespace ege {
 
         // Builds the depth pyramid the late culling dispatch rules against.
         OcclusionSystem occlusionCulling{device, SwapChain::MAX_FRAMES_IN_FLIGHT};
+
+        // Advances every animator and fills the frame's skinning palette.
+        AnimationSystem animation;
+        std::vector<glm::mat4> palette;
 
         // How the sun's cascades are cut. Shadows stop well short of the
         // camera's far plane on purpose: stretching four cascades over a
@@ -801,6 +824,17 @@ namespace ege {
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
 
+                // Animation first: prepare() reads each animator's palette
+                // base, so the poses must land before the list is gathered.
+                // Advancing by frameTime rather than the raw clock keeps a
+                // recording's animation as deterministic as its camera.
+                animation.update(world, frameTime, palette);
+                if (!palette.empty()) {
+                    paletteBuffers[frameIndex]->writeToBuffer(
+                        palette.data(), palette.size() * sizeof(glm::mat4));
+                    paletteBuffers[frameIndex]->flush();
+                }
+
                 // Which objects are candidates, gathered once for the frame:
                 // every pass that draws draws this list, and they have to
                 // draw the same one.
@@ -1136,6 +1170,7 @@ namespace ege {
                                 frameInfo,
                                 uboBuffers[frameIndex]->descriptorInfo(),
                                 gpuCull->instances(frameIndex).descriptorInfo(),
+                                paletteBuffers[frameIndex]->descriptorInfo(),
                                 gpuCull->commands(frameIndex).getBuffer(),
                                 0);
                         });
@@ -1215,6 +1250,7 @@ namespace ege {
                                 frameInfo,
                                 uboBuffers[frameIndex]->descriptorInfo(),
                                 gpuCull->instances(frameIndex).descriptorInfo(),
+                                paletteBuffers[frameIndex]->descriptorInfo(),
                                 gpuCull->commands(frameIndex).getBuffer(),
                                 gpuCull->batchCount(frameIndex));
                         });
@@ -1236,7 +1272,8 @@ namespace ege {
                             pbrRenderSystem.renderDepthPrePass(
                                 frameInfo,
                                 uboBuffers[frameIndex]->descriptorInfo(),
-                                instanceBuffers[frameIndex]->descriptorInfo());
+                                instanceBuffers[frameIndex]->descriptorInfo(),
+                                paletteBuffers[frameIndex]->descriptorInfo());
                         });
                 }
 

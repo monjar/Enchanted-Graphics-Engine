@@ -31,6 +31,12 @@ namespace ege {
         struct Builder {
             std::vector<Vertex> vertices{};
             std::vector<uint32_t> indices{};
+            // Skinning attributes, either empty or exactly as long as
+            // `vertices`. They live in their own vertex stream rather than
+            // inside Vertex, so the rigid majority of meshes pay nothing for
+            // their existence - in memory or in the vertex fetch.
+            std::vector<glm::uvec4> joints{};
+            std::vector<glm::vec4> weights{};
             // Geometry that will be rewritten every frame. The vertex buffer
             // is then host-visible and stays mapped, so an update is a memcpy
             // rather than a staging copy and a queue submission. That is
@@ -86,6 +92,16 @@ namespace ege {
 
         bool indexed() const { return hasIndexBuffer; }
 
+        // Whether this mesh carries joints and weights, and therefore wants
+        // the skinned pipelines. Decided at build, never after.
+        bool skinned() const { return skinBuffer != nullptr; }
+
+        // The vertex layout of the skinning stream: binding 1, so the
+        // skinned pipelines describe both streams and the rigid ones only
+        // the first.
+        static std::vector<VkVertexInputBindingDescription> skinnedBindingDescriptions();
+        static std::vector<VkVertexInputAttributeDescription> skinnedAttributeDescriptions();
+
         bool isDynamic() const { return dynamicVertices; }
 
         // Rewrites the vertices of a dynamic model in place, and with them the
@@ -99,6 +115,8 @@ namespace ege {
         Device& device;
         Aabb localBounds{};
         std::unique_ptr<Buffer> vertexBuffer;
+        // The second stream, present only for skinned meshes.
+        std::unique_ptr<Buffer> skinBuffer;
         uint32_t vertexCount;
         bool dynamicVertices = false;
         bool hasIndexBuffer = false;
@@ -106,6 +124,7 @@ namespace ege {
         uint32_t indexCount;
 
         void createVertexBuffers(const std::vector<Vertex>& vertices, bool dynamic);
+        void createSkinBuffer(const Builder& builder);
         void createIndexBuffers(const std::vector<uint32_t>& indices);
     };
 }  // namespace ege
