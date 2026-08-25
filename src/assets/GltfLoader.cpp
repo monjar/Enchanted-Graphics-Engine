@@ -114,6 +114,34 @@ namespace ege::gltf {
                 }
             }
 
+            // Skinning attributes, when the file carries them. Joint indices
+            // are left in the file's own numbering here; buildSceneData
+            // remaps them into skeleton order once the skins exist, so this
+            // function stays ignorant of rigs.
+            const cgltf_accessor* joints = findAttribute(primitive, cgltf_attribute_type_joints);
+            const cgltf_accessor* weights = findAttribute(primitive, cgltf_attribute_type_weights);
+            if (joints != nullptr && weights != nullptr) {
+                out.joints.resize(vertexCount);
+                out.weights.resize(vertexCount);
+                for (cgltf_size i = 0; i < vertexCount; i++) {
+                    cgltf_uint jointIndices[4] = {0, 0, 0, 0};
+                    cgltf_accessor_read_uint(joints, i, jointIndices, 4);
+                    out.joints[i] = {
+                        jointIndices[0], jointIndices[1], jointIndices[2], jointIndices[3]};
+
+                    float weightValues[4] = {0.f, 0.f, 0.f, 0.f};
+                    cgltf_accessor_read_float(weights, i, weightValues, 4);
+                    glm::vec4 weight{
+                        weightValues[0], weightValues[1], weightValues[2], weightValues[3]};
+                    const float sum = weight.x + weight.y + weight.z + weight.w;
+                    // Renormalised, because quantised weights rarely sum to
+                    // exactly one and a skinned vertex scaled by 0.996 is a
+                    // model that breathes. A vertex bound to nothing binds
+                    // wholly to its first joint instead of to the void.
+                    out.weights[i] = sum > 0.f ? weight / sum : glm::vec4{1.f, 0.f, 0.f, 0.f};
+                }
+            }
+
             if (primitive.indices != nullptr) {
                 out.indices.resize(primitive.indices->count);
                 for (cgltf_size i = 0; i < primitive.indices->count; i++) {
@@ -218,6 +246,193 @@ namespace ege::gltf {
             return Transform::fromMatrix(glm::make_mat4(local));
         }
 
+        // A joint's local rest pose, straight from its node. cgltf fills the
+        // TRS fields with their defaults when the file omits them, so the
+        // only case needing work is a node that gave a whole matrix instead.
+        JointPose poseOf(const cgltf_node& node) {
+            JointPose pose{};
+            if (node.has_matrix) {
+                const glm::mat4 matrix = glm::make_mat4(node.matrix);
+                pose.translation = glm::vec3{matrix[3]};
+                pose.scale = {
+                    glm::length(glm::vec3{matrix[0]}),
+                    glm::length(glm::vec3{matrix[1]}),
+                    glm::length(glm::vec3{matrix[2]})};
+                glm::mat3 rotation{matrix};
+                rotation[0] /= pose.scale.x;
+                rotation[1] /= pose.scale.y;
+                rotation[2] /= pose.scale.z;
+                pose.rotation = glm::normalize(glm::quat_cast(rotation));
+                return pose;
+            }
+            pose.translation = glm::make_vec3(node.translation);
+            // glTF stores quaternions xyzw; glm constructs wxyz.
+            pose.rotation =
+                glm::quat{node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]};
+            pose.scale = glm::make_vec3(node.scale);
+            return pose;
+        }
+
+        // One rig out of one glTF skin, with the joints reordered so parents
+        // precede children - the invariant every pass in AnimationSampling
+        // sweeps forward on, and one glTF never promises. `placedByNode`
+        // comes back mapping each joint's node to its skeleton index, which
+        // is what animation channels and vertex indices are remapped by.
+        GltfSkinData readSkin(
+            const cgltf_data& data,
+            const cgltf_skin& skin,
+            std::unordered_map<const cgltf_node*, uint32_t>& placedByNode) {
+            GltfSkinData out{};
+            out.name = skin.name != nullptr ? skin.name : "skin";
+
+            // Which nodes are joints of this skin, by file order.
+            std::unordered_map<const cgltf_node*, cgltf_size> fileOrder;
+            for (cgltf_size j = 0; j < skin.joints_count; j++) {
+                fileOrder.emplace(skin.joints[j], j);
+            }
+
+            // Each joint's parent *joint*: the nearest ancestor node that is
+            // also a joint. Plain node parents in between - a rig grouped
+            // under helper nodes - fold away here, which is the honest
+            // reading: the pose hierarchy is the joints', not the file's.
+            auto parentJointOf = [&](const cgltf_node* node) -> const cgltf_node* {
+                for (const cgltf_node* up = node->parent; up != nullptr; up = up->parent) {
+                    if (fileOrder.count(up) != 0) {
+                        return up;
+                    }
+                }
+                return nullptr;
+            };
+
+            // Place parents before children: sweep until everything whose
+            // parent is placed has been, which for any true hierarchy takes
+            // at most one pass per depth level. A file whose joints cycle
+            // never finishes, and is refused rather than looped on.
+            std::vector<const cgltf_node*> placed;
+            placed.reserve(skin.joints_count);
+            while (placed.size() < skin.joints_count) {
+                const std::size_t before = placed.size();
+                for (cgltf_size j = 0; j < skin.joints_count; j++) {
+                    const cgltf_node* node = skin.joints[j];
+                    if (placedByNode.count(node) != 0) {
+                        continue;
+                    }
+                    const cgltf_node* parent = parentJointOf(node);
+                    if (parent == nullptr || placedByNode.count(parent) != 0) {
+                        placedByNode.emplace(node, static_cast<uint32_t>(placed.size()));
+                        placed.push_back(node);
+                    }
+                }
+                if (placed.size() == before) {
+                    throw std::runtime_error{"glTF import failed: a skin's joints form a cycle"};
+                }
+            }
+
+            out.skeleton.joints.resize(skin.joints_count);
+            out.jointNodes.resize(skin.joints_count);
+            for (std::size_t j = 0; j < placed.size(); j++) {
+                const cgltf_node* node = placed[j];
+                Joint& joint = out.skeleton.joints[j];
+                joint.name = node->name != nullptr ? node->name : "joint";
+                joint.rest = poseOf(*node);
+                const cgltf_node* parent = parentJointOf(node);
+                joint.parent = parent == nullptr ? -1 : static_cast<int>(placedByNode.at(parent));
+                // The accessor holds the matrices in the file's joint order;
+                // this joint moved, its matrix comes along.
+                if (skin.inverse_bind_matrices != nullptr) {
+                    float matrix[16];
+                    cgltf_accessor_read_float(
+                        skin.inverse_bind_matrices, fileOrder.at(node), matrix, 16);
+                    joint.inverseBind = glm::make_mat4(matrix);
+                }
+                out.jointNodes[j] = static_cast<int>(node - data.nodes);
+            }
+            return out;
+        }
+
+        // Every animation in the file, resolved against one rig. Channels
+        // that target nodes outside it - camera moves, prop animations - are
+        // counted and skipped rather than guessed at.
+        std::vector<AnimationClip> readClips(
+            const cgltf_data& data,
+            const std::unordered_map<const cgltf_node*, uint32_t>& placedByNode) {
+            std::vector<AnimationClip> clips;
+            clips.reserve(data.animations_count);
+
+            for (cgltf_size a = 0; a < data.animations_count; a++) {
+                const cgltf_animation& animation = data.animations[a];
+                AnimationClip clip{};
+                clip.name = animation.name != nullptr ? animation.name : "clip" + std::to_string(a);
+
+                std::size_t skipped = 0;
+                for (cgltf_size c = 0; c < animation.channels_count; c++) {
+                    const cgltf_animation_channel& source = animation.channels[c];
+                    const auto joint = source.target_node != nullptr
+                                           ? placedByNode.find(source.target_node)
+                                           : placedByNode.end();
+                    if (joint == placedByNode.end() ||
+                        source.target_path == cgltf_animation_path_type_weights) {
+                        skipped++;
+                        continue;
+                    }
+                    if (source.sampler->interpolation == cgltf_interpolation_type_cubic_spline) {
+                        // Supportable, but not silently half-supported:
+                        // reading only the values of a cubic sampler plays
+                        // the clip with the wrong easing everywhere.
+                        EGE_WARN(
+                            "glTF: clip '{}' uses CUBICSPLINE, which is not supported; "
+                            "skipping the channel",
+                            clip.name);
+                        skipped++;
+                        continue;
+                    }
+
+                    AnimationChannel channel{};
+                    channel.joint = joint->second;
+                    channel.stepped =
+                        source.sampler->interpolation == cgltf_interpolation_type_step;
+                    switch (source.target_path) {
+                        case cgltf_animation_path_type_translation:
+                            channel.path = AnimationPath::translation;
+                            break;
+                        case cgltf_animation_path_type_rotation:
+                            channel.path = AnimationPath::rotation;
+                            break;
+                        default:
+                            channel.path = AnimationPath::scale;
+                            break;
+                    }
+
+                    const cgltf_accessor* input = source.sampler->input;
+                    const cgltf_accessor* output = source.sampler->output;
+                    channel.times.resize(input->count);
+                    channel.values.resize(output->count);
+                    for (cgltf_size k = 0; k < input->count; k++) {
+                        cgltf_accessor_read_float(input, k, &channel.times[k], 1);
+                    }
+                    const cgltf_size components = channel.path == AnimationPath::rotation ? 4 : 3;
+                    for (cgltf_size k = 0; k < output->count; k++) {
+                        float value[4] = {0.f, 0.f, 0.f, 0.f};
+                        cgltf_accessor_read_float(output, k, value, components);
+                        channel.values[k] = glm::make_vec4(value);
+                    }
+                    if (!channel.times.empty()) {
+                        clip.duration = std::max(clip.duration, channel.times.back());
+                    }
+                    clip.channels.push_back(std::move(channel));
+                }
+
+                if (skipped != 0) {
+                    EGE_WARN(
+                        "glTF: clip '{}' skipped {} channel(s) that do not target the rig",
+                        clip.name,
+                        skipped);
+                }
+                clips.push_back(std::move(clip));
+            }
+            return clips;
+        }
+
         GltfSceneData buildSceneData(
             const cgltf_options& options, const cgltf_data& data, const std::string& baseDir) {
             GltfSceneData scene{};
@@ -318,10 +533,51 @@ namespace ege::gltf {
                 node.transform = toTransform(source);
                 node.mesh =
                     source.mesh != nullptr ? static_cast<int>(source.mesh - data.meshes) : -1;
+                node.skin =
+                    source.skin != nullptr ? static_cast<int>(source.skin - data.skins) : -1;
                 for (cgltf_size c = 0; c < source.children_count; c++) {
                     node.children.push_back(static_cast<uint32_t>(source.children[c] - data.nodes));
                 }
                 scene.nodes.push_back(std::move(node));
+            }
+
+            // Rigs and their clips. The first skin is the one clips resolve
+            // against and vertex joints remap to; a second skin in one file
+            // is rare enough to wait for a caller, and is said aloud rather
+            // than half-imported.
+            if (data.skins_count > 0) {
+                std::unordered_map<const cgltf_node*, uint32_t> placedByNode;
+                scene.skins.push_back(readSkin(data, data.skins[0], placedByNode));
+                if (data.skins_count > 1) {
+                    EGE_WARN(
+                        "glTF: {} skins in one file; only the first is imported", data.skins_count);
+                }
+                scene.clips = readClips(data, placedByNode);
+
+                // Vertex joint indices point into the skin's own ordering;
+                // remap them into skeleton order so nothing downstream ever
+                // meets both. Only meshes a skinned node draws - a shared
+                // mesh drawn rigid elsewhere keeps its numbers, and a rigid
+                // draw never reads them.
+                std::vector<uint32_t> fileToSkeleton(data.skins[0].joints_count, 0);
+                for (cgltf_size j = 0; j < data.skins[0].joints_count; j++) {
+                    fileToSkeleton[j] = placedByNode.at(data.skins[0].joints[j]);
+                }
+                for (GltfNodeData& node : scene.nodes) {
+                    if (node.skin != 0 || node.mesh < 0) {
+                        continue;
+                    }
+                    for (GltfPrimitiveData& primitive :
+                         scene.meshes[static_cast<size_t>(node.mesh)].primitives) {
+                        for (glm::uvec4& joints : primitive.joints) {
+                            for (int lane = 0; lane < 4; lane++) {
+                                if (joints[lane] < fileToSkeleton.size()) {
+                                    joints[lane] = fileToSkeleton[joints[lane]];
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Roots come from the default scene when one is declared, and
