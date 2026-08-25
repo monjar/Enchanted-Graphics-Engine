@@ -1,5 +1,6 @@
 #include "render/PbrRenderSystem.hpp"
 
+#include "anim/SkeletalAnimator.hpp"
 #include "core/Assert.hpp"
 #include "core/Log.hpp"
 #include "scene/Components.hpp"
@@ -25,6 +26,11 @@ namespace ege {
         // object, fits with room to spare, and is read by the fragment stage
         // alone.
         //
+        // Where the skinned vertex stage's palette base lives in the push
+        // range. Mirrors the offset in shaders/skinning.glsl; past the
+        // material block, inside the 128 bytes every device guarantees.
+        constexpr uint32_t skinPushOffset = 64;
+
         // Mirrors the push block in shaders/material_push.glsl.
         struct MaterialPush {
             glm::vec4 baseColorFactor{1.f};
@@ -60,12 +66,19 @@ namespace ege {
         // happens to offer.
         static_assert(sizeof(MaterialPush) <= 128, "push constants exceed the guaranteed minimum");
 
-        VkPushConstantRange pushConstantRange{};
-        // The vertex stage reads none of this: its transform comes from the
-        // instance buffer, which is what makes a batch of objects one draw.
-        pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-        pushConstantRange.offset = 0;
-        pushConstantRange.size = sizeof(MaterialPush);
+        // Two ranges in one layout the rigid and skinned pipelines share:
+        // the material block for the fragment stage, and the palette base
+        // for the vertex stage of the skinned shaders - which the rigid
+        // shaders simply never declare, and a shader need not use every
+        // range its layout offers. Sharing the layout is what lets a batch
+        // walk switch pipelines without disturbing a single bound set.
+        std::array<VkPushConstantRange, 2> pushRanges{};
+        pushRanges[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        pushRanges[0].offset = 0;
+        pushRanges[0].size = sizeof(MaterialPush);
+        pushRanges[1].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        pushRanges[1].offset = skinPushOffset;
+        pushRanges[1].size = sizeof(uint32_t);
 
         // Set 0 is per frame, set 1 is per material. Ordered by update
         // frequency so that binding a material does not invalidate the global
@@ -76,8 +89,8 @@ namespace ege {
         pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
         pipelineLayoutInfo.pSetLayouts = setLayouts.data();
-        pipelineLayoutInfo.pushConstantRangeCount = 1;
-        pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
+        pipelineLayoutInfo.pushConstantRangeCount = static_cast<uint32_t>(pushRanges.size());
+        pipelineLayoutInfo.pPushConstantRanges = pushRanges.data();
 
         if (vkCreatePipelineLayout(
                 device.device(), &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
@@ -112,6 +125,13 @@ namespace ege {
 
         pipeline =
             std::make_unique<Pipeline>(device, "pbr.vert.spv", "pbr.frag.spv", pipelineConfig);
+
+        // The skinned twin: same state, same fragment shader, one more
+        // vertex stream and the palette ahead of the model transform.
+        pipelineConfig.bindingDescriptions = Model::skinnedBindingDescriptions();
+        pipelineConfig.attributeDescriptions = Model::skinnedAttributeDescriptions();
+        skinnedPipeline = std::make_unique<Pipeline>(
+            device, "pbr_skinned.vert.spv", "pbr.frag.spv", pipelineConfig);
     }
 
     void PbrRenderSystem::createDepthPipeline(
@@ -124,12 +144,15 @@ namespace ege {
             DescriptorSetLayout::Builder(device)
                 .addBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
                 .addBinding(11, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
+                // The skinning palette, on the number the global set uses
+                // for it, so the skinned vertex shaders declare it once.
+                .addBinding(12, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_VERTEX_BIT)
                 .build();
 
         depthPool = DescriptorPool::Builder(device)
                         .setMaxSets(framesInFlight)
                         .addPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, framesInFlight)
-                        .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, framesInFlight)
+                        .addPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, framesInFlight * 2)
                         .build();
 
         depthDescriptorSets.resize(framesInFlight);
@@ -139,14 +162,22 @@ namespace ege {
             }
         }
 
-        // No push constants at all. Everything the pre-pass needs to place a
-        // vertex is in the two buffers above, which is what lets its whole
-        // draw list go out as one bind and a run of instanced draws.
+        // One push range, for the skinned pipeline's palette base; the rigid
+        // pre-pass still pushes nothing and reads everything from the two
+        // buffers, which is what lets its whole list go out as one bind and
+        // a run of instanced draws.
+        VkPushConstantRange skinRange{};
+        skinRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        skinRange.offset = skinPushOffset;
+        skinRange.size = sizeof(uint32_t);
+
         const VkDescriptorSetLayout rawLayout = depthSetLayout->getDescriptorSetLayout();
         VkPipelineLayoutCreateInfo layoutInfo{};
         layoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
         layoutInfo.setLayoutCount = 1;
         layoutInfo.pSetLayouts = &rawLayout;
+        layoutInfo.pushConstantRangeCount = 1;
+        layoutInfo.pPushConstantRanges = &skinRange;
 
         if (vkCreatePipelineLayout(device.device(), &layoutInfo, nullptr, &depthPipelineLayout) !=
             VK_SUCCESS) {
@@ -178,6 +209,15 @@ namespace ege {
         // offset at all would make every EQUAL test fail.
         depthPipeline =
             std::make_unique<Pipeline>(device, "depth_prepass.vert.spv", "shadow.frag.spv", config);
+
+        // The skinned twin: both streams bound, but only what decides depth
+        // declared - position, joints, weights.
+        config.bindingDescriptions = Model::skinnedBindingDescriptions();
+        config.attributeDescriptions = Model::skinnedAttributeDescriptions();
+        config.attributeDescriptions.erase(
+            config.attributeDescriptions.begin() + 1, config.attributeDescriptions.begin() + 4);
+        skinnedDepthPipeline = std::make_unique<Pipeline>(
+            device, "depth_prepass_skinned.vert.spv", "shadow.frag.spv", config);
     }
 
     void PbrRenderSystem::prepare(FrameInfo& frameInfo, Buffer& instanceBuffer) {
@@ -231,6 +271,25 @@ namespace ege {
                 // cheapest here, where the world box was just built anyway.
                 item.sphere = boundingSphere(worldBounds);
 
+                if (renderer.mesh.get()->skinned()) {
+                    if (const auto* animator =
+                            frameInfo.world.find<SkeletalAnimator>(entity.id())) {
+                        item.skinned = true;
+                        item.paletteBase = animator->paletteBase;
+                        // The bounds are the rest pose's, and animation moves
+                        // vertices past them - a raised arm leaves the box it
+                        // was modelled in. Growing the sphere by half keeps
+                        // the culling honest for any pose a joint chain of
+                        // this kind reaches; a rig that flings geometry
+                        // further than that needs authored bounds, which is
+                        // a v0.5 row of its own if an asset ever wants it.
+                        item.sphere.w *= 1.5f;
+                    }
+                    // A skinned mesh with no animator draws in bind pose
+                    // through the rigid path, which is exactly what a rig
+                    // whose animator was removed should look like.
+                }
+
                 if (cullingEnabled && !frustum.intersects(worldBounds)) {
                     frameStats.culled++;
                     return;
@@ -247,6 +306,11 @@ namespace ege {
         // group objects that share one - so without this a scene alternating
         // between two materials rebinds on every single object.
         std::sort(drawList.begin(), drawList.end(), [](const DrawItem& a, const DrawItem& b) {
+            // Skinned draws gather at the end, so each pass switches
+            // pipeline at most once per direction rather than per entity.
+            if (a.skinned != b.skinned) {
+                return b.skinned;
+            }
             if (a.material != b.material) {
                 return a.material < b.material;
             }
@@ -292,8 +356,10 @@ namespace ege {
         // sweep turns runs of them into instanced draws.
         for (std::size_t i = 0; i < drawList.size(); i++) {
             const DrawItem& item = drawList[i];
-            if (!batches.empty() && batches.back().material == item.material &&
-                batches.back().model == item.model) {
+            // A skinned batch is one entity's palette run and never merges;
+            // two characters sharing a mesh still deform apart.
+            if (!batches.empty() && !item.skinned && !batches.back().skinned &&
+                batches.back().material == item.material && batches.back().model == item.model) {
                 batches.back().instanceCount++;
                 continue;
             }
@@ -304,6 +370,8 @@ namespace ege {
             batch.model = item.model;
             batch.firstInstance = static_cast<uint32_t>(i);
             batch.instanceCount = 1;
+            batch.skinned = item.skinned;
+            batch.paletteBase = item.paletteBase;
             batches.push_back(batch);
         }
     }
@@ -341,6 +409,7 @@ namespace ege {
         FrameInfo& frameInfo,
         const VkDescriptorBufferInfo& globalUbo,
         const VkDescriptorBufferInfo& instances,
+        const VkDescriptorBufferInfo& palette,
         VkBuffer commands,
         uint32_t firstCommandSlot) {
         EGE_ASSERT(gathered, "prepare must run before an indirect depth pass");
@@ -358,6 +427,7 @@ namespace ege {
             DescriptorWriter(*depthSetLayout, *depthPool)
                 .writeBuffer(0, const_cast<VkDescriptorBufferInfo*>(&globalUbo))
                 .writeBuffer(11, const_cast<VkDescriptorBufferInfo*>(&instances))
+                .writeBuffer(12, const_cast<VkDescriptorBufferInfo*>(&palette))
                 .overwrite(set);
             depthSetWritten = true;
         }
@@ -377,7 +447,23 @@ namespace ege {
         // count read out of what the culling dispatch wrote rather than out
         // of the batch. A batch the cull emptied still issues its draw; a
         // zero-instance draw is the command processor reading five words.
+        // Skinned batches sit sorted at the end, so the pipeline switches
+        // once and the bound set survives it - the layouts match.
+        bool skinnedBound = false;
         for (std::size_t b = 0; b < batches.size(); b++) {
+            if (batches[b].skinned && !skinnedBound) {
+                skinnedDepthPipeline->bind(frameInfo.commandBuffer);
+                skinnedBound = true;
+            }
+            if (batches[b].skinned) {
+                vkCmdPushConstants(
+                    frameInfo.commandBuffer,
+                    depthPipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT,
+                    skinPushOffset,
+                    sizeof(uint32_t),
+                    &batches[b].paletteBase);
+            }
             const_cast<Model*>(batches[b].model)->bind(frameInfo.commandBuffer);
             const VkDeviceSize offset =
                 VkDeviceSize{(firstCommandSlot + b) * drawCommandWords} * sizeof(uint32_t);
@@ -402,9 +488,14 @@ namespace ege {
             nullptr);
 
         VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
+        bool skinnedBound = false;
 
         for (std::size_t b = 0; b < batches.size(); b++) {
             const Batch& batch = batches[b];
+            if (batch.skinned && !skinnedBound) {
+                skinnedPipeline->bind(frameInfo.commandBuffer);
+                skinnedBound = true;
+            }
             if (batch.materialSet != boundMaterial) {
                 vkCmdBindDescriptorSets(
                     frameInfo.commandBuffer,
@@ -438,6 +529,15 @@ namespace ege {
                 0,
                 sizeof(MaterialPush),
                 &push);
+            if (batch.skinned) {
+                vkCmdPushConstants(
+                    frameInfo.commandBuffer,
+                    pipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT,
+                    skinPushOffset,
+                    sizeof(uint32_t),
+                    &batch.paletteBase);
+            }
 
             const_cast<Model*>(batch.model)->bind(frameInfo.commandBuffer);
 
@@ -462,7 +562,8 @@ namespace ege {
     void PbrRenderSystem::renderDepthPrePass(
         FrameInfo& frameInfo,
         const VkDescriptorBufferInfo& globalUbo,
-        const VkDescriptorBufferInfo& instances) {
+        const VkDescriptorBufferInfo& instances,
+        const VkDescriptorBufferInfo& palette) {
         EGE_ASSERT(gathered, "prepare must run before the depth pre-pass");
         EGE_ASSERT(frameInfo.frameIndex < depthDescriptorSets.size(), "frame index out of range");
 
@@ -472,6 +573,7 @@ namespace ege {
         DescriptorWriter(*depthSetLayout, *depthPool)
             .writeBuffer(0, const_cast<VkDescriptorBufferInfo*>(&globalUbo))
             .writeBuffer(11, const_cast<VkDescriptorBufferInfo*>(&instances))
+            .writeBuffer(12, const_cast<VkDescriptorBufferInfo*>(&palette))
             .overwrite(set);
 
         depthPipeline->bind(frameInfo.commandBuffer);
@@ -486,12 +588,27 @@ namespace ege {
             0,
             nullptr);
 
-        // One pipeline, one descriptor set, nothing per draw but the mesh:
-        // the pre-pass reads no textures and no push constants, so what it
-        // costs is a vertex buffer bind and a draw per batch. The batches are
-        // the same ones the shading pass walks, in the same order, which is
-        // what keeps the two passes agreeing about which instance is which.
+        // One descriptor set, nothing per rigid draw but the mesh: the
+        // pre-pass reads no textures, so what a batch costs is a vertex
+        // buffer bind and a draw. The batches are the same ones the shading
+        // pass walks, in the same order, which is what keeps the two passes
+        // agreeing about which instance is which; the skinned ones sit at
+        // the end and switch pipeline once.
+        bool skinnedBound = false;
         for (const Batch& batch : batches) {
+            if (batch.skinned && !skinnedBound) {
+                skinnedDepthPipeline->bind(frameInfo.commandBuffer);
+                skinnedBound = true;
+            }
+            if (batch.skinned) {
+                vkCmdPushConstants(
+                    frameInfo.commandBuffer,
+                    depthPipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT,
+                    skinPushOffset,
+                    sizeof(uint32_t),
+                    &batch.paletteBase);
+            }
             const_cast<Model*>(batch.model)->bind(frameInfo.commandBuffer);
             const_cast<Model*>(batch.model)
                 ->draw(frameInfo.commandBuffer, batch.instanceCount, batch.firstInstance);
@@ -514,8 +631,16 @@ namespace ege {
             nullptr);
 
         VkDescriptorSet boundMaterial = VK_NULL_HANDLE;
+        bool skinnedBound = false;
 
         for (const Batch& batch : batches) {
+            if (batch.skinned && !skinnedBound) {
+                // The layouts match, so the sets bound above survive the
+                // switch; only the pipeline changes, once, because the sort
+                // gathered the skinned batches at the end.
+                skinnedPipeline->bind(frameInfo.commandBuffer);
+                skinnedBound = true;
+            }
             if (batch.materialSet != boundMaterial) {
                 vkCmdBindDescriptorSets(
                     frameInfo.commandBuffer,
@@ -549,6 +674,15 @@ namespace ege {
                 0,
                 sizeof(MaterialPush),
                 &push);
+            if (batch.skinned) {
+                vkCmdPushConstants(
+                    frameInfo.commandBuffer,
+                    pipelineLayout,
+                    VK_SHADER_STAGE_VERTEX_BIT,
+                    skinPushOffset,
+                    sizeof(uint32_t),
+                    &batch.paletteBase);
+            }
 
             const_cast<Model*>(batch.model)->bind(frameInfo.commandBuffer);
             const_cast<Model*>(batch.model)

@@ -1,5 +1,6 @@
 #include "assets/GltfLoader.hpp"
 
+#include "anim/SkeletalAnimator.hpp"
 #include "assets/AssetDatabase.hpp"
 #include "core/Log.hpp"
 #include "scene/Hierarchy.hpp"
@@ -707,6 +708,8 @@ namespace ege::gltf {
                 Model::Builder builder{};
                 builder.vertices = primitive.vertices;
                 builder.indices = primitive.indices;
+                builder.joints = primitive.joints;
+                builder.weights = primitive.weights;
                 auto model = std::make_shared<Model>(device, builder);
 
                 const Guid id = database.addMesh(
@@ -757,12 +760,31 @@ namespace ege::gltf {
 
         // Nodes spawn depth-first; a node with several primitives fans them
         // out as children so each keeps its own material.
+        // One rig for the whole import, shared by every entity that skins
+        // against it - which is what lets two instances of one character
+        // hold different poses over the same clips.
+        std::shared_ptr<AnimationRig> rig;
+        if (!scene.skins.empty()) {
+            rig = std::make_shared<AnimationRig>();
+            rig->skeleton = scene.skins[0].skeleton;
+            rig->clips = scene.clips;
+        }
+
         std::function<void(uint32_t, Entity)> spawnNode = [&](uint32_t nodeIndex, Entity parent) {
             const GltfNodeData& node = scene.nodes[nodeIndex];
             Entity entity = world.spawn(node.name);
             entity.attach<Transform>(node.transform);
             hierarchy::setParent(world, entity.id(), parent.id());
             stats.entities++;
+
+            // A skinned node arrives already animating: an import that has
+            // to be wired up before it moves is an import that ships in
+            // bind pose to everyone who does not know the wiring.
+            if (node.skin == 0 && rig != nullptr && !rig->clips.empty()) {
+                SkeletalAnimator animator{};
+                animator.rig = rig;
+                entity.attach<SkeletalAnimator>(std::move(animator));
+            }
 
             if (node.mesh >= 0) {
                 const auto meshIndex = static_cast<size_t>(node.mesh);

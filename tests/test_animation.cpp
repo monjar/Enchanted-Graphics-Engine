@@ -361,3 +361,109 @@ TEST_CASE("vertex joints arrive remapped and weights renormalised") {
     CHECK(primitive.weights[2].x == doctest::Approx(0.5f));
     CHECK(primitive.weights[2].y == doctest::Approx(0.5f));
 }
+
+// ---------------------------------------------------------------------------
+// The system that fills the palette.
+// ---------------------------------------------------------------------------
+
+#include "anim/AnimationSystem.hpp"
+#include "anim/SkeletalAnimator.hpp"
+#include "scene/World.hpp"
+
+namespace {
+
+    std::shared_ptr<ege::AnimationRig> chainRig() {
+        auto rig = std::make_shared<ege::AnimationRig>();
+        rig->skeleton = chainSkeleton();
+        rig->clips.push_back(slideClip());
+        return rig;
+    }
+
+}  // namespace
+
+TEST_CASE("the animation system packs palettes end to end") {
+    ege::World world;
+    ege::AnimationSystem system;
+
+    ege::Entity first = world.spawn("first");
+    ege::SkeletalAnimator animatorA{};
+    animatorA.rig = chainRig();
+    first.attach<ege::SkeletalAnimator>(std::move(animatorA));
+
+    ege::Entity second = world.spawn("second");
+    ege::SkeletalAnimator animatorB{};
+    animatorB.rig = chainRig();
+    second.attach<ege::SkeletalAnimator>(std::move(animatorB));
+
+    std::vector<glm::mat4> palette;
+    system.update(world, 0.f, palette);
+
+    // Two rigs of two joints: four matrices, each animator knowing where
+    // its run begins.
+    REQUIRE(palette.size() == 4);
+    const auto& a = first.fetch<ege::SkeletalAnimator>();
+    const auto& b = second.fetch<ege::SkeletalAnimator>();
+    CHECK(
+        ((a.paletteBase == 0 && b.paletteBase == 2) || (a.paletteBase == 2 && b.paletteBase == 0)));
+}
+
+TEST_CASE("palette matrices are the skinning matrices the arithmetic defines") {
+    ege::World world;
+    ege::AnimationSystem system;
+
+    ege::Entity entity = world.spawn("waver");
+    ege::SkeletalAnimator animator{};
+    animator.rig = chainRig();
+    animator.time = 1.f;
+    animator.playing = false;
+    entity.attach<ege::SkeletalAnimator>(std::move(animator));
+
+    std::vector<glm::mat4> palette;
+    system.update(world, 0.f, palette);
+
+    // The same numbers, computed by hand through the tested functions.
+    std::vector<JointPose> pose;
+    ege::samplePose(chainRig()->skeleton, chainRig()->clips[0], 1.f, true, pose);
+    std::vector<glm::mat4> globals;
+    ege::globalTransforms(chainRig()->skeleton, pose, globals);
+    std::vector<glm::mat4> expected;
+    ege::skinningMatrices(chainRig()->skeleton, globals, expected);
+
+    REQUIRE(palette.size() == expected.size());
+    for (std::size_t m = 0; m < expected.size(); m++) {
+        for (int c = 0; c < 4; c++) {
+            for (int r = 0; r < 4; r++) {
+                CHECK(palette[m][c][r] == doctest::Approx(expected[m][c][r]));
+            }
+        }
+    }
+}
+
+TEST_CASE("time advances only while playing, scaled by speed") {
+    ege::World world;
+    ege::AnimationSystem system;
+
+    ege::Entity entity = world.spawn("waver");
+    ege::SkeletalAnimator animator{};
+    animator.rig = chainRig();
+    animator.speed = 2.f;
+    entity.attach<ege::SkeletalAnimator>(std::move(animator));
+
+    std::vector<glm::mat4> palette;
+    system.update(world, 0.25f, palette);
+    CHECK(entity.fetch<ege::SkeletalAnimator>().time == doctest::Approx(0.5f));
+
+    entity.fetch<ege::SkeletalAnimator>().playing = false;
+    system.update(world, 0.25f, palette);
+    CHECK(entity.fetch<ege::SkeletalAnimator>().time == doctest::Approx(0.5f));
+}
+
+TEST_CASE("an animator without a rig writes nothing and breaks nothing") {
+    ege::World world;
+    ege::AnimationSystem system;
+    world.spawn("bare").attach<ege::SkeletalAnimator>();
+
+    std::vector<glm::mat4> palette;
+    system.update(world, 0.1f, palette);
+    CHECK(palette.empty());
+}

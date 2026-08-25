@@ -80,7 +80,8 @@ namespace ege {
         void renderDepthPrePass(
             FrameInfo& frameInfo,
             const VkDescriptorBufferInfo& globalUbo,
-            const VkDescriptorBufferInfo& instances);
+            const VkDescriptorBufferInfo& instances,
+            const VkDescriptorBufferInfo& palette);
 
         void render(FrameInfo& frameInfo);
 
@@ -106,6 +107,7 @@ namespace ege {
             FrameInfo& frameInfo,
             const VkDescriptorBufferInfo& globalUbo,
             const VkDescriptorBufferInfo& instances,
+            const VkDescriptorBufferInfo& palette,
             VkBuffer commands,
             uint32_t firstCommandSlot);
 
@@ -166,6 +168,10 @@ namespace ege {
             glm::mat4 normalMatrix{1.f};
             // The world-space bounding sphere the culling dispatch tests.
             glm::vec4 sphere{0.f};
+            // Skinned draws go through their own pipelines and carry where
+            // their matrices start in the frame's palette.
+            bool skinned = false;
+            uint32_t paletteBase = 0;
         };
 
         // A run of consecutive draw items sharing a mesh and a material, which
@@ -178,6 +184,10 @@ namespace ege {
             const Model* model = nullptr;
             uint32_t firstInstance = 0;
             uint32_t instanceCount = 0;
+            // Skinned batches never merge: a batch is one entity's palette
+            // run, and two characters sharing a mesh still deform apart.
+            bool skinned = false;
+            uint32_t paletteBase = 0;
         };
 
         void buildBatches();
@@ -198,6 +208,11 @@ namespace ege {
         bool depthSetWritten = false;
 
         std::unique_ptr<Pipeline> pipeline;
+        // The same shading with the palette deformation ahead of it. It
+        // shares pipelineLayout - one extra push range and one extra binding
+        // that the rigid shaders simply never name - so switching pipelines
+        // between batches disturbs no bound set.
+        std::unique_ptr<Pipeline> skinnedPipeline;
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
 
         // The pre-pass reads the uniform block and nothing else, and reads it
@@ -210,6 +225,7 @@ namespace ege {
         std::unique_ptr<DescriptorPool> depthPool;
         std::vector<VkDescriptorSet> depthDescriptorSets;
         std::unique_ptr<Pipeline> depthPipeline;
+        std::unique_ptr<Pipeline> skinnedDepthPipeline;
         VkPipelineLayout depthPipelineLayout = VK_NULL_HANDLE;
     };
 

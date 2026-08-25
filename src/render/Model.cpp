@@ -38,6 +38,7 @@ namespace ege {
 
         createVertexBuffers(builder.vertices, builder.dynamic);
         createIndexBuffers(builder.indices);
+        createSkinBuffer(builder);
     }
 
     Model::~Model() {}
@@ -89,6 +90,48 @@ namespace ege {
             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         device.copyBuffer(stagingBuffer.getBuffer(), vertexBuffer->getBuffer(), bufferSize);
+    }
+
+    void Model::createSkinBuffer(const Builder& builder) {
+        if (builder.joints.empty()) {
+            return;
+        }
+        EGE_VERIFY(
+            builder.joints.size() == builder.vertices.size() &&
+                builder.weights.size() == builder.vertices.size(),
+            "skinning attributes must cover every vertex or none");
+
+        // Interleaved into one stream: a joint index vector and its weights
+        // are read together or not at all.
+        struct SkinVertex {
+            glm::uvec4 joints;
+            glm::vec4 weights;
+        };
+
+        std::vector<SkinVertex> stream(builder.joints.size());
+        for (std::size_t i = 0; i < stream.size(); i++) {
+            stream[i].joints = builder.joints[i];
+            stream[i].weights = builder.weights[i];
+        }
+
+        const VkDeviceSize bufferSize = sizeof(SkinVertex) * stream.size();
+        Buffer stagingBuffer{
+            device,
+            sizeof(SkinVertex),
+            static_cast<uint32_t>(stream.size()),
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        };
+        stagingBuffer.map();
+        stagingBuffer.writeToBuffer(const_cast<void*>(static_cast<const void*>(stream.data())));
+
+        skinBuffer = std::make_unique<Buffer>(
+            device,
+            sizeof(SkinVertex),
+            static_cast<uint32_t>(stream.size()),
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        device.copyBuffer(stagingBuffer.getBuffer(), skinBuffer->getBuffer(), bufferSize);
     }
 
     void Model::updateVertices(const std::vector<Vertex>& vertices) {
@@ -171,6 +214,14 @@ namespace ege {
         VkDeviceSize offsets[] = {0};
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, buffers, offsets);
 
+        // The skinning stream rides on binding 1 for the pipelines that
+        // declare it; binding it costs a rigid pipeline nothing, since a
+        // pipeline only fetches the bindings its layout names.
+        if (skinBuffer != nullptr) {
+            VkBuffer skin[] = {skinBuffer->getBuffer()};
+            vkCmdBindVertexBuffers(commandBuffer, 1, 1, skin, offsets);
+        }
+
         if (hasIndexBuffer) {
             vkCmdBindIndexBuffer(commandBuffer, indexBuffer->getBuffer(), 0, VK_INDEX_TYPE_UINT32);
         }
@@ -182,6 +233,28 @@ namespace ege {
         bindingDescriptions[0].stride = sizeof(Vertex);
         bindingDescriptions[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
         return bindingDescriptions;
+    }
+
+    std::vector<VkVertexInputBindingDescription> Model::skinnedBindingDescriptions() {
+        std::vector<VkVertexInputBindingDescription> bindings = Vertex::getBindingDescriptions();
+        VkVertexInputBindingDescription skin{};
+        skin.binding = 1;
+        skin.stride = sizeof(glm::uvec4) + sizeof(glm::vec4);
+        skin.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+        bindings.push_back(skin);
+        return bindings;
+    }
+
+    std::vector<VkVertexInputAttributeDescription> Model::skinnedAttributeDescriptions() {
+        std::vector<VkVertexInputAttributeDescription> attributes =
+            Vertex::getAttributeDescriptions();
+        // Locations continue where the rigid attributes end; the joint
+        // indices stay integers all the way to the shader, because a joint
+        // index that has been through a float is a joint index off by one
+        // somewhere around sixteen million.
+        attributes.push_back({4, 1, VK_FORMAT_R32G32B32A32_UINT, 0});
+        attributes.push_back({5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(glm::uvec4)});
+        return attributes;
     }
 
     std::vector<VkVertexInputAttributeDescription> Model::Vertex::getAttributeDescriptions() {
