@@ -595,6 +595,9 @@ The demo said nothing about any of this on its own - all eighteen of its objects
 
 ### Phase 10 — Completing the engine (ongoing)
 
+> This bucket is now structured: §11 sorts it into the milestones that end at
+> v1.0, and says which of these deliberately wait past it.
+
 - **Audio**: 3D spatial audio, mixer, buses, occlusion.
 - **UI system**: retained-mode canvas, layout, text via a font atlas, input routing, world-space and screen-space canvases.
 - **Navigation**: navmesh generation (Recast/Detour), pathfinding agents, avoidance.
@@ -677,9 +680,9 @@ Proven by breaking it on purpose — emptying the scene pass produced a run that
 ## 10. The plan from here
 
 > Phases 0–8 were written before any of this existed and describe a route. This
-> section is written from where the engine actually is, and is the part to read
-> first when picking up the next piece of work. It is ordered by what unblocks
-> what, not by what would be most fun.
+> section records how the near-term plan played out, increment by increment;
+> the live plan now runs to v1.0 and is §11, which is the part to read first
+> when picking up the next piece of work.
 
 ### 10.1 What the engine is now
 
@@ -719,12 +722,10 @@ Each of these is a single increment — one branch, one pull request.
 | ~~-~~ | ~~**macOS builds**~~ | **Landed**, and smaller than expected: the runtime already asked for portability enumeration and enabled `VK_KHR_portability_subset`. What was missing was the build - a module suffix CMake gets wrong on Apple, a relative rpath, and a CI job. | — |
 | ~~-~~ | ~~**Frame graph: compute reads, imported buffers, surviving imports**~~ | **Landed.** `computeSampled`, `computeStorageRead` and `indirectRead` accesses, `importBuffer`, and imports that state the layout they arrive in — which is how an import says its contents matter and must be loaded rather than cleared. Tested at the compile level; the caller is row 1. | — |
 | ~~1~~ | ~~**GPU-driven two-phase occlusion culling**~~ | **Landed**, in the shape §10.6 predicted: no merged geometry buffer, each batch its own indirect draw, only the instance count moved onto the GPU. The readback, the CPU pyramid and the two frames of latency went with it, and the frames came out pixel-identical to the old path's. | — |
-| 1 | **Skeletal animation** | The largest remaining gap between this and an engine someone would ship a game on. Skinning, clips, blend trees. | nothing |
-| 2 | **Velocity buffer and TAA** | A depth pre-pass exists to write velocity alongside depth for nothing. MSAA covers geometry aliasing; the specular aliasing left over is what TAA is actually for. | nothing |
-| 3 | **Screen-space reflections** | The depth pyramid built for occlusion culling is also what a ray-marched reflection traces against, so the expensive half already exists. Wants a velocity buffer for the reprojection, which is what puts it after 2. | 2 |
-| 4 | **Material instancing** | Instancing landed and the demo showed its limit immediately: every object with a material of its own is a batch of one, and the demo's eighteen exhibits are eighteen batches. Material *parameters* in a buffer indexed like the transforms are what let objects sharing a mesh but not a tint draw together. | nothing |
-| 5 | **The standalone editor executable** | The panels are in-process on purpose and moving them is a build-system change, not a rewrite — and one that is smaller now that the engine is a shared library. | nothing |
-| 8 | **Script reload without losing play state** | Reload rebuilds instances and carries the reflected fields; what it cannot carry is what a behaviour keeps privately, so it re-runs `onSpawn` instead. That is honest and it is not free — a behaviour halfway through something restarts. Reflecting more, or a `onReload` hook that hands the old instance to the new one, is the way out, and it is worth doing once someone has written enough behaviours to be annoyed by it. | nothing |
+
+Every row that was still live here has moved into §11, which runs the same
+work forward to a v1.0 and is now the plan of record. The struck rows above
+stay because they are the honest history of how this section emptied.
 
 ### 10.3 Deliberately not next
 
@@ -855,3 +856,180 @@ The shape every increment in this project has taken, and the one to keep:
    capability instead, and that capability is testable without a GPU too.
 4. Change the demo so the feature is visible, then look at the result.
 5. Record what was learned here, including the parts that went wrong.
+
+---
+
+## 11. The road to v1.0
+
+> Written 2026-08-25, after GPU-driven culling closed §10.2's last renderer
+> row, by standing back and asking the only question a version number should
+> answer: what would have to be true for this engine to be *completely
+> usable*? Everything below is ordered by that question rather than by what
+> would be most interesting to build - which is a change, and a deliberate
+> one. The renderer got ahead of the engine; v1.0 is the engine catching up.
+
+### 11.1 What v1.0 means
+
+One person, starting from an installed engine and an empty project, builds a
+small third-person game - a character walking, running and jumping through a
+lit, physical level, pushing things, triggering things, hearing things, with
+a menu and a HUD - and hands the build to someone who owns no compiler, on
+Linux, Windows or macOS. Every feature used along the way was reached
+through the editor or the public scripting API. Never once did making the
+game mean editing the engine.
+
+That is the whole definition. Anything that test does not touch is not in
+v1.0, however interesting it is.
+
+### 11.2 An honest audit against that test
+
+**Carries its weight already.** The renderer: clustered forward PBR with
+image-based lighting, three kinds of shadow, MSAA, SSAO, bloom, ACES, a
+depth pre-pass, and GPU-driven two-phase occlusion culling over instanced
+indirect draws - all derived through a frame graph, all validation-clean,
+most of it arithmetic-tested without a GPU. The simulation: Jolt behind an
+engine-owned interface, fixed-step with render interpolation, deterministic,
+contacts and raycasts reachable from gameplay code. The tooling core: docked
+editor with a reflection-driven inspector, gizmos, play/pause/step/stop,
+undo, an asset database with stable ids, and hot reload of both assets and
+C++ behaviour code. The ground under it: 313 tests, eight CI jobs across
+three platforms, a headless render that checks its own pixels.
+
+**Part-built - a foundation with no house on it.** Physics has bodies but no
+character controller, no triggers, no collision layers a designer can name.
+Scripting has behaviours but no prefabs, no timers, no way for one system to
+hear about another except polling. Input has actions but only a keyboard and
+mouse to bind them to. glTF import handles meshes, materials and textures
+but not skins or animations. The sandbox proves the module mechanism, but a
+"project" is still a folder inside this repository, and the editor still
+lives inside the engine's own demo executable. Windows and macOS build and
+pass every test in CI - and no one has yet watched either draw a frame.
+
+**Absent entirely.** Skeletal animation. Audio - there is not a line of it.
+Runtime UI: the engine can render a scene but cannot draw the word "Paused"
+over it, because ImGui belongs to the editor and nothing else can put text
+on screen. Cooked assets and the player binary that would load them - a game
+currently ships as the editor plus a source checkout. A manual.
+
+The pattern in that audit is worth stating plainly: **the missing pieces are
+not renderer features.** They are the ordinary machinery of making a game -
+which is exactly what "the renderer got ahead of the engine" means, and what
+the milestones below correct.
+
+### 11.3 The milestones
+
+Each milestone is a version tag and a demo moment - the thing you can see
+working that you could not see before. Each decomposes into single-increment
+pull requests in the §10.7 shape, and the rows inside a milestone can
+reorder freely; the milestones themselves mostly cannot, because each stands
+on the one before it.
+
+#### v0.5 — The character
+
+The largest gap first. A game is usually somebody moving through a world,
+and this engine cannot yet animate a somebody.
+
+| Item | What it is | Done when |
+|---|---|---|
+| glTF skins and clips | Joints, weights, inverse binds, keyframed animations through the existing import path - the format already carries them, the importer just drops them. | The importer round-trips a rigged test asset's hierarchy and clip data, verified numerically without a GPU. |
+| GPU skinning | Palette in a buffer, skinning in the vertex stage, shared between the depth passes and the scene pass the way `model_instances.glsl` already is - EQUAL depth makes a CPU/GPU split impossible to get half-right. | The character deforms identically in pre-pass depth and shading, validation-clean. |
+| Clip playback and blending | A component that plays clips, crossfades between them, and exposes a small state machine - walk/run/jump/idle is the bar, not a graph editor. | Reflected in the inspector, saved in the scene, driven from a behaviour. |
+| Character controller | On Jolt's virtual character, as the physics phase always intended: capsule, slopes, steps, grounded state a behaviour can read. | The §10.4 debt row closes. |
+| Gamepad input | GLFW already sees them; `Input` learns sticks, triggers and buttons, and actions learn to bind them. | The sandbox character plays with either hand position. |
+| Third-person camera | Follow, orbit, collision-aware enough not to clip through the gravel. In the sandbox, against the public API, where it will find what the API is missing. | **The milestone demo: a rigged character walks, runs and jumps through the demo scene under player control.** |
+
+#### v0.6 — The game surface
+
+What gameplay code reaches for in the first hour of making anything, found
+missing by whoever builds the v0.5 demo and fixed while the finding is warm.
+
+| Item | What it is | Done when |
+|---|---|---|
+| Triggers and collision layers | A `Trigger` volume that reports enter/leave to behaviours; named layers with a designer-readable collision matrix. Both exist in Jolt; the engine just never asked. | A pressure plate opens a door in the sandbox. |
+| Prefabs | A scene fragment saved as an asset and instantiated by the editor or a behaviour, ids remapped on the way in. The serializer already knows how to write a world; this is teaching it to write part of one. | Spawning a pickup is one call naming one asset. |
+| Timers and events | `after(seconds, fn)` on behaviours, and a typed event a behaviour can raise and another subscribe to - the two things deferred since Phase 7 "for want of a caller", which the v0.5 demo finally is. | The sandbox game's win condition uses both. |
+| Script reload keeping play state | The `onReload` hook §10.2's last row described: hand the old instance to the new one so unreflected state can cross when the author wants it to. | A behaviour mid-flight survives a reload on purpose. |
+| **The level** | A small, complete, winnable level in the sandbox: goal, obstacles, pickups, a fail state. Not a showcase - a game. | **The milestone demo: someone plays it to the end and nothing along the way needed engine code.** |
+
+#### v0.7 — Sound
+
+The first whole subsystem from nothing, and the one whose absence a player
+notices before any rendering feature's.
+
+| Item | What it is | Done when |
+|---|---|---|
+| The backend | miniaudio, pinned through CPM like every dependency, behind an engine-owned interface the way Jolt is - one translation unit knows the library's name. A null backend for CI, because the headless render must keep checking itself on machines with no sound device. | The suite and the headless run pass unchanged on a silent machine. |
+| Audio assets | Sound files in the asset database with ids and sidecars like everything else, loaded on the job system, hot-reloadable. | Dropping a file in the browser makes it playable. |
+| Sources and listening | `AudioSource` component - clip, volume, loop, 3D or not - and a listener that follows the active camera. Distance attenuation and panning; buses (master/music/effects) with volumes a behaviour can set. | Footsteps follow the character and fade with distance; pausing ducks the music. |
+| Behaviour API | Play, stop, one-shots at a position, bus control - the small surface the sandbox game actually needs, grown from its calls. | **The milestone demo: the v0.6 level with its eyes closed still tells you where things are.** |
+
+#### v0.8 — The screen the player reads
+
+Runtime UI: what the game draws over the scene. Deliberately not the editor's
+ImGui, which stays an editor implementation detail.
+
+| Item | What it is | Done when |
+|---|---|---|
+| Text | A font atlas baked from a TTF at load, glyph quads through the existing 2D-over-scene path the tonemap pass already proves out. The arithmetic - layout, kerning, wrapping - is device-free and tested like all the other arithmetic. | "Paused" can be drawn over the world in any size. |
+| Screen-space canvas | Anchored rectangles, images and text in resolution-independent coordinates; draw order; show/hide from behaviours. | A HUD survives a window resize honestly. |
+| Input routing | UI first, game second, with focus - a menu that eats the click the game would otherwise get. | The pause menu works with mouse, keyboard and pad. |
+| World-space labels | The same text, billboarded at a transform, depth-tested or not by choice. | **The milestone demo: menu, HUD, pause screen and a floating damage number in the sandbox game.** |
+
+#### v0.9 — The project and the player
+
+The engine stops being this repository. Everything before this milestone made
+the game possible; this one makes it *ownable* and *shippable*.
+
+| Item | What it is | Done when |
+|---|---|---|
+| Projects | A project is a folder: its assets, scenes, settings, and its script module's sources. Create and open from the editor; the editor drives the module build (a CMake invocation, which the reload path already proves works under a running engine). | The sandbox game moves out of this repository and nothing notices. |
+| The standalone editor | `EnchantedEditor` as its own executable on the shared engine - the build-system change §10.2 always said it was, done last so it moves panels that are finished. | The demo executable stops pretending to be an editor. |
+| Cooked assets | One pack file per project - table of contents, offsets, the same bytes the loose files held. Compression and GPU texture formats only if they stay cheap; the pack format exists to feed the player, not to be clever. | The player never opens a loose file. |
+| `EnchantedPlayer` | The runtime without the editor: opens a pack, loads a scene, plays. The static-build option finally earns its keep - one self-contained binary, no module loading, behaviours linked in. | Runs the cooked sandbox game on all three platforms. |
+| The build button | Editor action or one script: cook + compile + assemble a runnable folder per platform. | **The milestone demo: a zip a stranger unpacks and plays, no compiler anywhere.** |
+
+#### v1.0 — Proof and polish
+
+Not a feature milestone. The proof that the previous five were real, and the
+debts that must not ship.
+
+| Item | What it is | Done when |
+|---|---|---|
+| The sample game | The sandbox game finished to small-but-complete: a few minutes of play, sound, menus, a build for each platform, its cooked zip published with the release. The engine's real acceptance test, run last. | A stranger plays it without being told anything. |
+| Real-GPU verification | The demo and the sample game run and watched on actual hardware on all three platforms - CI proves the code builds and the logic holds; it has never proved a Windows driver agrees. What breaks gets fixed here. | A recorded run from each platform, kept with the release. |
+| Renderer rows on merit | Velocity buffer + TAA, and material instancing, from old §10.2 - both are polish the sample game will visibly want. SSR only if the game's scenes reward it; a v1 does not ship features its own game cannot show. | The sample game looks better and draws fewer batches, or the row is struck with a reason. |
+| Performance pass | Profile the sample game, not the demo, on the weakest real machine available; fix what is actually slow. First honest numbers for the README. | Frame time budgets written down and met. |
+| The manual | Getting started, the scene and scripting API, the project workflow, shipping - written against a fresh install by following it. The API reference stays generated headers plus the commented source, which this codebase treats as documentation already. | Someone follows it from install to running build without asking a question. |
+| The stability pass | The module ABI check §7 promised, versioned at last; deprecations resolved; the public headers read once, end to end, as the API they are about to promise to be. | Tag `v1.0.0`. |
+
+### 11.4 Deliberately not in v1.0
+
+Recorded so each is a decision, not an oversight - and so v1.1 has a shelf
+to pick from.
+
+- **Networking** - the largest possible subsystem, and the sample game is
+  single-player. Nothing in v1.0 closes any door it needs.
+- **Navigation** (navmesh, agents) - the sample game can be designed not to
+  need pathfinding; a game does not become shippable through Recast.
+- **Terrain, GI, particles, decals, volumetrics** - phase-sized renderer
+  work, none of it on the v1 test's path. Particles are the closest call
+  and the first candidate after.
+- **Meshlets, bindless, a GPU draw stream** - §10.3's reasoning stands: they
+  pay at a scene size the sample game will not reach.
+- **Scripting languages other than C++** - hot-reloaded C++ is this engine's
+  answer; a second language is a second engine's worth of API surface.
+- **Mobile and console** - three desktop platforms is the honest claim.
+- **Localization, save-system framework, crash reporting, input rebinding
+  UI** - Phase 10 leftovers a real game wants and the sample game can carry
+  in miniature (one save slot, one language) without framework versions.
+
+### 11.5 How versions work from here
+
+Milestones tag when their demo moment exists: `v0.5.0` through `v1.0.0`.
+Rows inside a milestone land as the same single-increment pull requests as
+ever - one branch, one PR, §10.7's shape, dates in the log telling the
+truth about the order things happened. A milestone may ship incomplete rows
+to the next tag only by striking them with a written reason, the way §10.2's
+rows were struck: a plan that never admits a miss is a plan nobody checked.
+
+---

@@ -1,8 +1,9 @@
 # Enchanted Graphics Engine
 
 A Vulkan game engine in C++17, built from the renderer up.
-[`docs/ROADMAP.md`](docs/ROADMAP.md) records how it got here and §10 of it is
-the plan for what comes next.
+[`docs/ROADMAP.md`](docs/ROADMAP.md) records how it got here, and §11 of it
+is the road to v1.0 - the milestones between this and an engine someone
+ships a small game with.
 
 ![The demo scene: metal spheres sweeping roughness, two dielectrics, an imported torus, a script-driven sheet and a crate tower awaiting its boulder, lit by a sun, forty-three point lights and a spot over the crates](docs/images/demo-scene.png)
 
