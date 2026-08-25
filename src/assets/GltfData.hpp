@@ -1,5 +1,7 @@
 #pragma once
 
+#include "anim/AnimationClip.hpp"
+#include "anim/Skeleton.hpp"
 #include "render/Material.hpp"
 #include "render/Model.hpp"
 #include "scene/Components.hpp"
@@ -43,6 +45,14 @@ namespace ege {
         std::vector<Model::Vertex> vertices;
         std::vector<uint32_t> indices;
         int material = -1;
+        // Skinning attributes, present only when the file carries them, and
+        // exactly as long as `vertices` when they are. Joint indices are in
+        // *skeleton* order - the importer remaps them from the file's own
+        // joint numbering, so nothing downstream ever sees two orderings.
+        // Weights are renormalised; a vertex whose weights summed to nothing
+        // gets bound wholly to its first joint rather than to the void.
+        std::vector<glm::uvec4> joints;
+        std::vector<glm::vec4> weights;
     };
 
     struct GltfMeshData {
@@ -56,7 +66,19 @@ namespace ege {
         // convention.
         Transform transform{};
         int mesh = -1;
+        // Which rig deforms this node's mesh; -1 for the rigid majority.
+        int skin = -1;
         std::vector<uint32_t> children;
+    };
+
+    // One rig, ready for the animation arithmetic: joints reordered so
+    // parents precede children, whatever order the file held them in.
+    struct GltfSkinData {
+        std::string name;
+        Skeleton skeleton;
+        // The glTF node each joint came from, in skeleton order - what lets
+        // an animation channel targeting a node find its joint.
+        std::vector<int> jointNodes;
     };
 
     struct GltfSceneData {
@@ -65,6 +87,10 @@ namespace ege {
         std::vector<GltfMeshData> meshes;
         std::vector<GltfNodeData> nodes;
         std::vector<uint32_t> rootNodes;
+        // Rigs and their clips. Clips are resolved against the first skin's
+        // skeleton - see the note where they are parsed.
+        std::vector<GltfSkinData> skins;
+        std::vector<AnimationClip> clips;
     };
 
 }  // namespace ege

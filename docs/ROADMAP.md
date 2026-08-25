@@ -931,7 +931,7 @@ and this engine cannot yet animate a somebody.
 
 | Item | What it is | Done when |
 |---|---|---|
-| glTF skins and clips | Joints, weights, inverse binds, keyframed animations through the existing import path - the format already carries them, the importer just drops them. | The importer round-trips a rigged test asset's hierarchy and clip data, verified numerically without a GPU. |
+| ~~glTF skins and clips~~ | **Landed.** Rigs arrive with joints reordered parent-before-child - the invariant the file never promises and every sampling sweep relies on - with inverse binds following their joints through the reorder, vertex indices remapped to match, and weights renormalised. The sampling arithmetic (keyframes, slerp, blending, the palette) landed with it, device-free. CUBICSPLINE channels are skipped aloud rather than half-played. | Done: a hand-built rigged glTF - joints deliberately child-first - round-trips numerically, and a sampled pose lands where paper says. |
 | GPU skinning | Palette in a buffer, skinning in the vertex stage, shared between the depth passes and the scene pass the way `model_instances.glsl` already is - EQUAL depth makes a CPU/GPU split impossible to get half-right. | The character deforms identically in pre-pass depth and shading, validation-clean. |
 | Clip playback and blending | A component that plays clips, crossfades between them, and exposes a small state machine - walk/run/jump/idle is the bar, not a graph editor. | Reflected in the inspector, saved in the scene, driven from a behaviour. |
 | Character controller | On Jolt's virtual character, as the physics phase always intended: capsule, slopes, steps, grounded state a behaviour can read. | The §10.4 debt row closes. |
