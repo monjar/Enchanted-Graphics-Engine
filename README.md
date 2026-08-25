@@ -67,14 +67,19 @@ samples the hemisphere over each surface and darkens the image-based ambient
 where a point cannot see much of its surroundings, which is what makes an
 object read as touching the floor rather than hovering over it; only the
 ambient term, because a direct light either reaches a point or is stopped by
-a shadow map that already knows. And a **depth pyramid** is built from it —
-halved until it is a few tens of thousands of floats, then copied back — so
-the next frames can skip drawing objects that were entirely behind something
-else. The verdict is a couple of frames old, which is the price of applying
-it on the CPU where the draws are actually issued. The scene has one thing
-for it to decide about — a sphere directly behind the rippling sheet, which
-drops out of the draw list while the sheet covers it and is back the moment
-the camera can see past the edge.
+a shadow map that already knows. And a **depth pyramid** is built from it,
+for occlusion culling that runs **entirely on the GPU, in the same frame it
+decides about**. The frame is two-phase: an early compute pass compacts into
+the depth pass's draws whatever was visible last frame, the pyramid is built
+from that partial depth, and a late pass tests every candidate against it —
+writing the instance counts the indirect draws consume, and appending
+anything newly visible to a second set of draws in the same frame. Nothing
+is copied back, and nothing pops in after a camera move: an object the early
+pass wrongly skipped is caught by the late pass against real depth before
+the frame is shaded. The scene has one standing thing for it to decide
+about — a sphere directly behind the rippling sheet, which stops costing
+anything while the sheet covers it and is back the moment the camera can
+see past the edge.
 
 Bright highlights bloom through a half-resolution blur chain, composited in
 linear light before the ACES tonemap.
@@ -401,7 +406,7 @@ src/
   render/       renderer, model, camera, materials, lights, bounds,
                 environment lighting, PBR, cascaded, cube and spot shadows,
                 clustered light culling, screen-space ambient occlusion,
-                the depth pyramid and occlusion culling, skybox, bloom and
+                the depth pyramid and GPU-driven culling, skybox, bloom and
                 post-process
   scene/        world, entities, component pools, components, hierarchy,
                 serialization, render-transform interpolation
