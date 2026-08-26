@@ -14,6 +14,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
+#include <stdexcept>
+#include <string>
 
 namespace ege {
 
@@ -284,6 +287,28 @@ namespace ege {
         });
     }
 
+    std::string Goal::onSaveState() {
+        // Two numbers and a separator. A behaviour may write whatever it
+        // likes here - it is the only thing that reads it - and a level's
+        // score does not need JSON.
+        return std::to_string(count) + " " + std::to_string(finished ? 1 : 0);
+    }
+
+    void Goal::onReload(const std::string& state) {
+        // onSpawn first, because that is what re-subscribes: the listener
+        // belonged to the instance that just went, and a goal that stopped
+        // hearing about pickups would be a level nobody can finish.
+        onSpawn();
+
+        std::istringstream reader{state};
+        int saved = 0;
+        int wasFinished = 0;
+        if (reader >> saved >> wasFinished) {
+            count = saved;
+            finished = wasFinished != 0;
+        }
+    }
+
     void OpenOnLevelComplete::onSpawn() {
         openness = 0.f;
         opening_ = false;
@@ -355,6 +380,20 @@ namespace ege {
 
         transform->translation = closed + opening * openness;
         hierarchy::markDirty(world(), target.id());
+    }
+
+    std::string Ripple::onSaveState() {
+        return std::to_string(time);
+    }
+
+    void Ripple::onReload(const std::string& state) {
+        onSpawn();
+        // A phase that will not parse is a phase that starts from zero, which
+        // is exactly where onSpawn just put it.
+        try {
+            time = std::stof(state);
+        } catch (const std::exception&) {
+        }
     }
 
     void Ripple::onSpawn() {

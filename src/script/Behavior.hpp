@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace ege {
@@ -81,6 +82,48 @@ namespace ege {
 
         // When play stops, or the entity is despawned while playing.
         virtual void onDespawn() {}
+
+        // ---- Surviving a script reload ------------------------------------
+
+        // What this behaviour wants to keep across a reload, beyond the
+        // reflected fields that always cross.
+        //
+        // Called on the instance being *replaced*, just before it goes, and
+        // handed to the replacement's onReload. Empty by default, which is
+        // what a reload did before this existed.
+        //
+        // Text rather than the object itself, and that is the whole design.
+        // A reload happens because the source file changed: the replacement's
+        // idea of the class layout is not the old one's, so reaching into the
+        // old object through the new type is reading a struct that may have
+        // grown a member since. The only thing that can safely cross a reload
+        // is data the outgoing instance describes using its own code - which
+        // is what this call is. Any format will do; the author writes it and
+        // the author reads it.
+        virtual std::string onSaveState() { return {}; }
+
+        // Called on the replacement *instead of* onSpawn, when the behaviour
+        // it replaces was already playing. `state` is whatever the outgoing
+        // instance's onSaveState returned.
+        //
+        // The default calls onSpawn, so a behaviour that says nothing about
+        // reloading lands exactly where a fresh Play would - which is the
+        // rule the reload documentation has always given. An override that
+        // wants both should say so:
+        //
+        //     void onReload(const std::string& state) override {
+        //         onSpawn();                 // subscriptions, timers, setup
+        //         time = std::stof(state);   // and the thing worth keeping
+        //     }
+        //
+        // What does not cross either way: the outgoing instance's pending
+        // timers and its event subscriptions, both of which end with it. That
+        // is why an override that skips onSpawn stops hearing events - the
+        // subscription belonged to the object that just went.
+        virtual void onReload(const std::string& state) {
+            (void)state;
+            onSpawn();
+        }
 
         // The entity this is attached to. Valid from onSpawn onwards, and the
         // entity handle carries its world, so `self().fetch<Transform>()` is

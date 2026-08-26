@@ -1117,3 +1117,237 @@ TEST_CASE("a pickup, a goal and a gate that have never met") {
     tick(120);
     CHECK(gate.fetch<Transform>().translation.y == doctest::Approx(settled));
 }
+
+// ---- Surviving a reload on purpose ----------------------------------------
+
+namespace {
+
+    // Two versions of one behaviour that both keep something unreflected and
+    // both say so - the shape an author writes when a reload should not undo
+    // what is in flight.
+    class CarryV1 : public ege::Behavior {
+    public:
+        float rate = 1.f;
+        float travelled = 0.f;
+        int spawns = 0;
+        int reloads = 0;
+
+        void onSpawn() override { spawns++; }
+
+        void onFixedTick(float deltaSeconds) override { travelled += rate * deltaSeconds; }
+
+        std::string onSaveState() override { return std::to_string(travelled); }
+
+        void onReload(const std::string& state) override {
+            onSpawn();
+            reloads++;
+            travelled = std::stof(state);
+        }
+    };
+
+    // The same behaviour after an edit - a separate type, the way a rebuilt
+    // module's version really is, rather than a subclass.
+    class CarryV2 : public ege::Behavior {
+    public:
+        float rate = 1.f;
+        float travelled = 0.f;
+        int spawns = 0;
+        int reloads = 0;
+
+        void onSpawn() override { spawns++; }
+
+        // The new code: twice the distance for the same step, so the test can
+        // tell which version is running.
+        void onFixedTick(float deltaSeconds) override { travelled += rate * 2.f * deltaSeconds; }
+
+        std::string onSaveState() override { return std::to_string(travelled); }
+
+        void onReload(const std::string& state) override {
+            onSpawn();
+            reloads++;
+            travelled = std::stof(state);
+        }
+    };
+
+    // Says nothing about reloading, which must go on meaning "spawn me
+    // again".
+    class Forgetful : public ege::Behavior {
+    public:
+        float travelled = 0.f;
+        int spawns = 0;
+
+        void onSpawn() override { spawns++; }
+
+        void onFixedTick(float deltaSeconds) override { travelled += deltaSeconds; }
+    };
+
+}  // namespace
+
+EGE_REFLECT(CarryV1)
+EGE_FIELD(rate);
+EGE_REFLECT_END()
+
+EGE_REFLECT(CarryV2)
+EGE_FIELD(rate);
+EGE_REFLECT_END()
+
+EGE_REFLECT(Forgetful)
+EGE_REFLECT_END()
+
+TEST_CASE("a behaviour can carry unreflected state across a reload") {
+    ensureRegistered();
+    ege::World world;
+    ScriptSystem scripts;
+    BehaviorRegistry& registry = BehaviorRegistry::instance();
+    registry.add<CarryV1>("test::Carry");
+
+    Entity entity = world.spawn("Carrier");
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "test::Carry";
+    script.behaviors.push_back(std::move(slot));
+    entity.attach<Script>(std::move(script));
+
+    scripts.spawnPending(world);
+    scripts.fixedTick(world, 1.f);
+    scripts.fixedTick(world, 1.f);
+
+    {
+        Script* live = world.find<Script>(entity.id());
+        REQUIRE(live != nullptr);
+        auto* behavior = dynamic_cast<CarryV1*>(live->behaviors[0].instance.get());
+        REQUIRE(behavior != nullptr);
+        CHECK(behavior->travelled == doctest::Approx(2.f));
+        behavior->rate = 3.f;
+    }
+
+    // The module is rebuilt: the same name, a different type behind it.
+    registry.add<CarryV2>("test::Carry");
+    CHECK(scripts.rebuildInstances(world) == 1);
+
+    Script* live = world.find<Script>(entity.id());
+    REQUIRE(live != nullptr);
+    auto* rebuilt = dynamic_cast<CarryV2*>(live->behaviors[0].instance.get());
+    REQUIRE(rebuilt != nullptr);
+
+    // The reflected field crossed as it always did, and so did the one the
+    // behaviour asked to keep - which is the whole of this feature.
+    CHECK(rebuilt->rate == doctest::Approx(3.f));
+    CHECK(rebuilt->travelled == doctest::Approx(2.f));
+
+    // onReload ran instead of onSpawn, and this one calls onSpawn itself, so
+    // both counters moved exactly once.
+    CHECK(rebuilt->reloads == 1);
+    CHECK(rebuilt->spawns == 1);
+
+    // And it is the new code running: twice the distance, carried on from
+    // where the old one had got to rather than from zero.
+    scripts.fixedTick(world, 1.f);
+    CHECK(rebuilt->travelled == doctest::Approx(8.f));
+}
+
+TEST_CASE("a behaviour that says nothing about reloading is spawned afresh") {
+    ensureRegistered();
+    ege::World world;
+    ScriptSystem scripts;
+    BehaviorRegistry& registry = BehaviorRegistry::instance();
+    registry.add<Forgetful>("test::Forgetful");
+
+    Entity entity = world.spawn("Forgetful");
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "test::Forgetful";
+    script.behaviors.push_back(std::move(slot));
+    entity.attach<Script>(std::move(script));
+
+    scripts.spawnPending(world);
+    scripts.fixedTick(world, 1.f);
+
+    registry.add<Forgetful>("test::Forgetful");
+    CHECK(scripts.rebuildInstances(world) == 1);
+
+    Script* live = world.find<Script>(entity.id());
+    REQUIRE(live != nullptr);
+    auto* rebuilt = dynamic_cast<Forgetful*>(live->behaviors[0].instance.get());
+    REQUIRE(rebuilt != nullptr);
+
+    // The default onReload is onSpawn, so a reload still lands where a fresh
+    // Play would - the rule the reload documentation has always given, and
+    // the reason adding these hooks changed nothing for anybody who does not
+    // want them.
+    CHECK(rebuilt->travelled == doctest::Approx(0.f));
+    CHECK(rebuilt->spawns == 1);
+}
+
+TEST_CASE("a behaviour that never spawned is not asked to save anything") {
+    ensureRegistered();
+    ege::World world;
+    ScriptSystem scripts;
+    BehaviorRegistry& registry = BehaviorRegistry::instance();
+    registry.add<CarryV1>("test::Carry");
+
+    Entity entity = world.spawn("Carrier");
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "test::Carry";
+    script.behaviors.push_back(std::move(slot));
+    entity.attach<Script>(std::move(script));
+
+    // Never spawned: the component exists, as it does in the editor, and
+    // nothing has run.
+    CHECK(scripts.rebuildInstances(world) == 1);
+
+    Script* live = world.find<Script>(entity.id());
+    REQUIRE(live != nullptr);
+    auto* rebuilt = dynamic_cast<CarryV1*>(live->behaviors[0].instance.get());
+    REQUIRE(rebuilt != nullptr);
+    // Neither hook ran, because there was nothing in flight to keep and
+    // nothing playing to restart.
+    CHECK(rebuilt->reloads == 0);
+    CHECK(rebuilt->spawns == 0);
+    CHECK_FALSE(live->behaviors[0].spawned);
+}
+
+TEST_CASE("the goal's score survives a reload, and its listening resumes") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinSerializers();
+    ege::registerBuiltinComponents();
+
+    World world;
+    ScriptSystem scripts;
+
+    Entity rules = world.spawn("Rules");
+    {
+        auto goal = attachTo<ege::Goal>(rules, "ege::Goal");
+        goal->needed = 3;
+        goal->celebrateAfter = 0.f;
+    }
+
+    scripts.spawnPending(world);
+    world.events().raise(ege::PickupCollected{});
+    world.events().raise(ege::PickupCollected{});
+
+    {
+        Script* live = world.find<Script>(rules.id());
+        REQUIRE(live != nullptr);
+        auto* goal = dynamic_cast<ege::Goal*>(live->behaviors[0].instance.get());
+        REQUIRE(goal != nullptr);
+        CHECK(goal->collected() == 2);
+    }
+
+    // Edit the rules while the level is being played. Two pickups are already
+    // collected, and undoing that would be the reload taking the game back.
+    CHECK(scripts.rebuildInstances(world) == 1);
+
+    Script* live = world.find<Script>(rules.id());
+    REQUIRE(live != nullptr);
+    auto* goal = dynamic_cast<ege::Goal*>(live->behaviors[0].instance.get());
+    REQUIRE(goal != nullptr);
+    CHECK(goal->collected() == 2);
+
+    // And it is listening again: the subscription belonged to the instance
+    // that went, so the replacement had to make its own.
+    CHECK(world.events().subscriberCount() == 1);
+    world.events().raise(ege::PickupCollected{});
+    CHECK(goal->collected() == 3);
+}

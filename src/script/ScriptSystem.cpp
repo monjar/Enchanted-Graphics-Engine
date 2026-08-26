@@ -20,6 +20,9 @@ namespace ege {
         struct Invocation {
             Entity entity;
             std::shared_ptr<Behavior> behavior;
+            // Only a reload fills this: what the instance being replaced
+            // asked to keep.
+            std::string carried;
         };
 
         std::vector<Invocation> gather(World& world) {
@@ -27,7 +30,7 @@ namespace ege {
             world.each<Script>([&](Entity entity, Script& script) {
                 for (Script::Slot& slot : script.behaviors) {
                     if (slot.instance != nullptr && slot.spawned) {
-                        out.push_back(Invocation{entity, slot.instance});
+                        out.push_back(Invocation{entity, slot.instance, {}});
                     }
                 }
             });
@@ -86,6 +89,15 @@ namespace ege {
                 }
 
                 const bool wasSpawned = slot.spawned;
+                // Asked before the old instance goes, and asked of the old
+                // instance, because it is the only thing that still knows its
+                // own layout. Only of one that was playing: a behaviour that
+                // has not spawned has no state in flight to keep.
+                std::string carried;
+                if (wasSpawned && slot.instance != nullptr) {
+                    carried = slot.instance->onSaveState();
+                }
+
                 slot.instance = entry->create();
                 slot.instance->owner = entity;
                 slot.instance->scene = &world;
@@ -103,14 +115,18 @@ namespace ege {
 
                 if (wasSpawned) {
                     slot.spawned = true;
-                    respawned.push_back(Invocation{entity, slot.instance});
+                    respawned.push_back(Invocation{entity, slot.instance, std::move(carried)});
                 }
             }
         });
 
         for (const Invocation& invocation : respawned) {
             spawnedByEntity[invocation.entity.id()].push_back(invocation.behavior);
-            invocation.behavior->onSpawn();
+            // onReload rather than onSpawn, and its default *is* onSpawn - so
+            // a behaviour that says nothing about reloading lands exactly
+            // where a fresh Play would, and one that does gets the state its
+            // predecessor chose to hand over.
+            invocation.behavior->onReload(invocation.carried);
         }
 
         return rebuilt;
@@ -140,7 +156,7 @@ namespace ege {
                 slot.instance->owner = entity;
                 slot.instance->scene = &world;
                 slot.spawned = true;
-                starting.push_back(Invocation{entity, slot.instance});
+                starting.push_back(Invocation{entity, slot.instance, {}});
             }
         });
 
