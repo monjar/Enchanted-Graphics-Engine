@@ -151,6 +151,74 @@ GPU-driven indirect draws without any of them knowing a character exists.
 [`scripts/record_character_demo.sh`](scripts/record_character_demo.sh) records
 both pictures.
 
+## The game
+
+```sh
+./build/default/bin/EnchantedEngine --scene assets/scenes/level.egescene --play
+```
+
+![A level being played: a coin is taken, a step is missed and a life with it, the player reappears at the start, two more coins open a gate, and the exit pad ends the level](docs/images/level.gif)
+
+A small level with a way to win and a way to lose. **Every rule in it lives in
+`sandbox/`** — the project's own module, loaded at runtime — and the engine
+knows nothing about coins, lives or gates.
+
+### How it plays
+
+You start on a platform with a coin on it and a gap in front of you. A narrow
+bridge crosses the gap; missing it costs a life, and the level puts you back at
+the start. Beyond the gap is a hall with two more coins, some crates in the
+way, and a gate you cannot pass. **Take all three coins and the gate sinks into
+the floor.** Through it is the exit pad, and standing on it ends the level.
+
+| | |
+|---|---|
+| **Goal** | Collect three coins, then reach the exit pad. |
+| **Obstacles** | A pit with a narrow bridge over it; crates to push aside; a gate that will not open until you have earned it. |
+| **Fail state** | Falling into the pit. Three lives; the third one ends the level. |
+| **Controls** | `WASD` or the left stick to move, mouse or right stick to look, `Space` to jump, `Shift` to run. |
+
+The recording above is nobody's hands: a `ScriptedRun` behaviour walks a route
+by writing the same intent fields a player writes, **and stands down the moment
+a human touches anything**. That is why one scene file is both the reproducible
+recording and the thing you play — press a key during the run and the level is
+yours.
+
+It steps into the pit on purpose, once. A recording that only ever shows the
+winning line is a recording of a corridor; what makes this a game is that there
+is a way to lose.
+
+![The player in the hall, two crates beside it and the closed gate ahead, with a coin still to collect](docs/images/level.png)
+
+### How it is built
+
+Seven behaviours, none of which knows what the others are:
+
+| Behaviour | What it knows |
+|---|---|
+| `Collectible` | It was walked into, so it says so and removes itself. Not that anything is counting. |
+| `Pit` | Something of the player's layer reached it, so it says so. Not what that costs. |
+| `RespawnOnFall` | Falling means going back to the start, after a beat. Not why you fell. |
+| `LevelRules` | Three coins open the gate and three falls end the level. The only thing that knows there *is* a level. |
+| `GateSlides` | The gate opens, so it moves. It has never heard of a coin. |
+| `ExitPad` | The gate is open and somebody stood here, so the level is over. |
+| `ScriptedRun` | A route, and how to give it up when a human takes over. |
+
+They are wired together by **events** rather than by pointers, which is what
+lets each one be written without the others existing. The beat between the last
+coin and the celebration is a **timer**, so it is the same length of simulated
+time however fast the machine renders. The level itself is a **scene file** —
+`assets/scenes/level.egescene`, written by
+[`scripts/make_level.py`](scripts/make_level.py), which is the level editor
+until there is a level editor.
+
+Building it needed two changes to the engine, and it is worth being precise
+that neither was gameplay: the primitives the engine ships had to be catalogued
+before a scene is loaded rather than while one is built, and there had to be a
+`--scene` to open a file with. Everything else was already there.
+
+[`scripts/record_level.sh`](scripts/record_level.sh) records both pictures.
+
 ## The engine, being used
 
 ```sh
@@ -484,8 +552,7 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: a complete level, sound, runtime UI, and the standalone editor
-and player.
+Still to come: sound, runtime UI, and the standalone editor and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.
@@ -654,10 +721,11 @@ src/
                 loader that makes them reloadable
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
                 are shared declarations, included rather than compiled
-sandbox/        a project's behaviours, built as a module the engine loads at
+sandbox/        a project's behaviours and its game, built as a module the
+                engine loads at
                 runtime - this is where a game's gameplay code would live
 assets/         runtime assets, resolved via EGE_ASSET_ROOT - models as text
-                glTF, materials and prefabs as JSON; no binary files
+                glTF, materials, prefabs and scenes as JSON; no binary files
 tools/          EnchantedFrameChecks, which reads recorded frames back
                 and says whether a picture came out
 tests/          doctest suite

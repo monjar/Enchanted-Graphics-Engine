@@ -162,6 +162,7 @@ namespace ege {
         // behaviour this build does not have has always done.
         loadScriptModule();
 
+        registerBuiltinMeshes();
         loadScene();
     }
 
@@ -466,10 +467,16 @@ namespace ege {
         // identical, which is the point - it is the engine being shown, not a
         // separate presentation mode.
         DemoTour tour = DemoTour::demoScene();
-        if (options.demo) {
+
+        // Two ways to start a run that plays itself: the scripted tour, and
+        // handing the character to whoever is at the keyboard. Both mean the
+        // scene should already be playing when the first frame is drawn -
+        // a level that opened paused would be a level nobody asked to author.
+        const bool runsItself = options.demo || options.playCharacter;
+        if (runsItself) {
             if (!options.showEditor) {
                 overlay.toggle();
-            } else {
+            } else if (options.demo) {
                 // The panels are the subject, so put something in them - and
                 // preferably the entity whose behaviour came out of a module
                 // loaded at runtime, which is the one thing in the inspector
@@ -494,7 +501,9 @@ namespace ege {
                 overlay.select(fromModule.isNull() ? scripted : fromModule);
             }
             playMode.play(world);
-            EGE_INFO("Demo tour: {:.1f} seconds", tour.duration());
+            if (options.demo) {
+                EGE_INFO("Demo tour: {:.1f} seconds", tour.duration());
+            }
         }
 
         // Recording replaces the clock as well as the output: a frame takes
@@ -633,6 +642,13 @@ namespace ege {
                 const CharacterController* controller =
                     subject.alive() ? world.find<CharacterController>(subject.id()) : nullptr;
                 if (controller != nullptr) {
+                    // Framed for whatever it is following: the defaults are
+                    // written for a character of one size, and a level whose
+                    // player is a different one would otherwise be watched
+                    // from inside its own head.
+                    followCamera.settings = framedFor(
+                        FollowCameraSettings{},
+                        2.f * (controller->radius + controller->halfHeight));
                     // Where the body is pointing, unless somebody is looking
                     // somewhere else: the player's own yaw wins, because a
                     // camera that follows the body rather than the eyes turns
@@ -1567,7 +1583,27 @@ namespace ege {
         device.waitIdle();
     }
 
+    void Application::registerBuiltinMeshes() {
+        AssetDatabase& assets = AssetDatabase::instance();
+        const auto add = [this, &assets](const std::string& name, Model::Builder builder) {
+            assets.addMesh(name, std::make_shared<Model>(device, builder));
+        };
+        add("plane", Model::Builder::plane());
+        add("box", Model::Builder::box());
+        add("sphere", Model::Builder::sphere(32, 64));
+    }
+
     void Application::loadScene() {
+        if (!options.scenePath.empty()) {
+            // A project's own level. Nothing here knows what is in it: the
+            // entities come from the file, the behaviours they name come from
+            // whatever module was loaded, and the meshes and materials they
+            // refer to come from the asset database by id.
+            SceneSerializer::load(world, options.scenePath);
+            systems::refreshAssetReferences(world);
+            return;
+        }
+
         // Built from procedural primitives rather than asset files so that a
         // clean checkout runs with no binary assets present. Note this scene
         // treats -Y as up, matching the camera and light placement inherited
@@ -1632,15 +1668,14 @@ namespace ege {
                 return entity;
             };
 
-        const auto primitive = [this, &assets](const std::string& name, Model::Builder builder) {
-            auto model = std::make_shared<Model>(device, builder);
-            const Guid id = assets.addMesh(name, model);
-            return MeshRef{id, std::move(model)};
+        const auto primitive = [&assets](const std::string& name) {
+            const Guid id = Guid::fromName("mesh:" + name);
+            return MeshRef{id, assets.mesh(id)};
         };
 
-        const MeshRef plane = primitive("plane", Model::Builder::plane());
-        const MeshRef box = primitive("box", Model::Builder::box());
-        const MeshRef sphere = primitive("sphere", Model::Builder::sphere(32, 64));
+        const MeshRef plane = primitive("plane");
+        const MeshRef box = primitive("box");
+        const MeshRef sphere = primitive("sphere");
 
         // Floor, rotated a half turn about X so its +Y normal points along -Y,
         // which is up in this scene and therefore towards the lights.

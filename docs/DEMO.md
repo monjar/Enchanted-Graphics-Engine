@@ -210,3 +210,23 @@ The pink sphere stops breathing and the log says
 `no behaviour named 'sandbox::Pulse'; skipping it`. Nothing else changes and
 nothing fails: a scene naming a behaviour the running build does not have is
 an ordinary situation, and it costs that behaviour rather than the scene.
+
+
+## The level
+
+Not part of the tour, and a different thing entirely: a *game*.
+
+```sh
+./build/default/bin/EnchantedEngine --scene assets/scenes/level.egescene --play
+```
+
+Where everything above shows what the engine renders or simulates, this shows
+what somebody can build with it. Three coins, a pit with a narrow bridge over
+it, three lives, a gate that opens when the last coin is taken, and an exit pad
+that ends the level. Every rule is a behaviour in `sandbox/`, and the engine
+knows about none of them.
+
+`scripts/record_level.sh` records it. The route it walks steps into the pit on
+purpose, once, because a recording that only shows the winning line is a
+recording of a corridor - and it stands down the moment a human touches
+anything, so the same scene file is both the recording and the thing you play.

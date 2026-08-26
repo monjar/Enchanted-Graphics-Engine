@@ -1,0 +1,914 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "name": "Sun",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            -6.0,
+            6.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::DirectionalLight": {
+          "direction": [
+            0.35,
+            1.0,
+            0.25
+          ],
+          "color": [
+            1.0,
+            0.96,
+            0.88
+          ],
+          "intensity": 2.6
+        }
+      }
+    },
+    {
+      "name": "Lamp start",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            -3.5,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::PointLight": {
+          "color": [
+            1.0,
+            0.85,
+            0.65
+          ],
+          "intensity": 12.0,
+          "range": 18.0,
+          "castsShadows": true
+        }
+      }
+    },
+    {
+      "name": "Lamp hall",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            -3.5,
+            12.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::PointLight": {
+          "color": [
+            0.8,
+            0.9,
+            1.0
+          ],
+          "intensity": 14.0,
+          "range": 20.0,
+          "castsShadows": false
+        }
+      }
+    },
+    {
+      "name": "Start floor",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            0.25,
+            0.0
+          ],
+          "scale": [
+            7.0,
+            0.5,
+            7.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "c223140641636fe1120acbdcb04c89ab",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Bridge",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            0.25,
+            5.0
+          ],
+          "scale": [
+            1.4,
+            0.5,
+            4.2
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "695f7a9dcea03d9584f5b4aa6e170543",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Hall floor",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            0.25,
+            11.0
+          ],
+          "scale": [
+            11.0,
+            0.5,
+            8.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "c223140641636fe1120acbdcb04c89ab",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Exit floor",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            0.25,
+            18.0
+          ],
+          "scale": [
+            7.0,
+            0.5,
+            6.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "c223140641636fe1120acbdcb04c89ab",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Wall left",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            -3.25,
+            -0.9,
+            15.0
+          ],
+          "scale": [
+            4.5,
+            1.8,
+            0.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "536c9c026fadbf2ccd90255cdae31272",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Wall right",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            3.25,
+            -0.9,
+            15.0
+          ],
+          "scale": [
+            4.5,
+            1.8,
+            0.5
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "536c9c026fadbf2ccd90255cdae31272",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Pit",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            4.0,
+            8.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            40.0,
+            1.0,
+            40.0
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::Trigger": {
+          "only": "Character"
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "sandbox::Pit",
+              "fields": {
+                "catches": "Character"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Pit floor",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            6.5,
+            8.0
+          ],
+          "scale": [
+            26.0,
+            0.5,
+            30.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "536c9c026fadbf2ccd90255cdae31272",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      }
+    },
+    {
+      "name": "Coin 1",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            -2.0,
+            -0.45,
+            2.0
+          ],
+          "scale": [
+            0.35,
+            0.35,
+            0.35
+          ],
+          "rotation": [
+            0.0,
+            0.7,
+            0.6
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "e6c4d7d95930f941b6c099eeb863784d",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            1.7,
+            3.0,
+            1.7
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::Trigger": {
+          "only": "Character"
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "sandbox::Collectible",
+              "fields": {
+                "collectedBy": "Character",
+                "spinRate": 2.2
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Coin 2",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            -3.5,
+            -0.45,
+            12.0
+          ],
+          "scale": [
+            0.35,
+            0.35,
+            0.35
+          ],
+          "rotation": [
+            0.0,
+            0.7,
+            0.6
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "e6c4d7d95930f941b6c099eeb863784d",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            1.7,
+            3.0,
+            1.7
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::Trigger": {
+          "only": "Character"
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "sandbox::Collectible",
+              "fields": {
+                "collectedBy": "Character",
+                "spinRate": 2.2
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Coin 3",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            3.5,
+            -0.45,
+            10.0
+          ],
+          "scale": [
+            0.35,
+            0.35,
+            0.35
+          ],
+          "rotation": [
+            0.0,
+            0.7,
+            0.6
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "e6c4d7d95930f941b6c099eeb863784d",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            1.7,
+            3.0,
+            1.7
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::Trigger": {
+          "only": "Character"
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "sandbox::Collectible",
+              "fields": {
+                "collectedBy": "Character",
+                "spinRate": 2.2
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Crate 1",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            1.5,
+            -0.4,
+            12.5
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "8d317e488beaec912f72c732f4297a28",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::RigidBody": {
+          "mass": 1.6,
+          "kinematic": false,
+          "friction": 0.6,
+          "restitution": 0.0,
+          "linearDamping": 0.05,
+          "angularDamping": 0.05,
+          "gravityFactor": 1.0,
+          "sensor": false
+        },
+        "ege::PhysicsLayer": {
+          "name": "Props"
+        }
+      }
+    },
+    {
+      "name": "Crate 2",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            -1.2,
+            -0.4,
+            13.4
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "8d317e488beaec912f72c732f4297a28",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::RigidBody": {
+          "mass": 1.6,
+          "kinematic": false,
+          "friction": 0.6,
+          "restitution": 0.0,
+          "linearDamping": 0.05,
+          "angularDamping": 0.05,
+          "gravityFactor": 1.0,
+          "sensor": false
+        },
+        "ege::PhysicsLayer": {
+          "name": "Props"
+        }
+      }
+    },
+    {
+      "name": "Gate",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            -0.9,
+            15.0
+          ],
+          "scale": [
+            2.0,
+            1.8,
+            0.4
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "c286df8eaca7dc777c21175da8e8a441",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::RigidBody": {
+          "mass": 1.0,
+          "kinematic": true,
+          "friction": 0.5,
+          "restitution": 0.0,
+          "linearDamping": 0.05,
+          "angularDamping": 0.05,
+          "gravityFactor": 0.0,
+          "sensor": false
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "sandbox::GateSlides",
+              "fields": {
+                "opening": [
+                  0.0,
+                  1.9,
+                  0.0
+                ],
+                "speed": 1.1
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Exit pad",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            -0.03,
+            18.5
+          ],
+          "scale": [
+            2.0,
+            0.06,
+            2.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "74210cf82072a6c77f104cb5fd697576",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            12.0,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            -6.0,
+            0.0
+          ]
+        },
+        "ege::Trigger": {
+          "only": "Character"
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "sandbox::ExitPad",
+              "fields": {
+                "opensFor": "Character"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Rules",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "sandbox::LevelRules",
+              "fields": {
+                "needed": 3,
+                "lives": 3
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Walker",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            -0.85,
+            -2.0
+          ],
+          "scale": [
+            0.6,
+            1.7,
+            0.6
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "425c808fbdea0755092867a1ee19c2c3",
+          "visible": true
+        },
+        "ege::CharacterController": {
+          "radius": 0.3,
+          "halfHeight": 0.55,
+          "walkSpeed": 2.2,
+          "runSpeed": 4.0,
+          "acceleration": 14.0,
+          "braking": 20.0,
+          "airControl": 0.35,
+          "jumpHeight": 0.9,
+          "jumpCutGravity": 2.6,
+          "coyoteTime": 0.12,
+          "jumpBuffer": 0.15,
+          "terminalSpeed": 40.0,
+          "turnRate": 12.0,
+          "maxSlopeAngle": 0.785398,
+          "stepHeight": 0.3,
+          "stickToFloor": 0.5,
+          "mass": 70.0,
+          "pushForce": 100.0,
+          "faceMotion": true
+        },
+        "ege::PhysicsLayer": {
+          "name": "Character"
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "ege::PlayerCharacter",
+              "fields": {
+                "mouseSensitivity": 0.0025,
+                "lookSpeed": 2.5,
+                "lookYaw": 0.0
+              }
+            },
+            {
+              "type": "sandbox::RespawnOnFall",
+              "fields": {
+                "pause": 0.6
+              }
+            },
+            {
+              "type": "sandbox::ScriptedRun",
+              "fields": {
+                "route": "-2 2; 3 6; 0 3.5; 0 7; -3.5 12; 3.5 10; 0 13.6; 0 18.5",
+                "arriveRadius": 0.45,
+                "run": false,
+                "loop": false
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -54,6 +54,22 @@ namespace ege {
         return current + (target - current) * blend;
     }
 
+    FollowCameraSettings framedFor(const FollowCameraSettings& settings, float subjectHeight) {
+        if (settings.writtenForHeight <= 0.f || subjectHeight <= 0.f) {
+            return settings;
+        }
+        const float scale = subjectHeight / settings.writtenForHeight;
+
+        FollowCameraSettings framed = settings;
+        framed.distance *= scale;
+        framed.height *= scale;
+        framed.aimHeight *= scale;
+        framed.minDistance *= scale;
+        framed.wallMargin *= scale;
+        framed.writtenForHeight = subjectHeight;
+        return framed;
+    }
+
     void FollowCamera::update(
         glm::vec3 subject,
         float yaw,
