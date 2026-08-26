@@ -82,7 +82,7 @@ and presses Play.
 
 | Shot | What to look at |
 |---|---|
-| Wide, on the whole set | The scene under its procedurally generated evening sky — and **physics** opening the show: a steel boulder drops onto a plank, rolls down it, and takes out the crate tower at the base. Play is what dropped it; Stop would put the tower back |
+| Wide, on the whole set | The scene under its procedurally generated evening sky — and **physics** opening the show: a steel boulder drops onto a plank, rolls down it, and takes out the crate tower at the base. Play is what dropped it; Stop would put the tower back. In the foreground the orange **character** walks its circuit, turning to face where it is going and shouldering a crate aside |
 | Down the row of spheres | The roughness sweep. The highlight broadens from near-mirror to fully rough — which only reads as a sweep when it travels |
 | Onto the rippling sheet | Geometry a **script** writes. 2 401 vertices are moved along their normals by a travelling wave every tick, their normals recomputed, and the result uploaded once per frame — there is no mesh file behind it |
 | Close on the smoothest sphere | Image-based lighting. It reflects a sky that exists only because the engine convolved one into an irradiance map and a prefiltered specular chain at start-up |

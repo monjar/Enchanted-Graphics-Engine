@@ -1,9 +1,14 @@
 #include "script/Behaviors.hpp"
 
+#include "physics/CharacterMotion.hpp"
+#include "physics/PhysicsComponents.hpp"
+#include "platform/Input.hpp"
 #include "render/DynamicMesh.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
 #include "script/BehaviorRegistry.hpp"
+
+#include <glm/gtc/constants.hpp>
 
 #include <cmath>
 
@@ -64,6 +69,84 @@ namespace ege {
         moved(*this);
     }
 
+    void PlayerCharacter::onFixedTick(float deltaSeconds) {
+        CharacterController* controller = self().find<CharacterController>();
+        Input* input = world().input();
+        if (controller == nullptr || input == nullptr) {
+            return;
+        }
+
+        // Turning while the cursor is captured, which is when the mouse is
+        // the player's rather than the editor's. Without the check, dragging
+        // a slider in the inspector also spins the character.
+        if (input->cursorMode() != CursorMode::Normal) {
+            lookYaw += input->mouseDelta().x * mouseSensitivity;
+        }
+        lookYaw += input->axis("LookLeft", "LookRight") * 2.f * deltaSeconds;
+        lookYaw = std::fmod(lookYaw, glm::two_pi<float>());
+
+        // The same forward the rest of the engine builds from a yaw, so
+        // "forward" means the same thing to the character as to the camera.
+        const glm::vec3 forward{std::sin(lookYaw), 0.f, std::cos(lookYaw)};
+        const glm::vec2 stick{
+            input->axis("MoveLeft", "MoveRight"), input->axis("MoveBackward", "MoveForward")};
+
+        // Up is the world's, not the entity's: the demo scene's is -Y, and
+        // the plane a character walks in is the one perpendicular to gravity.
+        // In edit mode there is no physics world to ask, and the conventional
+        // up is as good an answer as any for a character that is not moving.
+        const glm::vec3 up = world().physics() != nullptr
+                                 ? upFromGravity(world().physics()->gravity())
+                                 : glm::vec3{0.f, 1.f, 0.f};
+        controller->move = moveDirection(stick, forward, up);
+        controller->run = input->isActionDown("Run");
+        controller->jumpHeld = input->isActionDown("Jump");
+        if (input->wasActionPressed("Jump")) {
+            controller->jump = true;
+        }
+    }
+
+    void Patrol::onSpawn() {
+        const Transform* transform = self().find<Transform>();
+        origin = transform != nullptr ? transform->translation : glm::vec3{0.f};
+        target = 0;
+    }
+
+    glm::vec3 Patrol::corner(int index) const {
+        // Four corners in order, so consecutive ones share an edge and the
+        // circuit is a rectangle rather than an X.
+        static constexpr float signs[4][2] = {{1.f, 1.f}, {-1.f, 1.f}, {-1.f, -1.f}, {1.f, -1.f}};
+        const int wrapped = ((index % 4) + 4) % 4;
+        return origin +
+               glm::vec3{extents.x * signs[wrapped][0], 0.f, extents.z * signs[wrapped][1]};
+    }
+
+    void Patrol::onFixedTick(float) {
+        CharacterController* controller = self().find<CharacterController>();
+        const Transform* transform = self().find<Transform>();
+        if (controller == nullptr || transform == nullptr) {
+            return;
+        }
+
+        const glm::vec3 destination = corner(target);
+        // Distance in the plane only: a corner on a floor the character has
+        // walked up to is still the corner it was aiming for.
+        const glm::vec2 gap{
+            destination.x - transform->translation.x, destination.z - transform->translation.z};
+        if (glm::length(gap) <= arriveRadius) {
+            target = (target + 1) % 4;
+            if (jumpAtCorners) {
+                controller->jump = true;
+            }
+            controller->move = glm::vec3{0.f};
+            return;
+        }
+
+        const glm::vec2 heading = glm::normalize(gap);
+        controller->move = glm::vec3{heading.x, 0.f, heading.y};
+        controller->run = run;
+    }
+
     void Ripple::onSpawn() {
         time = 0.f;
     }
@@ -97,3 +180,5 @@ EGE_BEHAVIOR(ege::Spinner)
 EGE_BEHAVIOR(ege::Orbit)
 EGE_BEHAVIOR(ege::Bobbing)
 EGE_BEHAVIOR(ege::Ripple)
+EGE_BEHAVIOR(ege::PlayerCharacter)
+EGE_BEHAVIOR(ege::Patrol)

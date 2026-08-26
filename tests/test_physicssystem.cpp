@@ -219,6 +219,187 @@ TEST_CASE("contacts come back as entities") {
     physics.stop(world);
 }
 
+// ---- Characters -----------------------------------------------------------
+
+namespace {
+
+    Entity spawnWalker(World& world, glm::vec3 position) {
+        Entity walker = world.spawn("Walker");
+        Transform transform{};
+        transform.translation = position;
+        walker.attach<Transform>(transform);
+
+        ege::CharacterController controller{};
+        controller.radius = 0.3f;
+        controller.halfHeight = 0.45f;
+        walker.attach<ege::CharacterController>(controller);
+        return walker;
+    }
+
+}  // namespace
+
+TEST_CASE("a character falls to the floor and stands on it") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity walker = spawnWalker(world, {0.f, 3.f, 0.f});
+
+    physics.start(world);
+    simulate(physics, world, 180);
+
+    // Radius plus half height above the floor plane, reported where
+    // everything else reads a position from.
+    CHECK(walker.fetch<Transform>().translation.y == doctest::Approx(0.75f).epsilon(0.05f));
+    CHECK(walker.fetch<ege::CharacterController>().grounded);
+    physics.stop(world);
+}
+
+TEST_CASE("a character walks where its driver points it and turns to face it") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity walker = spawnWalker(world, {0.f, 0.75f, 0.f});
+    walker.fetch<ege::CharacterController>().walkSpeed = 2.f;
+
+    physics.start(world);
+    for (int i = 0; i < 120; i++) {
+        // What a player's hands would write, written by a test instead.
+        walker.fetch<ege::CharacterController>().move = {1.f, 0.f, 0.f};
+        physics.fixedTick(world, step);
+    }
+
+    const Transform& arrived = walker.fetch<Transform>();
+    CHECK(arrived.translation.x > 3.f);
+    CHECK(arrived.translation.z == doctest::Approx(0.f).epsilon(0.05f));
+    // Facing +X, which is a quarter turn from the yaw a Transform starts at.
+    CHECK(arrived.rotation.y == doctest::Approx(1.5708f).epsilon(0.02f));
+    physics.stop(world);
+}
+
+TEST_CASE("a character jumps when asked and comes back down") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity walker = spawnWalker(world, {0.f, 0.75f, 0.f});
+    walker.fetch<ege::CharacterController>().jumpHeight = 1.5f;
+
+    physics.start(world);
+    simulate(physics, world, 30);
+    REQUIRE(walker.fetch<ege::CharacterController>().grounded);
+
+    const float standing = walker.fetch<Transform>().translation.y;
+    walker.fetch<ege::CharacterController>().jump = true;
+
+    float highest = standing;
+    for (int i = 0; i < 30; i++) {
+        walker.fetch<ege::CharacterController>().jumpHeld = true;
+        physics.fixedTick(world, step);
+        highest = std::max(highest, walker.fetch<Transform>().translation.y);
+    }
+    CHECK(highest > standing + 1.f);
+
+    // And lands again, back on the floor it left.
+    for (int i = 0; i < 180; i++) {
+        walker.fetch<ege::CharacterController>().jumpHeld = false;
+        physics.fixedTick(world, step);
+    }
+    CHECK(walker.fetch<Transform>().translation.y == doctest::Approx(standing).epsilon(0.05f));
+    CHECK(walker.fetch<ege::CharacterController>().grounded);
+    physics.stop(world);
+}
+
+TEST_CASE("a character pushes a dynamic body and does not climb it") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+
+    Entity crate = world.spawn("Crate");
+    Transform crateTransform{};
+    crateTransform.translation = {1.5f, 0.3f, 0.f};
+    crateTransform.scale = glm::vec3{0.6f};
+    crate.attach<Transform>(crateTransform);
+    crate.attach<BoxCollider>();
+    RigidBody body{};
+    body.mass = 2.f;
+    crate.attach<RigidBody>(body);
+
+    Entity walker = spawnWalker(world, {0.f, 0.75f, 0.f});
+    walker.fetch<ege::CharacterController>().walkSpeed = 2.5f;
+
+    physics.start(world);
+    for (int i = 0; i < 150; i++) {
+        walker.fetch<ege::CharacterController>().move = {1.f, 0.f, 0.f};
+        physics.fixedTick(world, step);
+    }
+
+    CHECK(crate.fetch<Transform>().translation.x > 2.f);
+    CHECK(walker.fetch<Transform>().translation.y == doctest::Approx(0.75f).epsilon(0.15f));
+    physics.stop(world);
+}
+
+TEST_CASE("writing a character's transform teleports it") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity walker = spawnWalker(world, {0.f, 0.75f, 0.f});
+
+    physics.start(world);
+    simulate(physics, world, 60);
+    REQUIRE(walker.fetch<ege::CharacterController>().grounded);
+
+    // A respawn, a gizmo drag, a script putting it somewhere: the capsule
+    // has to follow the Transform rather than pulling it back.
+    walker.fetch<Transform>().translation = {6.f, -4.f, 2.f};
+    ege::hierarchy::markDirty(world, walker.id());
+    physics.fixedTick(world, step);
+
+    const Transform& moved = walker.fetch<Transform>();
+    CHECK(moved.translation.x == doctest::Approx(6.f).epsilon(0.01f));
+    CHECK(moved.translation.z == doctest::Approx(2.f).epsilon(0.01f));
+    // Up there with nothing underfoot, and falling from rest rather than
+    // from whatever it was doing before.
+    CHECK(moved.translation.y < -3.f);
+    CHECK_FALSE(walker.fetch<ege::CharacterController>().grounded);
+    physics.stop(world);
+}
+
+TEST_CASE("a character is built and thrown away with play") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity walker = spawnWalker(world, {0.f, 3.f, 0.f});
+
+    physics.start(world);
+    CHECK(walker.fetch<ege::CharacterController>().character != ege::invalidPhysicsCharacter);
+    simulate(physics, world, 60);
+    CHECK(physics.physicsWorld()->characterCount() == 1);
+
+    physics.stop(world);
+    // The handle dies with the world it points into, and so does everything
+    // the run accumulated - a character restored to its mark still falling
+    // is the leak the transform restore exists to prevent.
+    const ege::CharacterController& controller = walker.fetch<ege::CharacterController>();
+    CHECK(controller.character == ege::invalidPhysicsCharacter);
+    CHECK(glm::length(controller.velocity) == doctest::Approx(0.f));
+    CHECK_FALSE(controller.grounded);
+}
+
+TEST_CASE("a character despawned mid-play takes its capsule with it") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity walker = spawnWalker(world, {0.f, 0.75f, 0.f});
+
+    physics.start(world);
+    simulate(physics, world, 30);
+    REQUIRE(physics.physicsWorld()->characterCount() == 1);
+
+    world.despawn(walker.id());
+    physics.fixedTick(world, step);
+    CHECK(physics.physicsWorld()->characterCount() == 0);
+    physics.stop(world);
+}
+
 TEST_CASE("physics components round-trip through a scene file") {
     ege::registerBuiltinTypes();
     ege::registerBuiltinSerializers();
@@ -253,4 +434,47 @@ TEST_CASE("physics components round-trip through a scene file") {
     const BoxCollider& box = restored.fetch<BoxCollider>();
     CHECK(box.halfExtents.y == doctest::Approx(0.4f));
     CHECK(box.offset.y == doctest::Approx(0.1f));
+}
+
+TEST_CASE("a character's shape and tuning are saved; its intent and state are not") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinSerializers();
+    ege::registerBuiltinComponents();
+
+    World world;
+    Entity walker = world.spawn("Walker");
+    walker.attach<Transform>();
+
+    ege::CharacterController controller{};
+    controller.radius = 0.42f;
+    controller.walkSpeed = 5.25f;
+    controller.jumpHeight = 2.5f;
+    controller.faceMotion = false;
+    // What a run would have left on it. None of this describes the entity,
+    // so none of it may come back.
+    controller.move = {1.f, 0.f, 0.f};
+    controller.jumpHeld = true;
+    controller.velocity = {3.f, -4.f, 0.f};
+    controller.grounded = true;
+    controller.facing = 1.2f;
+    controller.character = 7;
+    walker.attach<ege::CharacterController>(controller);
+
+    World reloaded;
+    ege::SceneSerializer::fromString(reloaded, ege::SceneSerializer::toString(world));
+    Entity restored = reloaded.findByName("Walker");
+    REQUIRE(restored.alive());
+
+    const ege::CharacterController& back = restored.fetch<ege::CharacterController>();
+    CHECK(back.radius == doctest::Approx(0.42f));
+    CHECK(back.walkSpeed == doctest::Approx(5.25f));
+    CHECK(back.jumpHeight == doctest::Approx(2.5f));
+    CHECK_FALSE(back.faceMotion);
+
+    CHECK(glm::length(back.move) == doctest::Approx(0.f));
+    CHECK_FALSE(back.jumpHeld);
+    CHECK(glm::length(back.velocity) == doctest::Approx(0.f));
+    CHECK_FALSE(back.grounded);
+    CHECK(back.facing == doctest::Approx(0.f));
+    CHECK(back.character == ege::invalidPhysicsCharacter);
 }

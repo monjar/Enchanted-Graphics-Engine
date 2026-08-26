@@ -8,9 +8,12 @@
 #include "physics/PhysicsWorld.hpp"
 
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/trigonometric.hpp>
 
 #include <doctest/doctest.h>
 
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -230,4 +233,207 @@ TEST_CASE("removing a body removes it") {
     CHECK(world->bodyCount() == 1);
     world->removeBody(ball);
     CHECK(world->bodyCount() == 0);
+}
+
+// ---- Characters -----------------------------------------------------------
+//
+// What a character is for is everything a capsule-shaped rigid body does
+// badly: standing on a slope without sliding, walking up a step without
+// jumping, stopping at a wall without toppling. Each of these is one of
+// those.
+
+namespace {
+
+    // Half a metre of radius, half a metre of cylinder: a metre and a half
+    // standing up, with its origin at the middle.
+    ege::CharacterSettings walkerSettings(glm::vec3 position) {
+        ege::CharacterSettings settings{};
+        settings.radius = 0.3f;
+        settings.halfHeight = 0.45f;
+        settings.position = position;
+        return settings;
+    }
+
+    // A box, as scenery.
+    BodySettings slabSettings(glm::vec3 position, glm::vec3 halfExtents) {
+        BodySettings settings{};
+        settings.shape = BodyShape::box(halfExtents);
+        settings.motion = BodyMotion::stationary;
+        settings.position = position;
+        return settings;
+    }
+
+    // Walks a character for `steps` steps at `velocity`, re-asserting the
+    // velocity each step the way a driver would - the backend replaces it
+    // with what was achieved, which is the point.
+    void walk(PhysicsWorld& world, ege::PhysicsCharacterId walker, glm::vec3 velocity, int steps) {
+        for (int i = 0; i < steps; i++) {
+            const glm::vec3 current = world.characterVelocity(walker);
+            // Keep whatever gravity has done to the vertical, drive the plane.
+            world.setCharacterVelocity(walker, {velocity.x, current.y - 9.81f * step, velocity.z});
+            world.updateCharacter(walker, step);
+            world.step(step);
+        }
+    }
+
+}  // namespace
+
+TEST_CASE("a character falls to the floor and stands on it") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+    const ege::PhysicsCharacterId walker = world->addCharacter(walkerSettings({0.f, 3.f, 0.f}));
+
+    CHECK(world->characterCount() == 1);
+    CHECK(world->characterGround(walker).state == ege::CharacterGroundState::airborne);
+
+    walk(*world, walker, {0.f, 0.f, 0.f}, 180);
+
+    // Standing on the floor plane with its feet on it: radius plus half
+    // height below the origin, and the origin is what is reported.
+    CHECK(world->characterPosition(walker).y == doctest::Approx(0.75f).epsilon(0.05f));
+    CHECK(world->characterGround(walker).state == ege::CharacterGroundState::grounded);
+    CHECK(world->characterGround(walker).normal.y == doctest::Approx(1.f).epsilon(0.01f));
+}
+
+TEST_CASE("a character walks where it is told") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+    const ege::PhysicsCharacterId walker = world->addCharacter(walkerSettings({0.f, 0.75f, 0.f}));
+
+    walk(*world, walker, {2.f, 0.f, 0.f}, 60);
+
+    // One second at two metres per second, less the first step spent
+    // settling onto the floor.
+    CHECK(world->characterPosition(walker).x == doctest::Approx(2.f).epsilon(0.05f));
+    CHECK(world->characterPosition(walker).z == doctest::Approx(0.f).epsilon(0.01f));
+}
+
+TEST_CASE("a wall stops a character rather than toppling it") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+    // A wall across the character's path, two metres out.
+    world->addBody(slabSettings({2.f, 1.f, 0.f}, {0.25f, 1.f, 4.f}));
+    const ege::PhysicsCharacterId walker = world->addCharacter(walkerSettings({0.f, 0.75f, 0.f}));
+
+    walk(*world, walker, {3.f, 0.f, 0.f}, 120);
+
+    // Up against the wall, not through it and not climbing it.
+    const glm::vec3 stopped = world->characterPosition(walker);
+    CHECK(stopped.x < 1.75f);
+    CHECK(stopped.x > 1.2f);
+    CHECK(stopped.y == doctest::Approx(0.75f).epsilon(0.1f));
+    // And the velocity read back is a stop, so a driver accelerating from it
+    // starts from rest rather than from a speed the character never had.
+    CHECK(std::abs(world->characterVelocity(walker).x) < 0.5f);
+}
+
+TEST_CASE("a character walks up a step it could not climb over") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+    // A step a quarter of a metre high, well under the default step height.
+    world->addBody(slabSettings({2.f, 0.125f, 0.f}, {2.f, 0.125f, 4.f}));
+
+    ege::CharacterSettings settings = walkerSettings({0.f, 0.75f, 0.f});
+    settings.stepHeight = 0.4f;
+    const ege::PhysicsCharacterId walker = world->addCharacter(settings);
+
+    walk(*world, walker, {2.f, 0.f, 0.f}, 120);
+
+    const glm::vec3 arrived = world->characterPosition(walker);
+    // Past the step's edge and standing on top of it - a quarter of a metre
+    // higher than it started, without a jump.
+    CHECK(arrived.x > 1.f);
+    CHECK(arrived.y == doctest::Approx(1.f).epsilon(0.06f));
+    CHECK(world->characterGround(walker).state == ege::CharacterGroundState::grounded);
+}
+
+TEST_CASE("a slope steeper than the character can climb reads as steep") {
+    PhysicsWorld::Settings worldSettings{};
+    auto world = PhysicsWorld::create(worldSettings);
+    world->addBody(floorSettings());
+
+    // A ramp tilted about Z by seventy degrees - far past the forty-five the
+    // character allows.
+    BodySettings ramp = slabSettings({1.6f, 1.f, 0.f}, {2.f, 0.1f, 4.f});
+    ramp.rotation = glm::angleAxis(glm::radians(70.f), glm::vec3{0.f, 0.f, 1.f});
+    world->addBody(ramp);
+
+    const ege::PhysicsCharacterId walker = world->addCharacter(walkerSettings({0.f, 0.75f, 0.f}));
+    walk(*world, walker, {3.f, 0.f, 0.f}, 90);
+
+    // It leans on the ramp without walking up it: pushed back, still on the
+    // floor side of where the ramp meets it.
+    CHECK(world->characterPosition(walker).y > 0.5f);
+    CHECK(world->characterPosition(walker).x < 2.f);
+}
+
+TEST_CASE("a character pushes a dynamic body out of its way") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+
+    BodySettings crate{};
+    crate.shape = BodyShape::box(glm::vec3{0.3f});
+    crate.position = {1.2f, 0.3f, 0.f};
+    crate.mass = 2.f;
+    crate.friction = 0.4f;
+    const ege::PhysicsBodyId pushed = world->addBody(crate);
+
+    const ege::PhysicsCharacterId walker = world->addCharacter(walkerSettings({0.f, 0.75f, 0.f}));
+    walk(*world, walker, {2.f, 0.f, 0.f}, 120);
+
+    // The crate has been shoved along rather than walked through or stood on.
+    CHECK(world->pose(pushed).position.x > 1.6f);
+    CHECK(world->characterPosition(walker).y == doctest::Approx(0.75f).epsilon(0.15f));
+}
+
+TEST_CASE("a character can be told which way is up") {
+    // The demo scene's frame: things fall towards +Y, so a character stands
+    // the other way up and lands on the underside of the floor.
+    PhysicsWorld::Settings settings{};
+    settings.gravity = {0.f, 9.81f, 0.f};
+    auto world = PhysicsWorld::create(settings);
+    CHECK(world->gravity().y == doctest::Approx(9.81f));
+
+    // Floor with its walking surface at y = 0, on the -Y side this time.
+    world->addBody(slabSettings({0.f, 0.5f, 0.f}, {10.f, 0.5f, 10.f}));
+
+    ege::CharacterSettings walker = walkerSettings({0.f, -3.f, 0.f});
+    walker.up = {0.f, -1.f, 0.f};
+    const ege::PhysicsCharacterId id = world->addCharacter(walker);
+
+    for (int i = 0; i < 180; i++) {
+        const glm::vec3 current = world->characterVelocity(id);
+        world->setCharacterVelocity(id, {0.f, current.y + 9.81f * step, 0.f});
+        world->updateCharacter(id, step);
+        world->step(step);
+    }
+
+    CHECK(world->characterPosition(id).y == doctest::Approx(-0.75f).epsilon(0.05f));
+    CHECK(world->characterGround(id).state == ege::CharacterGroundState::grounded);
+    CHECK(world->characterGround(id).normal.y == doctest::Approx(-1.f).epsilon(0.01f));
+}
+
+TEST_CASE("setting a character's position teleports it and finds new ground") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+    const ege::PhysicsCharacterId walker = world->addCharacter(walkerSettings({0.f, 0.75f, 0.f}));
+
+    walk(*world, walker, {0.f, 0.f, 0.f}, 30);
+    REQUIRE(world->characterGround(walker).state == ege::CharacterGroundState::grounded);
+
+    world->setCharacterPosition(walker, {0.f, 5.f, 0.f});
+    CHECK(world->characterPosition(walker).y == doctest::Approx(5.f));
+    // Re-found, not remembered: nothing is underfoot up there.
+    CHECK(world->characterGround(walker).state == ege::CharacterGroundState::airborne);
+}
+
+TEST_CASE("removing a character removes it") {
+    auto world = PhysicsWorld::create();
+    const ege::PhysicsCharacterId walker = world->addCharacter(walkerSettings({0.f, 1.f, 0.f}));
+    CHECK(world->characterCount() == 1);
+    world->removeCharacter(walker);
+    CHECK(world->characterCount() == 0);
+    // A handle that no longer names anything answers rather than crashing:
+    // gameplay holding a stale one is a bug in gameplay, not a fault here.
+    CHECK(world->characterPosition(walker) == glm::vec3{0.f});
 }

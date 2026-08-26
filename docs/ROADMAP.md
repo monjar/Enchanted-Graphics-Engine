@@ -512,7 +512,7 @@ For this to be demonstrable at all, the demo's floor is now a real `.egematerial
 
 *Not done, each for a stated reason:*
 
-- **CharacterController** - it belongs to the sandbox project, which is what the "done when" says and Phase 10 owns. Nothing about the body interface blocks it.
+- ~~**CharacterController**~~ - **landed in v0.5**, and the reason given here turned out to be half wrong: a character controller is not a sandbox convenience, it is an engine feature the sandbox uses. What was right is that nothing about the body interface blocked it - the virtual character arrived alongside bodies rather than through them. See the v0.5 table in §11.3.
 - **ConvexHullCollider / MeshCollider** - both want an asset-derived hull or triangle soup, which is the asset pipeline's cooked-data story; a hand-authored primitive covers everything the engine currently draws.
 - **Constraints** (hinge, slider, distance, fixed, 6-DOF) - API surface with no caller yet; the backend supports them whenever something needs a door.
 - **Collision layers and filter masks** - the two layers that exist (moving, non-moving) are a broad-phase optimisation, not a gameplay feature. Named layers arrive when two things exist that must not collide.
@@ -883,6 +883,12 @@ v1.0, however interesting it is.
 
 ### 11.2 An honest audit against that test
 
+*Written when §11 was, and deliberately left as it was written: it is the
+starting position the milestones below are measured from, and an audit
+quietly edited to keep pace with the work is an audit that can never be
+wrong about anything. What has changed since is struck through in §11.3's
+tables, which is where progress lives.*
+
 **Carries its weight already.** The renderer: clustered forward PBR with
 image-based lighting, three kinds of shadow, MSAA, SSAO, bloom, ACES, a
 depth pre-pass, and GPU-driven two-phase occlusion culling over instanced
@@ -934,7 +940,7 @@ and this engine cannot yet animate a somebody.
 | ~~glTF skins and clips~~ | **Landed.** Rigs arrive with joints reordered parent-before-child - the invariant the file never promises and every sampling sweep relies on - with inverse binds following their joints through the reorder, vertex indices remapped to match, and weights renormalised. The sampling arithmetic (keyframes, slerp, blending, the palette) landed with it, device-free. CUBICSPLINE channels are skipped aloud rather than half-played. | Done: a hand-built rigged glTF - joints deliberately child-first - round-trips numerically, and a sampled pose lands where paper says. |
 | ~~GPU skinning~~ | **Landed.** The palette rides binding 12, the skinned pipelines share the rigid layouts - one extra push range and one extra binding the rigid shaders never name, so a batch walk switches pipelines without disturbing a bound set - and skinned batches never merge, because a batch is one entity's palette run. Skinned draws go through GPU culling with their rest sphere grown by half, since animation moves vertices past the box they were modelled in. The demo gained a rigged, swaying banner, generated like the torus. | Done: the banner deforms through both depth phases and the EQUAL test under indirect draws, validation-clean, and the palette a test computes by hand is the palette the system writes. |
 | Clip playback and blending | A component that plays clips, crossfades between them, and exposes a small state machine - walk/run/jump/idle is the bar, not a graph editor. | Reflected in the inspector, saved in the scene, driven from a behaviour. |
-| Character controller | On Jolt's virtual character, as the physics phase always intended: capsule, slopes, steps, grounded state a behaviour can read. | The §10.4 debt row closes. |
+| ~~Character controller~~ | **Landed.** Jolt's virtual character behind the same engine-owned interface bodies use, driven by the engine's own motion arithmetic - accelerate, brake, air control, coyote time, a jump authored as a height and cut short when released - which is device-free and tested against hand derivations. The component splits into shape and tuning (authored, saved), intent (written every tick by whoever is driving), and state (written back for gameplay to read), so a player, a patrol behaviour and an AI drive it through identical fields. `World::input()` arrived with it, the way `World::physics()` did. | Done: the demo has somebody walking a circuit on physics geometry, turning to face where it is going, jumping at the corners and shoving a crate out of its way. The §10.4 debt row closes. |
 | Gamepad input | GLFW already sees them; `Input` learns sticks, triggers and buttons, and actions learn to bind them. | The sandbox character plays with either hand position. |
 | Third-person camera | Follow, orbit, collision-aware enough not to clip through the gravel. In the sandbox, against the public API, where it will find what the API is missing. | **The milestone demo: a rigged character walks, runs and jumps through the demo scene under player control.** |
 

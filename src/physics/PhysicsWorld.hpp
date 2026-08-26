@@ -88,6 +88,57 @@ namespace ege {
         glm::vec3 normal{0.f};
     };
 
+    // Handle to a walking capsule inside a PhysicsWorld. A separate handle
+    // space from bodies, because a character is not a body: the solver never
+    // moves it, and asking for its velocity means asking a different object.
+    using PhysicsCharacterId = std::uint32_t;
+
+    inline constexpr PhysicsCharacterId invalidPhysicsCharacter = 0xFFFFFFFFu;
+
+    // Everything needed to create a character. Plain data, like BodySettings,
+    // and for the same reason.
+    struct CharacterSettings {
+        // A capsule standing along `up`: two hemispherical caps of `radius`
+        // separated by a cylinder of 2 * halfHeight.
+        float radius = 0.3f;
+        float halfHeight = 0.55f;
+        // The entity's origin, at the capsule's centre - the same place a
+        // CapsuleCollider puts it, so a character and a collider fitted to
+        // the same mesh sit in the same place.
+        glm::vec3 position{0.f};
+        // Which way the capsule stands, and which way "up a slope" means.
+        glm::vec3 up{0.f, 1.f, 0.f};
+        // Radians. Steeper than this is a wall to be slid down.
+        float maxSlopeAngle = 0.785398f;
+        // How high a step it walks straight up, and how far below its feet it
+        // looks for the floor before calling itself airborne.
+        float stepHeight = 0.3f;
+        float stickToFloor = 0.5f;
+        // What it weighs when it leans on a dynamic body, and the most force
+        // it can push with.
+        float mass = 70.f;
+        float pushForce = 100.f;
+        std::uint64_t userData = 0;
+    };
+
+    // Whether the character can walk where it stands. The distinction between
+    // steep and airborne matters to gameplay: one is a slope being slid down,
+    // the other is a fall, and they want different animations and different
+    // rules about jumping.
+    enum class CharacterGroundState { grounded, steep, airborne };
+
+    // What a character found underfoot after its last move.
+    struct CharacterGround {
+        CharacterGroundState state = CharacterGroundState::airborne;
+        glm::vec3 normal{0.f, 1.f, 0.f};
+        // What the surface itself is doing, so standing on a moving platform
+        // can mean moving with it.
+        glm::vec3 velocity{0.f};
+        // The ground body's user datum - which entity is underfoot - or zero
+        // when nothing is.
+        std::uint64_t userData = 0;
+    };
+
     struct RaycastHit {
         // Along the ray, in world units.
         float distance = 0.f;
@@ -151,10 +202,51 @@ namespace ege {
 
         virtual void addImpulse(PhysicsBodyId body, glm::vec3 impulse) = 0;
 
+        // ---- Characters ---------------------------------------------------
+        //
+        // A character is a capsule the world collides against but the solver
+        // never moves: it goes exactly where its velocity says, minus
+        // whatever was in the way. That is the difference between a body that
+        // happens to be capsule-shaped and something that can walk - the
+        // former topples, catches on steps and slides down every ramp, and
+        // fighting each of those with friction and constraints is how a
+        // rigid-body character ends up worse than this one.
+
+        virtual PhysicsCharacterId addCharacter(const CharacterSettings& settings) = 0;
+
+        virtual void removeCharacter(PhysicsCharacterId character) = 0;
+
+        virtual std::size_t characterCount() const = 0;
+
+        virtual glm::vec3 characterPosition(PhysicsCharacterId character) const = 0;
+
+        // Teleports, and re-finds what is underfoot afterwards.
+        virtual void setCharacterPosition(PhysicsCharacterId character, glm::vec3 position) = 0;
+
+        // After a move this is what the character *managed* to do rather than
+        // what it was asked to: a run into a wall reads back as a stop, which
+        // is what makes the next step accelerate from rest rather than from
+        // an imaginary six metres per second.
+        virtual glm::vec3 characterVelocity(PhysicsCharacterId character) const = 0;
+
+        virtual void setCharacterVelocity(PhysicsCharacterId character, glm::vec3 velocity) = 0;
+
+        virtual CharacterGround characterGround(PhysicsCharacterId character) const = 0;
+
+        // Moves the character by its velocity for one step, resolving
+        // collisions, sliding along walls and steep slopes, walking up steps
+        // and staying attached to the floor over a crest.
+        virtual void updateCharacter(PhysicsCharacterId character, float deltaSeconds) = 0;
+
         // Advances the simulation one fixed step. Call with the same delta
         // every time: a fixed-step simulation fed a variable step is neither
         // fixed nor reproducible.
         virtual void step(float deltaSeconds) = 0;
+
+        // What the world was built with. A character needs it to know which
+        // way is down and how hard, and asking the world is better than every
+        // caller carrying a copy that can disagree with it.
+        virtual glm::vec3 gravity() const = 0;
 
         // Contacts that began since the last drain, in a deterministic order.
         // Collected during step() from whatever threads the backend simulates

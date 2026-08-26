@@ -180,6 +180,22 @@ namespace ege {
 
         void setPhysics(class PhysicsWorld* backend) { physicsBackend = backend; }
 
+        // ---- Input ---------------------------------------------------------
+
+        // This frame's input, or null where there is no window to read it
+        // from - a test, a headless tool, a scene being cooked. Carried the
+        // same way and for the same reason as the physics backend: gameplay
+        // asks `world().input()`, the ECS learns nothing about GLFW, and a
+        // behaviour that wants the keyboard does not have to be handed one
+        // through a constructor the editor would also have to know about.
+        //
+        // Unlike physics this outlives play: the editor reads input too, and
+        // a behaviour written to null-check it is a behaviour that works in
+        // both.
+        class Input* input() const { return inputSource; }
+
+        void setInput(class Input* source) { inputSource = source; }
+
     private:
         template<typename T>
         ComponentPool<T>& poolFor();
@@ -207,6 +223,7 @@ namespace ege {
         std::unordered_map<std::type_index, std::unique_ptr<ComponentPoolBase>> componentPools;
 
         class PhysicsWorld* physicsBackend = nullptr;
+        class Input* inputSource = nullptr;
     };
 
 }  // namespace ege
