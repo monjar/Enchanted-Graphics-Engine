@@ -32,17 +32,6 @@ namespace ege {
         return pull > 1e-6f ? -gravity / pull : glm::vec3{0.f, 1.f, 0.f};
     }
 
-    glm::vec2 applyDeadzone(glm::vec2 stick, float deadzone) {
-        const float magnitude = glm::length(stick);
-        if (magnitude <= deadzone || magnitude <= 0.f) {
-            return glm::vec2{0.f};
-        }
-        // Rescaled so the usable range still reaches one at full deflection:
-        // without this a deadzone also costs the player their top speed.
-        const float scaled = std::min((magnitude - deadzone) / (1.f - deadzone), 1.f);
-        return stick * (scaled / magnitude);
-    }
-
     glm::vec3 moveDirection(glm::vec2 stick, glm::vec3 reference, glm::vec3 up) {
         const glm::vec3 axis = safeUp(up);
         const glm::vec3 forward = flatten(reference, axis);

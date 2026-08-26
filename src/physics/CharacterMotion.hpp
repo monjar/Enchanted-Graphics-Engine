@@ -45,12 +45,6 @@ namespace ege {
     // anywhere else.
     glm::vec3 upFromGravity(glm::vec3 gravity);
 
-    // A radial deadzone that rescales what is left, so the first millimetre
-    // past the threshold is a crawl rather than a jump to a fifth of walking
-    // speed. Radial rather than per-axis: a per-axis deadzone squares off the
-    // circle a stick actually moves in, and diagonals arrive short.
-    glm::vec2 applyDeadzone(glm::vec2 stick, float deadzone);
-
     // A stick reading turned into a direction in the character's plane: the
     // stick's +y drives `reference` flattened into that plane, its +x the
     // right-hand perpendicular. The result keeps the stick's magnitude, so a

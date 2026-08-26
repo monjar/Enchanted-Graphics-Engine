@@ -117,6 +117,58 @@ namespace ege {
         Count = 8,
     };
 
+    // Gamepad buttons, in the layout GLFW maps every recognised pad onto.
+    //
+    // The names are the Xbox ones because a name has to be something, and the
+    // mapping is what makes them mean the same thing everywhere: `A` is the
+    // bottom face button on a DualShock, a Switch Pro controller and a
+    // no-name USB pad alike, rather than whichever button that pad's firmware
+    // happened to number first. GLFW carries the controller database that
+    // does it; the engine carries none of that knowledge.
+    //
+    // Numbered to match GLFW's own, like Key and MouseButton, and pinned by a
+    // test for the same reason.
+    enum class GamepadButton : std::int32_t {
+        A = 0,
+        B = 1,
+        X = 2,
+        Y = 3,
+        LeftBumper = 4,
+        RightBumper = 5,
+        Back = 6,
+        Start = 7,
+        Guide = 8,
+        LeftThumb = 9,
+        RightThumb = 10,
+        DpadUp = 11,
+        DpadRight = 12,
+        DpadDown = 13,
+        DpadLeft = 14,
+
+        Count = 15,
+    };
+
+    // Gamepad axes, in the same mapping.
+    //
+    // The sticks report -1 at left and at *up*, which is the convention SDL's
+    // database is written in and therefore the one GLFW hands over. The
+    // engine's own stick accessors flip Y so that pushing forward is
+    // positive; the raw accessor does not, because a raw value that has been
+    // quietly adjusted is not raw.
+    //
+    // Triggers rest at -1 and reach +1 fully pressed, which is why an axis
+    // bound as an action carries a scale as well as a threshold.
+    enum class GamepadAxis : std::int32_t {
+        LeftX = 0,
+        LeftY = 1,
+        RightX = 2,
+        RightY = 3,
+        LeftTrigger = 4,
+        RightTrigger = 5,
+
+        Count = 6,
+    };
+
     // How the cursor behaves while the window has focus.
     enum class CursorMode {
         Normal,    // visible, free to leave the window

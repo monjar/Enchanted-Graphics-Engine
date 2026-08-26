@@ -226,6 +226,28 @@ begins touching another, each side told from its own side, and
 a ray. A `RigidBody`'s `body` field holds the live handle, so an impulse is
 `world().physics()->addImpulse(self().fetch<RigidBody>().body, kick)`.
 
+And it reaches input the same way: `world().input()`, null where there is no
+window to read one from — a test, a headless tool — which is why a behaviour
+that checks for null works in the editor, in CI and in a player alike.
+
+**Input is bound by name.** Actions are what gameplay reads (`isActionDown`,
+`wasActionPressed`, `axis`), and keys, mouse buttons, gamepad buttons and
+gamepad axes are what get bound to them — so a rebind is a binding change and
+never a code change. Gamepads come through GLFW's *gamepad* mapping rather
+than raw joystick numbering, which is what makes `GamepadButton::A` the
+bottom face button on every pad its controller database knows rather than
+whichever one the firmware numbered first; four pads are tracked, because
+four is a couch.
+
+An axis binds with a sign and a threshold, which is how one stick axis
+becomes two opposed actions and how a trigger resting at −1 becomes an action
+resting at zero. `axis()` is the difference of two *analog* action values, so
+a stick asks for exactly as much as it was pushed while a key still asks for
+exactly one, and `leftStick()` / `rightStick()` hand over a deadzoned vector
+with +y forward for anything that wants a direction rather than two numbers.
+Neither the free-fly camera nor the character controller contains the word
+"gamepad".
+
 ## Physics
 
 Rigid bodies, through [Jolt](https://github.com/jrouwe/JoltPhysics) — but
@@ -408,6 +430,9 @@ is why that question is answered by the unit tests above.
 | `Space` / `Shift` | Jump / run — bound for characters, unused until one is player-driven |
 | `F1` | Show or hide the editor |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+
+Or a gamepad, on the same actions: left stick moves, right stick looks,
+triggers rise and fall, `A` jumps, the left stick pressed in runs.
 
 With the editor up, the camera answers only while the cursor is over the
 scene view; anywhere else the mouse and keyboard belong to the panels.

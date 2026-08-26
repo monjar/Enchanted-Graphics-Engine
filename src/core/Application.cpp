@@ -428,6 +428,11 @@ namespace ege {
         // scene, having one keyboard, shares the four movement actions.
         window.input().bindAction("Jump", Key::Space);
         window.input().bindAction("Run", Key::LeftShift);
+        // Where a thumb expects them on a pad, and bound by the same names,
+        // so nothing downstream is told which one is in use.
+        window.input().bindAction("Jump", GamepadButton::A);
+        window.input().bindAction("Run", GamepadButton::LeftThumb);
+        window.input().bindAction("Run", GamepadAxis::RightTrigger, 1.f, 0.5f);
 
         // Behaviours read input through the world, the same way they reach
         // physics. Set once and left: the window outlives every scene, and a

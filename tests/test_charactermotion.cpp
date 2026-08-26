@@ -16,7 +16,6 @@
 #include <cmath>
 
 using ege::advanceCharacter;
-using ege::applyDeadzone;
 using ege::approach;
 using ege::CharacterController;
 using ege::CharacterFrame;
@@ -52,28 +51,6 @@ namespace {
     }
 
 }  // namespace
-
-TEST_CASE("a radial deadzone rescales what is left of the stick") {
-    // Inside: nothing at all, however the components are distributed.
-    CHECK(glm::length(applyDeadzone({0.1f, 0.1f}, 0.2f)) == doctest::Approx(0.f));
-
-    // Just outside: a crawl, not a fifth of walking speed. Half way from the
-    // threshold to full deflection is half output.
-    const glm::vec2 half = applyDeadzone({0.6f, 0.f}, 0.2f);
-    CHECK(half.x == doctest::Approx(0.5f));
-    CHECK(half.y == doctest::Approx(0.f));
-
-    // Full deflection still reaches one: a deadzone must not also cost the
-    // player their top speed.
-    CHECK(glm::length(applyDeadzone({1.f, 0.f}, 0.2f)) == doctest::Approx(1.f));
-
-    // Radial, not per-axis: a stick pushed into a corner is at magnitude one
-    // and comes back out at magnitude one, along the diagonal it went in on.
-    const glm::vec2 diagonal =
-        applyDeadzone({glm::root_two<float>() / 2.f, glm::root_two<float>() / 2.f}, 0.2f);
-    CHECK(glm::length(diagonal) == doctest::Approx(1.f));
-    CHECK(diagonal.x == doctest::Approx(diagonal.y));
-}
 
 TEST_CASE("movement is relative to where the camera looks") {
     const glm::vec3 up{0.f, 1.f, 0.f};

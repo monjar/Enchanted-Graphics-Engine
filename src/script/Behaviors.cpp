@@ -82,14 +82,23 @@ namespace ege {
         if (input->cursorMode() != CursorMode::Normal) {
             lookYaw += input->mouseDelta().x * mouseSensitivity;
         }
-        lookYaw += input->axis("LookLeft", "LookRight") * 2.f * deltaSeconds;
+        // The right stick turns as well, at a rate per second rather than per
+        // pixel: a stick held over is a steady turn, where a mouse moved is a
+        // fixed amount of turn.
+        lookYaw += (input->axis("LookLeft", "LookRight") + input->rightStick().x) * lookSpeed *
+                   deltaSeconds;
         lookYaw = std::fmod(lookYaw, glm::two_pi<float>());
 
         // The same forward the rest of the engine builds from a yaw, so
         // "forward" means the same thing to the character as to the camera.
         const glm::vec3 forward{std::sin(lookYaw), 0.f, std::cos(lookYaw)};
-        const glm::vec2 stick{
-            input->axis("MoveLeft", "MoveRight"), input->axis("MoveBackward", "MoveForward")};
+        // Keyboard and stick added rather than chosen between, so a player
+        // can put a hand on either at any moment; the length is clamped
+        // downstream, which is what stops the two adding up to double speed.
+        const glm::vec2 stick =
+            glm::vec2{
+                input->axis("MoveLeft", "MoveRight"), input->axis("MoveBackward", "MoveForward")} +
+            input->leftStick();
 
         // Up is the world's, not the entity's: the demo scene's is -Y, and
         // the plane a character walks in is the one perpendicular to gravity.

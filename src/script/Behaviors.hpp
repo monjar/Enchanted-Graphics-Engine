@@ -67,6 +67,10 @@ namespace ege {
     public:
         // Radians per pixel of mouse movement.
         float mouseSensitivity = 0.0025f;
+        // Radians per second at full deflection, for the things that turn at
+        // a rate rather than by an amount: the right stick and the arrow
+        // keys.
+        float lookSpeed = 2.5f;
         // Where the player is looking, as a yaw about Y. Reflected so a scene
         // can start the player facing somewhere in particular.
         float lookYaw = 0.f;
@@ -144,6 +148,7 @@ EGE_REFLECT_END()
 
 EGE_REFLECT(ege::PlayerCharacter)
 EGE_FIELD(mouseSensitivity).range(0.0001f, 0.02f).tooltip("Radians per pixel of mouse movement");
+EGE_FIELD(lookSpeed).range(0.f, 10.f).tooltip("Radians per second for the stick and arrow keys");
 EGE_FIELD(lookYaw).range(-3.1416f, 3.1416f).tooltip("Where the player is looking, about Y");
 EGE_REFLECT_END()
 
