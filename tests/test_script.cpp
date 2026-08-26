@@ -606,7 +606,7 @@ TEST_CASE("both sides of a trigger hear about it") {
 
     World world;
 
-    const auto attachLog = [&world](Entity entity) {
+    const auto attachLog = [](Entity entity) {
         Script script{};
         Script::Slot slot{};
         slot.behavior = "TriggerLog";
