@@ -2081,16 +2081,34 @@ namespace ege {
             dispenser.attach<BoxCollider>(BoxCollider{{0.5f, 3.f, 0.5f}, {0.f, -1.5f, 0.f}});
             dispenser.attach<Trigger>(Trigger{"Character"});
 
+            PrefabRef pickupPrefab{};
+            if (const AssetRecord* record =
+                    assets.findByPath(std::filesystem::path{"prefabs"} / "pickup.egeprefab")) {
+                pickupPrefab = PrefabRef{record->id, assets.prefab(record->id)};
+            } else {
+                EGE_WARN("no pickup prefab in the project; there will be nothing to collect");
+            }
+
+            // Three of them along the circuit, stamped here rather than
+            // spawned during play - the same asset, the same call, and a
+            // reminder that a prefab is not a runtime-only thing. These are
+            // what makes the level winnable inside one lap; the dispenser
+            // above is what makes it winnable again.
+            constexpr glm::vec3 pickupSpots[] = {
+                {1.9f, 0.3f, -1.06f}, {1.0f, 0.3f, -1.9f}, {2.0f, 0.3f, -1.9f}};
+            for (const glm::vec3& spot : pickupSpots) {
+                Entity pickup = prefab::spawn(world, pickupPrefab);
+                if (pickup.alive()) {
+                    pickup.fetch<Transform>().translation = spot;
+                    hierarchy::markDirty(world, pickup.id());
+                }
+            }
+
             Script dispenserScript{};
             Script::Slot dispenserSlot{};
             dispenserSlot.behavior = "ege::Spawner";
             auto spawner = std::make_shared<Spawner>();
-            if (const AssetRecord* record =
-                    assets.findByPath(std::filesystem::path{"prefabs"} / "pickup.egeprefab")) {
-                spawner->prefab = PrefabRef{record->id, assets.prefab(record->id)};
-            } else {
-                EGE_WARN("no pickup prefab in the project; the dispenser will make nothing");
-            }
+            spawner->prefab = pickupPrefab;
             // Above the pad, so a copy falls onto the floor rather than
             // arriving inside it. Remember -Y is up.
             spawner->offset = {0.f, -0.55f, 0.f};
@@ -2099,6 +2117,51 @@ namespace ege {
             dispenserSlot.instance = std::move(spawner);
             dispenserScript.behaviors.push_back(std::move(dispenserSlot));
             dispenser.attach<Script>(std::move(dispenserScript));
+
+            // The win condition, and the whole point of events: three
+            // objects that have never met.
+            //
+            // A pickup says it was collected and removes itself, knowing
+            // nothing about scores. The goal counts, knowing nothing about
+            // what it is counting or what happens when it is done - only that
+            // when it is, it waits a beat and says so. The gate hears that
+            // and opens, having never heard of a pickup. Wire any two of them
+            // together with a pointer and the third becomes impossible.
+            Entity gate = addMesh(
+                "Gate",
+                box,
+                makeMaterial("Gate", glm::vec3{0.62f, 0.24f, 0.30f}, 0.35f, 0.4f),
+                {2.9f, 0.15f, -0.75f},
+                {0.12f, 0.7f, 0.62f});
+            gate.attach<BoxCollider>();
+            RigidBody gateBody{};
+            gateBody.kinematic = true;
+            gate.attach<RigidBody>(gateBody);
+
+            Script gateScript{};
+            Script::Slot gateSlot{};
+            gateSlot.behavior = "ege::OpenOnLevelComplete";
+            auto opener = std::make_shared<OpenOnLevelComplete>();
+            opener->opening = {0.f, 0.72f, 0.f};
+            opener->speed = 0.9f;
+            gateSlot.instance = std::move(opener);
+            gateScript.behaviors.push_back(std::move(gateSlot));
+            gate.attach<Script>(std::move(gateScript));
+
+            // The counter has no body and nothing to draw: it is a rule, and
+            // a rule is a behaviour on an entity that is only there to hold
+            // it. A level that wanted two rules would have two.
+            Entity rules = world.spawn("Rules");
+            rules.attach<Transform>();
+            Script rulesScript{};
+            Script::Slot rulesSlot{};
+            rulesSlot.behavior = "ege::Goal";
+            auto goal = std::make_shared<Goal>();
+            goal->needed = 3;
+            goal->celebrateAfter = 0.8f;
+            rulesSlot.instance = std::move(goal);
+            rulesScript.behaviors.push_back(std::move(rulesSlot));
+            rules.attach<Script>(std::move(rulesScript));
 
             Script plateScript{};
             Script::Slot plateSlot{};

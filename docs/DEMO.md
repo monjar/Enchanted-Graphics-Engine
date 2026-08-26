@@ -50,6 +50,15 @@ which is the difference between spawning and constructing. It makes four,
 with a cooldown, because a spawner that runs forever fills the world it is
 standing in.
 
+And there is a **win condition**, which is three objects that have never met:
+three pickups lie on the circuit, each of which says it was collected and
+removes itself; a `Goal` entity counts them without knowing what it is
+counting; and when the third lands it waits a beat - a timer, so the pause is
+the same length of simulated time however the frame rate wanders - and says
+the level is complete. A second gate hears that and opens, having never heard
+of a pickup. Wire any two of the three together with a pointer and the third
+becomes impossible.
+
 `scripts/record_character_demo.sh` records it.
 
 ## The engine being used

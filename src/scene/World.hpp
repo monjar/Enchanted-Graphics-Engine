@@ -3,6 +3,7 @@
 #include "core/Assert.hpp"
 #include "scene/ComponentPool.hpp"
 #include "scene/Entity.hpp"
+#include "scene/Events.hpp"
 
 #include <memory>
 #include <string>
@@ -180,6 +181,19 @@ namespace ege {
 
         void setPhysics(class PhysicsWorld* backend) { physicsBackend = backend; }
 
+        // ---- Events --------------------------------------------------------
+
+        // The scene's event bus, owned rather than pointed at: unlike physics
+        // and input there is nothing underneath it to borrow, and a message
+        // between two behaviours needs no device, no window and no backend.
+        //
+        // It outlives play the way input does, but its listeners do not:
+        // stopping clears them, because a subscription is a live behaviour
+        // saying "tell me", and Stop is when those behaviours go.
+        EventBus& events() { return eventBus; }
+
+        const EventBus& events() const { return eventBus; }
+
         // ---- Input ---------------------------------------------------------
 
         // This frame's input, or null where there is no window to read it
@@ -213,6 +227,12 @@ namespace ege {
             bool alive = false;
             std::string name;
         };
+
+        // Declared before the component pools, so that it is destroyed
+        // *after* them: behaviours end their subscriptions as they go, and a
+        // bus that had already gone would be a use-after-free on the way
+        // down.
+        EventBus eventBus;
 
         std::vector<EntitySlot> slots;
         // Indices of despawned slots, reused before the array grows, so index

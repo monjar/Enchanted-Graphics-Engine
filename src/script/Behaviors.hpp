@@ -3,6 +3,7 @@
 #include "reflect/BuiltinTypes.hpp"
 #include "scene/Prefab.hpp"
 #include "script/Behavior.hpp"
+#include "script/GameEvents.hpp"
 
 #include <glm/glm.hpp>
 
@@ -203,6 +204,66 @@ namespace ege {
         float ready = 0.f;
     };
 
+    // A thing that is collected by being touched.
+    //
+    // Attached to whatever the prefab spawns. It says what happened and
+    // removes itself, and it knows nothing at all about scores, doors or how
+    // many of it there are - which is what lets the same prefab be a pickup
+    // in one level and scenery in another.
+    class Pickup : public Behavior {
+    public:
+        // Only this collision layer collects it, by the same reasoning a
+        // trigger has an `only`: a crate bumping into a coin has not picked
+        // it up.
+        std::string collectedBy = "Character";
+
+        void onContact(const Contact& contact) override;
+    };
+
+    // Counts pickups and declares the level over.
+    //
+    // The middle of the chain, and the only thing that knows there is a
+    // chain: it hears `PickupCollected` from things it has never met, and
+    // when the last one lands it waits a beat and raises `LevelComplete`. The
+    // beat is a timer rather than a frame counter, so it is the same length
+    // of *simulated* time however the frame rate wanders.
+    class Goal : public Behavior {
+    public:
+        // How many make a level. Reached from below rather than counted down,
+        // so a level that spawns more than it needs still ends.
+        int needed = 3;
+        // Seconds between the last pickup and the celebration, so the two
+        // read as cause and effect rather than as one event.
+        float celebrateAfter = 1.f;
+
+        void onSpawn() override;
+
+        int collected() const { return count; }
+
+    private:
+        int count = 0;
+        bool finished = false;
+    };
+
+    // Slides an entity somewhere else, once, when the level is won.
+    //
+    // Attached to the door. It has never heard of a pickup: it knows a level
+    // can be complete and what it does about that, which is the whole of what
+    // an event buys.
+    class OpenOnLevelComplete : public Behavior {
+    public:
+        glm::vec3 opening{0.f, -0.9f, 0.f};
+        float speed = 1.2f;
+
+        void onSpawn() override;
+        void onFixedTick(float deltaSeconds) override;
+
+    private:
+        glm::vec3 closed{0.f};
+        float openness = 0.f;
+        bool opening_ = false;
+    };
+
     // Pushes a dynamic mesh's vertices along their normals by a travelling
     // sine wave. The one behaviour here that exists to prove something rather
     // than to look nice: geometry a script writes every frame.
@@ -265,6 +326,20 @@ EGE_FIELD(prefab).tooltip("The scene fragment to stamp out");
 EGE_FIELD(offset).tooltip("Where the copy appears, relative to this entity");
 EGE_FIELD(limit).range(0.f, 64.f).tooltip("The most it will ever make");
 EGE_FIELD(cooldown).range(0.f, 30.f).tooltip("Seconds before it answers again");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::Pickup)
+EGE_FIELD(collectedBy).tooltip("Only this collision layer collects it");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::Goal)
+EGE_FIELD(needed).range(1.f, 64.f).tooltip("How many pickups make a level");
+EGE_FIELD(celebrateAfter).range(0.f, 10.f).tooltip("Seconds before the celebration");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::OpenOnLevelComplete)
+EGE_FIELD(opening).tooltip("How far it travels from where it started");
+EGE_FIELD(speed).range(0.f, 20.f).tooltip("Units per second");
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::PressurePlate)
