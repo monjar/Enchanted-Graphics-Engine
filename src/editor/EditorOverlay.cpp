@@ -88,6 +88,8 @@ namespace ege {
                     return "EGE_ASSET_TEXTURE";
                 case AssetKind::scene:
                     return "EGE_ASSET_SCENE";
+                case AssetKind::prefab:
+                    return "EGE_ASSET_PREFAB";
                 case AssetKind::unknown:
                     break;
             }

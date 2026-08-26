@@ -1,6 +1,7 @@
 #pragma once
 
 #include "reflect/BuiltinTypes.hpp"
+#include "scene/Prefab.hpp"
 #include "script/Behavior.hpp"
 
 #include <glm/glm.hpp>
@@ -174,6 +175,34 @@ namespace ege {
         float openness = 0.f;
     };
 
+    // Stamps out a prefab when something enters the trigger it is attached
+    // to.
+    //
+    // The whole of what a prefab is for, in one behaviour: naming an asset
+    // and asking for a copy of it. Nothing here knows what is in the prefab -
+    // a crate, a pickup, a monster - which is the difference between spawning
+    // and constructing.
+    class Spawner : public Behavior {
+    public:
+        PrefabRef prefab;
+        // Where the copy appears, relative to this entity.
+        glm::vec3 offset{0.f, -1.f, 0.f};
+        // The most it will ever make. A spawner that runs forever fills the
+        // world, and the world is what the spawner is standing in.
+        int limit = 4;
+        // Seconds before it will answer again, so a character standing in the
+        // volume does not become a fountain.
+        float cooldown = 1.5f;
+
+        void onSpawn() override;
+        void onTriggerEnter(Entity other) override;
+        void onFixedTick(float deltaSeconds) override;
+
+    private:
+        int made = 0;
+        float ready = 0.f;
+    };
+
     // Pushes a dynamic mesh's vertices along their normals by a travelling
     // sine wave. The one behaviour here that exists to prove something rather
     // than to look nice: geometry a script writes every frame.
@@ -229,6 +258,13 @@ EGE_FIELD(walkSpeed).range(0.f, 20.f).tooltip("The ground speed the walk clip wa
 EGE_FIELD(runSpeed).range(0.f, 40.f).tooltip("The ground speed the run clip was drawn for");
 EGE_FIELD(idleSpeed).range(0.f, 2.f).tooltip("Below this it is standing still");
 EGE_FIELD(fadeSeconds).range(0.f, 1.f).tooltip("How long a change of clip takes");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::Spawner)
+EGE_FIELD(prefab).tooltip("The scene fragment to stamp out");
+EGE_FIELD(offset).tooltip("Where the copy appears, relative to this entity");
+EGE_FIELD(limit).range(0.f, 64.f).tooltip("The most it will ever make");
+EGE_FIELD(cooldown).range(0.f, 30.f).tooltip("Seconds before it answers again");
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::PressurePlate)

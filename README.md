@@ -377,6 +377,24 @@ the default and says so. Underneath, the layer rides in the top bits of
 Jolt's object layer alongside the moves-or-not bit the broad phase already
 used, so the optimisation and the gameplay filter stay separate questions.
 
+**Prefabs.** A `.egeprefab` is a scene fragment — one entity, everything
+under it, and every component on any of them — written in the same shape a
+scene is. That is not a coincidence: parents are recorded as positions inside
+the document rather than as entity ids, which is what lets a fragment re-link
+to itself when it is stamped out and what lets it be stamped twice into the
+same world.
+
+```cpp
+Entity pickup = prefab::spawn(world(), reference);
+```
+
+The loaded form is the *document*, not a world: a prefab is a description, and
+each instantiation is a fresh set of entities with no link back to the file.
+Editing a prefab does not reach into the copies already spawned — that wants
+an instance link, which is a different feature and one the editor should ask
+for before it exists. A `PrefabRef` resolves like any other asset reference,
+so a behaviour can name one in a reflected field and a scene can save it.
+
 **Asset hot reload.** The engine watches the project directory while it runs:
 save a change to `assets/materials/floor.egematerial` and the demo's floor
 changes without a restart. A material is rewritten inside the object every
@@ -413,8 +431,8 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: prefabs, timers and typed events, sound, runtime UI, and the
-standalone editor and player.
+Still to come: timers and typed events, sound, runtime UI, and the standalone
+editor and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.
@@ -577,14 +595,16 @@ src/
                 the depth pyramid and GPU-driven culling, skybox, bloom and
                 post-process
   scene/        world, entities, component pools, components, hierarchy,
-                serialization, render-transform interpolation
+                scene and prefab serialization, render-transform
+                interpolation
   script/       behaviours, the behaviour registry, and the runtime module
                 loader that makes them reloadable
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
                 are shared declarations, included rather than compiled
 sandbox/        a project's behaviours, built as a module the engine loads at
                 runtime - this is where a game's gameplay code would live
-assets/         runtime assets, resolved via EGE_ASSET_ROOT
+assets/         runtime assets, resolved via EGE_ASSET_ROOT - models as text
+                glTF, materials and prefabs as JSON; no binary files
 tools/          EnchantedFrameChecks, which reads recorded frames back
                 and says whether a picture came out
 tests/          doctest suite

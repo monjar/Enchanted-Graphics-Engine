@@ -205,6 +205,42 @@ namespace ege {
         controller->run = run;
     }
 
+    void Spawner::onSpawn() {
+        made = 0;
+        ready = 0.f;
+    }
+
+    void Spawner::onTriggerEnter(Entity) {
+        if (made >= limit || ready > 0.f) {
+            return;
+        }
+
+        Entity copy = prefab::spawn(world(), prefab);
+        if (!copy.alive()) {
+            // An unresolved reference, or a document that would not read.
+            // Both leave the spawner able to try again rather than counting a
+            // copy that does not exist.
+            return;
+        }
+
+        made++;
+        ready = cooldown;
+
+        // Placed relative to the spawner, in world space: whatever the
+        // prefab's own root transform said is where it sits *within* the
+        // fragment, and this is where the fragment goes.
+        Transform* placed = copy.find<Transform>();
+        const Transform* here = self().find<Transform>();
+        if (placed != nullptr && here != nullptr) {
+            placed->translation = here->translation + offset;
+            hierarchy::markDirty(world(), copy.id());
+        }
+    }
+
+    void Spawner::onFixedTick(float deltaSeconds) {
+        ready = std::max(ready - deltaSeconds, 0.f);
+    }
+
     void PressurePlate::onSpawn() {
         occupants = 0;
         openness = 0.f;
@@ -287,3 +323,4 @@ EGE_BEHAVIOR(ege::PlayerCharacter)
 EGE_BEHAVIOR(ege::Patrol)
 EGE_BEHAVIOR(ege::CharacterAnimation)
 EGE_BEHAVIOR(ege::PressurePlate)
+EGE_BEHAVIOR(ege::Spawner)

@@ -43,6 +43,13 @@ was still there. It is set to notice only the `Character` layer, so the crate
 the character shoves across the same plate every lap does not open it — a
 plate any passing box can open is not a door with a key.
 
+On the opposite edge there is a **dispenser**: another trigger, with a
+`Spawner` behaviour that names one asset - `assets/prefabs/pickup.egeprefab` -
+and asks for a copy of it. Nothing in the behaviour knows what is in the file,
+which is the difference between spawning and constructing. It makes four,
+with a cooldown, because a spawner that runs forever fills the world it is
+standing in.
+
 `scripts/record_character_demo.sh` records it.
 
 ## The engine being used

@@ -3,6 +3,7 @@
 #include "assets/AssetDatabase.hpp"
 #include "assets/AssetRef.hpp"
 #include "reflect/Serialization.hpp"
+#include "scene/Prefab.hpp"
 
 #include <optional>
 #include <string>
@@ -58,6 +59,7 @@ namespace ege {
 
         registerRef<Model>(serializer, [&database](Guid id) { return database.mesh(id); });
         registerRef<Material>(serializer, [&database](Guid id) { return database.material(id); });
+        registerRef<Prefab>(serializer, [&database](Guid id) { return database.prefab(id); });
     }
 
 }  // namespace ege

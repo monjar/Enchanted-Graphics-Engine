@@ -2059,6 +2059,47 @@ namespace ege {
             plate.attach<BoxCollider>(BoxCollider{{0.5f, 3.f, 0.5f}, {0.f, -1.5f, 0.f}});
             plate.attach<Trigger>(Trigger{"Character"});
 
+            // A spawner on the far edge of the circuit, and the whole of
+            // what a prefab is for: it names one asset and asks for a copy.
+            // Nothing in the behaviour knows what is in the file - a crate, a
+            // pickup, a monster - which is the difference between spawning
+            // and constructing.
+            //
+            // The material the prefab names is built here under the name its
+            // id was derived from. That is the one string this scene and
+            // `scripts/make_pickup_prefab.py` have to agree on, and if they
+            // stop agreeing the pickup arrives untextured rather than not at
+            // all.
+            makeMaterial("Pickup", glm::vec3{0.95f, 0.78f, 0.20f}, 0.7f, 0.25f);
+
+            Entity dispenser = addMesh(
+                "Dispenser",
+                box,
+                makeMaterial("Dispenser", glm::vec3{0.22f, 0.55f, 0.42f}, 0.2f, 0.5f),
+                {0.5f, 0.47f, -1.5f},
+                {0.5f, 0.06f, 0.5f});
+            dispenser.attach<BoxCollider>(BoxCollider{{0.5f, 3.f, 0.5f}, {0.f, -1.5f, 0.f}});
+            dispenser.attach<Trigger>(Trigger{"Character"});
+
+            Script dispenserScript{};
+            Script::Slot dispenserSlot{};
+            dispenserSlot.behavior = "ege::Spawner";
+            auto spawner = std::make_shared<Spawner>();
+            if (const AssetRecord* record =
+                    assets.findByPath(std::filesystem::path{"prefabs"} / "pickup.egeprefab")) {
+                spawner->prefab = PrefabRef{record->id, assets.prefab(record->id)};
+            } else {
+                EGE_WARN("no pickup prefab in the project; the dispenser will make nothing");
+            }
+            // Above the pad, so a copy falls onto the floor rather than
+            // arriving inside it. Remember -Y is up.
+            spawner->offset = {0.f, -0.55f, 0.f};
+            spawner->limit = 4;
+            spawner->cooldown = 2.f;
+            dispenserSlot.instance = std::move(spawner);
+            dispenserScript.behaviors.push_back(std::move(dispenserSlot));
+            dispenser.attach<Script>(std::move(dispenserScript));
+
             Script plateScript{};
             Script::Slot plateSlot{};
             plateSlot.behavior = "ege::PressurePlate";

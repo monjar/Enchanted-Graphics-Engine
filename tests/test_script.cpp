@@ -11,6 +11,7 @@
 #include "reflect/Serialization.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
+#include "scene/Prefab.hpp"
 #include "scene/SceneSerializer.hpp"
 #include "script/Behavior.hpp"
 #include "script/BehaviorRegistry.hpp"
@@ -733,4 +734,71 @@ TEST_CASE("a pressure plate opens its door while something stands on it") {
     scripts.deliverTriggers(world, {{plate, first}}, true);
     tick(60);
     CHECK(door.fetch<Transform>().translation.y == doctest::Approx(-1.f).epsilon(0.02f));
+}
+
+TEST_CASE("a spawner stamps out its prefab when something enters") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinSerializers();
+    ege::registerBuiltinComponents();
+
+    // The fragment, built in a scratch world and written out - which is what
+    // an editor's "save as prefab" would have done.
+    World source;
+    Entity crate = source.spawn("Crate");
+    crate.attach<Transform>();
+    const std::string document = ege::prefab::write(source, crate.id());
+
+    World world;
+    Entity pad = world.spawn("Pad");
+    Transform padTransform{};
+    padTransform.translation = {4.f, 0.f, 0.f};
+    pad.attach<Transform>(padTransform);
+
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "ege::Spawner";
+    auto spawner = std::make_shared<ege::Spawner>();
+    // Resolved by hand rather than through the database: what a reference is
+    // for is naming an asset, and what a spawner needs is the document.
+    spawner->prefab = ege::PrefabRef{
+        ege::Guid::fromName("prefab:test"), std::make_shared<ege::Prefab>(ege::Prefab{document})};
+    spawner->offset = {0.f, 1.f, 0.f};
+    spawner->limit = 2;
+    spawner->cooldown = 0.5f;
+    slot.instance = spawner;
+    script.behaviors.push_back(std::move(slot));
+    pad.attach<Script>(std::move(script));
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+
+    Entity visitor = world.spawn("Visitor");
+    const auto enter = [&] { scripts.deliverTriggers(world, {{pad, visitor}}, true); };
+    const auto tick = [&](int steps) {
+        for (int i = 0; i < steps; i++) {
+            scripts.fixedTick(world, 1.f / 60.f);
+        }
+    };
+
+    enter();
+    CHECK(world.findByName("Crate").alive());
+    // Placed where the spawner said, relative to the spawner - whatever the
+    // prefab's own root transform held is where it sits inside the fragment.
+    CHECK(world.findByName("Crate").fetch<Transform>().translation.x == doctest::Approx(4.f));
+    CHECK(world.findByName("Crate").fetch<Transform>().translation.y == doctest::Approx(1.f));
+
+    // Straight back in, inside the cooldown: a character standing in the
+    // volume is not a fountain.
+    const std::size_t afterFirst = world.entityCount();
+    enter();
+    CHECK(world.entityCount() == afterFirst);
+
+    // Past the cooldown, a second one - and then never again, because the
+    // limit is what stops a spawner filling the world it is standing in.
+    tick(60);
+    enter();
+    CHECK(world.entityCount() == afterFirst + 1);
+    tick(60);
+    enter();
+    CHECK(world.entityCount() == afterFirst + 1);
 }

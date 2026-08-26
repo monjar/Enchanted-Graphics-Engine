@@ -3,10 +3,12 @@
 #include "core/JobSystem.hpp"
 #include "core/Log.hpp"
 #include "reflect/Serialization.hpp"
+#include "scene/Prefab.hpp"
 
 #include <algorithm>
 #include <fstream>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <stdexcept>
 
 namespace ege {
@@ -33,6 +35,9 @@ namespace ege {
             if (extension == ".png" || extension == ".jpg" || extension == ".jpeg" ||
                 extension == ".tga" || extension == ".bmp" || extension == ".hdr") {
                 return AssetKind::texture;
+            }
+            if (extension == ".egeprefab") {
+                return AssetKind::prefab;
             }
             if (extension == ".egematerial") {
                 return AssetKind::material;
@@ -83,6 +88,8 @@ namespace ege {
                 return "material";
             case AssetKind::scene:
                 return "scene";
+            case AssetKind::prefab:
+                return "prefab";
             case AssetKind::unknown:
                 break;
         }
@@ -352,6 +359,39 @@ namespace ege {
         }
     }
 
+    std::shared_ptr<Prefab> AssetDatabase::prefab(Guid id) {
+        if (const auto hit = cached(prefabs, id)) {
+            return *hit;
+        }
+
+        const AssetRecord* record = find(id);
+        if (record == nullptr || record->kind != AssetKind::prefab || record->path.empty()) {
+            return nullptr;
+        }
+        // No canLoad() check, deliberately: a prefab is text, and the
+        // machinery that turns it into entities is the scene serializer's
+        // rather than the GPU's.
+
+        std::ifstream file{assetRoot / record->path};
+        if (!file) {
+            EGE_ERROR("cannot open prefab {}", record->path.string());
+            const std::lock_guard<std::mutex> lock{cacheMutex};
+            prefabs[id] = nullptr;
+            return nullptr;
+        }
+        // Through the stream buffer rather than an istreambuf_iterator pair:
+        // the iterator form makes GCC's null-dereference analysis give up
+        // inside libstdc++ and warn, and this reads the same.
+        std::ostringstream contents;
+        contents << file.rdbuf();
+        auto loaded = std::make_shared<Prefab>();
+        loaded->document = contents.str();
+
+        const std::lock_guard<std::mutex> lock{cacheMutex};
+        prefabs[id] = loaded;
+        return loaded;
+    }
+
     std::shared_ptr<Material> AssetDatabase::loadMaterialFile(const AssetRecord& record) {
         std::ifstream file{assetRoot / record.path};
         if (!file) {
@@ -447,6 +487,15 @@ namespace ege {
             }
                 EGE_INFO("Reloaded mesh {}", record->path.string());
                 return;
+            case AssetKind::prefab: {
+                // Dropping the document is the whole reload: nothing holds a
+                // prefab open, and what was already spawned from it is
+                // entities now rather than a copy of the file.
+                const std::lock_guard<std::mutex> lock{cacheMutex};
+                prefabs.erase(id);
+            }
+                EGE_INFO("Reloaded prefab {}", record->path.string());
+                return;
             case AssetKind::scene:
             case AssetKind::unknown:
                 return;
@@ -481,8 +530,12 @@ namespace ege {
                     return false;
                 }
                 break;
+            case AssetKind::prefab:
             case AssetKind::scene:
             case AssetKind::unknown:
+                // A prefab is a text file that no frame is waiting on, so
+                // there is nothing worth queueing: it loads when it is asked
+                // for.
                 return false;
         }
 
@@ -520,6 +573,9 @@ namespace ege {
                 return;
             case AssetKind::material:
                 material(id);
+                return;
+            case AssetKind::prefab:
+                prefab(id);
                 return;
             case AssetKind::scene:
             case AssetKind::unknown:

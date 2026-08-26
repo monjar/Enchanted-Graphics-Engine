@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "entities": [
+    {
+      "name": "Pickup",
+      "components": {
+        "ege::Transform": {
+          "translation": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "scale": [
+            0.18,
+            0.18,
+            0.18
+          ],
+          "rotation": [
+            0.0,
+            0.6,
+            0.0
+          ]
+        },
+        "ege::MeshRenderer": {
+          "mesh": "501c1205fb5c65efd01a229cbf2d53ad",
+          "material": "5a0ef28e2d933ebac9fafc0b1aba3d4c",
+          "visible": true
+        },
+        "ege::BoxCollider": {
+          "halfExtents": [
+            0.5,
+            0.5,
+            0.5
+          ],
+          "offset": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "ege::RigidBody": {
+          "mass": 0.4,
+          "kinematic": false,
+          "friction": 0.5,
+          "restitution": 0.25,
+          "linearDamping": 0.05,
+          "angularDamping": 0.05,
+          "gravityFactor": 1.0,
+          "sensor": false
+        },
+        "ege::PhysicsLayer": {
+          "name": "Props"
+        }
+      }
+    }
+  ]
+}
