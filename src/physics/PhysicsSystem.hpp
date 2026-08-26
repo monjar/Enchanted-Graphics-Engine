@@ -65,6 +65,14 @@ namespace ege {
 
         void createBody(World& world, EntityId entity);
 
+        void createCharacter(World& world, EntityId entity);
+
+        // Turns every character's intent into a move: the engine's own motion
+        // arithmetic decides the velocity, the backend decides how far that
+        // gets, and the result goes back onto the component and the
+        // Transform.
+        void moveCharacters(World& world, float deltaSeconds);
+
         // What was built for an entity, and how it was told to move -
         // remembered so a RigidBody edited mid-play from dynamic to
         // kinematic is noticed and rebuilt.
@@ -73,12 +81,22 @@ namespace ege {
             BodyMotion motion = BodyMotion::stationary;
         };
 
+        // What was built for a character, and where the system last put it -
+        // remembered so that a Transform written by gameplay is noticed as a
+        // teleport rather than quietly overwritten by where the capsule
+        // happens to be.
+        struct CharacterRecord {
+            PhysicsCharacterId id = invalidPhysicsCharacter;
+            glm::vec3 position{0.f};
+        };
+
         std::unique_ptr<PhysicsWorld> backend;
         // Every body the system made, keyed by owner. RigidBody caches the
         // same handle for gameplay's convenience, but this map is the record
         // - a despawned entity takes its components with it, and the body
         // left behind is exactly what this exists to find.
         std::unordered_map<EntityId, BodyRecord> bodies;
+        std::unordered_map<EntityId, CharacterRecord> characters;
     };
 
 }  // namespace ege

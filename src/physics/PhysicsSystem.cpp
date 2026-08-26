@@ -1,6 +1,7 @@
 #include "physics/PhysicsSystem.hpp"
 
 #include "core/Log.hpp"
+#include "physics/CharacterMotion.hpp"
 #include "physics/PhysicsComponents.hpp"
 #include "scene/Components.hpp"
 #include "scene/Hierarchy.hpp"
@@ -90,7 +91,10 @@ namespace ege {
         backend = PhysicsWorld::create(settings);
         world.setPhysics(backend.get());
         reconcile(world);
-        EGE_INFO("Physics started: {} bodies", backend->bodyCount());
+        EGE_INFO(
+            "Physics started: {} bodies, {} characters",
+            backend->bodyCount(),
+            backend->characterCount());
     }
 
     void PhysicsSystem::stop(World& world) {
@@ -101,6 +105,19 @@ namespace ege {
         // stay - they are the description play built the bodies from.
         world.each<RigidBody>(
             [](Entity, RigidBody& rigidBody) { rigidBody.body = invalidPhysicsBody; });
+        world.each<CharacterController>([](Entity, CharacterController& controller) {
+            controller.character = invalidPhysicsCharacter;
+            // Everything a run accumulated: mid-air, mid-jump, walking at
+            // six metres per second. Stop puts the transform back, and a
+            // character that came back to its starting mark still falling is
+            // the same leak the transform restore exists to prevent.
+            controller.velocity = glm::vec3{0.f};
+            controller.grounded = false;
+            controller.jumped = false;
+            controller.planarSpeed = 0.f;
+            controller.coyote = 0.f;
+            controller.buffered = 0.f;
+        });
         // Nothing is stepping these any more, and Stop is about to put their
         // transforms back where they were before Play. Leaving a pose to
         // interpolate away from would draw one frame sliding from where the
@@ -108,7 +125,11 @@ namespace ege {
         for (const auto& [entity, record] : bodies) {
             world.detach<PreviousTransform>(entity);
         }
+        for (const auto& [entity, record] : characters) {
+            world.detach<PreviousTransform>(entity);
+        }
         bodies.clear();
+        characters.clear();
         backend.reset();
         world.setPhysics(nullptr);
     }
@@ -128,6 +149,11 @@ namespace ege {
                 backend->moveKinematic(record.id, worldPoseOf(world, entity).pose, deltaSeconds);
             }
         }
+
+        // Characters move before the step rather than after it, so that the
+        // shove a character gives a crate is integrated by the step that
+        // follows rather than sitting on the body for a frame.
+        moveCharacters(world, deltaSeconds);
 
         backend->step(deltaSeconds);
 
@@ -212,6 +238,29 @@ namespace ege {
         world.each<BoxCollider>([&](Entity entity, BoxCollider&) { createFor(entity); });
         world.each<SphereCollider>([&](Entity entity, SphereCollider&) { createFor(entity); });
         world.each<CapsuleCollider>([&](Entity entity, CapsuleCollider&) { createFor(entity); });
+
+        // The same reconciliation for characters, which are their own kind of
+        // object rather than a body with a component on it.
+        std::vector<EntityId> lostCharacters;
+        for (const auto& [entity, record] : characters) {
+            if (!world.alive(entity) || world.find<CharacterController>(entity) == nullptr) {
+                lostCharacters.push_back(entity);
+            }
+        }
+        for (const EntityId entity : lostCharacters) {
+            backend->removeCharacter(characters[entity].id);
+            characters.erase(entity);
+            if (CharacterController* controller = world.find<CharacterController>(entity)) {
+                controller->character = invalidPhysicsCharacter;
+            }
+        }
+
+        world.each<CharacterController>([&](Entity entity, CharacterController&) {
+            if (characters.find(entity.id()) == characters.end() &&
+                world.find<Transform>(entity.id()) != nullptr) {
+                createCharacter(world, entity.id());
+            }
+        });
     }
 
     void PhysicsSystem::createBody(World& world, EntityId entity) {
@@ -251,6 +300,117 @@ namespace ege {
         beginInterpolating(world, entity);
         if (rigidBody != nullptr) {
             rigidBody->body = body;
+        }
+    }
+
+    void PhysicsSystem::createCharacter(World& world, EntityId entity) {
+        CharacterController* controller = world.find<CharacterController>(entity);
+        if (controller == nullptr) {
+            return;
+        }
+        const WorldPose worldPose = worldPoseOf(world, entity);
+
+        CharacterSettings settings{};
+        // Scaled like every other collider: a capsule fitted to a mesh stays
+        // fitted when the entity is scaled. The radius takes the larger of
+        // the two horizontal axes, because a capsule has one.
+        settings.radius = controller->radius * std::max(worldPose.scale.x, worldPose.scale.z);
+        settings.halfHeight = controller->halfHeight * worldPose.scale.y;
+        settings.position = worldPose.pose.position;
+        // Up is the world's, not the entity's: which way a character falls is
+        // decided by gravity, and a character standing on its head is a
+        // rotated mesh rather than a rotated simulation.
+        settings.up = upFromGravity(backend->gravity());
+        settings.maxSlopeAngle = controller->maxSlopeAngle;
+        settings.stepHeight = controller->stepHeight * worldPose.scale.y;
+        settings.stickToFloor = controller->stickToFloor * worldPose.scale.y;
+        settings.mass = controller->mass;
+        settings.pushForce = controller->pushForce;
+        settings.userData = toUserData(entity);
+
+        const PhysicsCharacterId id = backend->addCharacter(settings);
+        if (id == invalidPhysicsCharacter) {
+            return;
+        }
+        characters[entity] = CharacterRecord{id, worldPose.pose.position};
+        controller->character = id;
+        // Moved by the fixed step, so drawn between them - the same opt-in a
+        // simulated body makes.
+        beginInterpolating(world, entity);
+    }
+
+    void PhysicsSystem::moveCharacters(World& world, float deltaSeconds) {
+        const glm::vec3 gravity = backend->gravity();
+        const glm::vec3 up = upFromGravity(gravity);
+        const float pull = glm::length(gravity);
+
+        for (auto& [entity, record] : characters) {
+            if (!world.alive(entity)) {
+                continue;
+            }
+            CharacterController* controller = world.find<CharacterController>(entity);
+            Transform* transform = world.find<Transform>(entity);
+            if (controller == nullptr || transform == nullptr) {
+                continue;
+            }
+
+            // A transform written since the last step is a teleport - a
+            // respawn, a gizmo drag, a script putting the character
+            // somewhere. Compared against where this system last left it
+            // rather than against the capsule, so that the ordinary case of
+            // nobody touching it is not read as a teleport back to where the
+            // simulation already was.
+            const glm::vec3 authored = worldPoseOf(world, entity).pose.position;
+            if (glm::distance(authored, record.position) > 1e-4f) {
+                backend->setCharacterPosition(record.id, authored);
+                controller->velocity = glm::vec3{0.f};
+            }
+
+            const CharacterGround ground = backend->characterGround(record.id);
+
+            CharacterFrame frame{};
+            frame.up = up;
+            frame.gravity = pull;
+            frame.grounded = ground.state == CharacterGroundState::grounded;
+            frame.groundNormal =
+                ground.state == CharacterGroundState::airborne ? up : ground.normal;
+            frame.groundVelocity = ground.velocity;
+
+            // What the driver asked for becomes a velocity here, and only
+            // here: the arithmetic is the engine's, tested without a device,
+            // and the backend is only asked to find out how far that velocity
+            // gets.
+            advanceCharacter(*controller, frame, deltaSeconds);
+
+            backend->setCharacterVelocity(record.id, controller->velocity);
+            backend->updateCharacter(record.id, deltaSeconds);
+
+            // Read back what it managed rather than what it wanted. Walking
+            // into a wall has to arrive on the component as a stop, or the
+            // next step accelerates from a speed the character never had.
+            controller->velocity = backend->characterVelocity(record.id);
+            record.position = backend->characterPosition(record.id);
+
+            const CharacterGround landed = backend->characterGround(record.id);
+            controller->grounded = landed.state == CharacterGroundState::grounded;
+            controller->groundNormal =
+                landed.state == CharacterGroundState::airborne ? up : landed.normal;
+
+            // World space divided back through the parent, exactly as a
+            // body's pose is. The character's own facing is a yaw about Y,
+            // which is where a Transform keeps one.
+            glm::mat4 characterWorld{1.f};
+            characterWorld[3] = glm::vec4{record.position, 1.f};
+            glm::mat4 local = characterWorld;
+            const EntityId parent = hierarchy::parentOf(world, entity);
+            if (!parent.isNull()) {
+                local = glm::inverse(hierarchy::worldMatrix(world, parent)) * characterWorld;
+            }
+            transform->translation = glm::vec3{local[3]};
+            if (controller->faceMotion) {
+                transform->rotation.y = controller->facing;
+            }
+            hierarchy::markDirty(world, entity);
         }
     }
 

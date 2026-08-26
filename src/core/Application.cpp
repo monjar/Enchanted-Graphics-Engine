@@ -422,6 +422,18 @@ namespace ege {
         viewerTransform.rotation.x = -.35f;
         CameraController cameraController{};
         CameraController::registerDefaultActions(window.input());
+        // What a character is driven by. Separate from the camera's bindings
+        // because they answer to different things - the camera's move the
+        // viewer, these move whoever is being played - even though the demo
+        // scene, having one keyboard, shares the four movement actions.
+        window.input().bindAction("Jump", Key::Space);
+        window.input().bindAction("Run", Key::LeftShift);
+
+        // Behaviours read input through the world, the same way they reach
+        // physics. Set once and left: the window outlives every scene, and a
+        // behaviour that checks for null works in the editor, in a test and
+        // in a cooked player alike.
+        world.setInput(&window.input());
 
         // Pipelines exist by this point, so the cache has something worth
         // keeping. Saved here rather than only at shutdown because a killed
@@ -1841,6 +1853,92 @@ namespace ege {
             heavy.friction = 0.5f;
             heavy.restitution = 0.1f;
             boulder.attach<RigidBody>(heavy);
+        }
+
+        // Somebody walking around in it.
+        //
+        // A capsule that walks rather than a body that rolls: it holds itself
+        // upright, walks up a step it could never climb over, slides along a
+        // wall instead of stopping dead at it, and shoves what is in its way.
+        // Driven by a Patrol behaviour writing the same four intent fields a
+        // player's hands would - the controller cannot tell the difference,
+        // which is the whole reason the recorded tour is a recording of the
+        // thing rather than a mime of it.
+        //
+        // Drawn as a box until there is a rigged body to put here, which is
+        // the next thing this milestone owes.
+        {
+            Entity walker = addMesh(
+                "Walker",
+                box,
+                makeMaterial("Walker", glm::vec3{0.85f, 0.45f, 0.15f}, 0.f, 0.5f),
+                {-0.6f, 0.1f, -1.6f},
+                {0.24f, 0.6f, 0.24f});
+
+            CharacterController controller{};
+            // In local units and scaled by the entity, like every collider:
+            // half a unit box across, and caps that make up the rest of its
+            // height. Scaled, that is a capsule 0.24 wide and 0.6 tall,
+            // inscribed exactly in the box being drawn.
+            controller.radius = 0.5f;
+            controller.halfHeight = 0.3f;
+            // This scene is a diorama - a crate is a third of a unit - so a
+            // person-sized character walks at a person's speed relative to
+            // the things around it rather than at three metres a second.
+            controller.walkSpeed = 0.9f;
+            controller.runSpeed = 1.8f;
+            controller.acceleration = 8.f;
+            controller.braking = 12.f;
+            controller.jumpHeight = 0.35f;
+            controller.turnRate = 8.f;
+            // Enough to walk up the plank's lip, not enough to step onto a
+            // crate: what it cannot climb it has to push.
+            controller.stepHeight = 0.2f;
+            controller.stickToFloor = 0.4f;
+            controller.mass = 6.f;
+            controller.pushForce = 12.f;
+            walker.attach<CharacterController>(controller);
+
+            // A nose, so which way it is facing is visible from any angle.
+            // Parented, which also puts a character at the top of a hierarchy
+            // the fixed step moves - the transform write has to divide back
+            // through the parent, and a child of a character proves it.
+            Entity nose = addMesh(
+                "WalkerNose",
+                box,
+                makeMaterial("WalkerNose", glm::vec3{0.15f, 0.15f, 0.18f}, 0.2f, 0.4f),
+                {0.f, -0.28f, 0.6f},
+                glm::vec3{0.45f, 0.18f, 0.5f});
+            hierarchy::setParent(world, nose.id(), walker.id());
+
+            Script script{};
+            Script::Slot slot{};
+            slot.behavior = "ege::Patrol";
+            auto patrol = std::make_shared<Patrol>();
+            patrol->extents = {1.f, 0.f, 0.6f};
+            patrol->arriveRadius = 0.25f;
+            patrol->jumpAtCorners = true;
+            slot.instance = std::move(patrol);
+            script.behaviors.push_back(std::move(slot));
+            walker.attach<Script>(std::move(script));
+
+            // Something in its way. Light enough to be shoved by a character
+            // this size and heavy enough not to be flicked across the floor,
+            // and standing on the circuit's near edge where the walk crosses
+            // it - the difference between a character that collides and one
+            // that only stops.
+            Entity crate = addMesh(
+                "WalkerCrate",
+                box,
+                makeMaterial("WalkerCrate", glm::vec3{0.55f, 0.5f, 0.28f}, 0.f, 0.7f),
+                {-0.6f, 0.35f, -1.f},
+                glm::vec3{.3f},
+                {0.f, 0.3f, 0.f});
+            crate.attach<BoxCollider>();
+            RigidBody light{};
+            light.mass = 1.5f;
+            light.friction = 0.6f;
+            crate.attach<RigidBody>(light);
         }
 
         // Lights are entities too. Remember -Y is up, so a negative Y is above

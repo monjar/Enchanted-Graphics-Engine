@@ -45,6 +45,7 @@ namespace ege {
         registry.add<BoxCollider>();
         registry.add<SphereCollider>();
         registry.add<CapsuleCollider>();
+        registry.add<CharacterController>();
         registry.add<SkeletalAnimator>();
 
         EGE_DEBUG("Component registry: {} component types", registry.all().size());

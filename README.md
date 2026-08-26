@@ -255,6 +255,30 @@ eight bouncing spheres twice and compares positions exactly, which is what a
 replay or a networked tick needs. Contacts are drained and sorted after each
 step, so even the order gameplay hears about them in is deterministic.
 
+**Characters walk.** A `CharacterController` is a capsule the world collides
+against but the solver never moves — Jolt's virtual character, behind the
+same engine-owned interface bodies use. That is what a rigid capsule cannot
+be: it holds itself upright, walks up a step it could never climb over,
+slides along a wall instead of stopping dead at it, stays attached to the
+floor over the crest of a ramp, and shoves what is in its way.
+
+How it decides where to go is the engine's own arithmetic, and device-free:
+acceleration and braking towards the speed asked for, a fraction of that in
+mid-air, a jump authored as a *height* and solved as a speed, cut short when
+the button is released, forgiven for a fraction of a second after a ledge
+(coyote time) and remembered for a fraction of a second before landing (jump
+buffering). All of it tested against hand derivations rather than against how
+it felt to walk around in.
+
+The component splits three ways, and the split is the design. **Shape and
+tuning** are authored and saved. **Intent** — `move`, `run`, `jump`,
+`jumpHeld` — is written every tick by whoever is driving. **State** —
+`velocity`, `grounded`, `planarSpeed`, `facing` — is written back for
+gameplay to read. A player's hands, a patrol behaviour and an AI write the
+same four fields, which is why the demo's walker is a recording of the real
+thing rather than a mime of it. Behaviours reach the keyboard through
+`world().input()`, the same way they reach `world().physics()`.
+
 **Asset hot reload.** The engine watches the project directory while it runs:
 save a change to `assets/materials/floor.egematerial` and the demo's floor
 changes without a restart. A material is rewritten inside the object every
@@ -291,11 +315,11 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: indirect draws and GPU-driven culling, the standalone editor
-application, skeletal animation, character controllers and physics
-constraints.
-[`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase,
-exactly what has landed and what has not.
+Still to come: gamepads, a third-person camera, triggers and named collision
+layers, prefabs, sound, runtime UI, and the standalone editor and player.
+[`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
+and per milestone, exactly what has landed and what has not — §11 plans the
+rest of the way to a v1.0 someone could ship a game with.
 
 ## Building
 
@@ -381,6 +405,7 @@ is why that question is answered by the unit tests above.
 | `Q` / `E` | Down / up |
 | Arrow keys | Look |
 | Hold right mouse | Mouse-look (captures the cursor) |
+| `Space` / `Shift` | Jump / run — bound for characters, unused until one is player-driven |
 | `F1` | Show or hide the editor |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
 
@@ -399,7 +424,8 @@ src/
   editor/       in-process panels, the offscreen viewport, play mode and undo;
                 these move into EnchantedEditor rather than being rewritten
   physics/      the PhysicsWorld interface, its Jolt backend, rigid bodies,
-                colliders and the ECS sync
+                colliders, the character controller and its device-free
+                motion arithmetic, and the ECS sync
   rhi/          device, swapchain, graphics and compute pipelines, buffer,
                 descriptors, textures, frame graph (layered and cube images,
                 multisampled colour and depth attachments with their resolves,

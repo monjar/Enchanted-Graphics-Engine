@@ -56,6 +56,52 @@ namespace ege {
         float time = 0.f;
     };
 
+    // Drives a CharacterController from the player's input.
+    //
+    // Movement is relative to where the player is looking rather than to
+    // where the body is pointing: forward means forward on the screen, which
+    // is what every third-person game means by it and what makes turning a
+    // corner one motion rather than two. The look yaw lives here rather than
+    // on the camera on purpose - the player looks, and the camera follows.
+    class PlayerCharacter : public Behavior {
+    public:
+        // Radians per pixel of mouse movement.
+        float mouseSensitivity = 0.0025f;
+        // Where the player is looking, as a yaw about Y. Reflected so a scene
+        // can start the player facing somewhere in particular.
+        float lookYaw = 0.f;
+
+        void onFixedTick(float deltaSeconds) override;
+    };
+
+    // Walks a character round a rectangular circuit centred on wherever it
+    // spawned, jumping at the corners.
+    //
+    // The point is that it drives the character through exactly the fields a
+    // player would: the controller cannot tell the difference, which is what
+    // makes the recorded demo tour - where there is no player, no gamepad and
+    // no mouse - a recording of the same thing a player would get.
+    class Patrol : public Behavior {
+    public:
+        // Half the circuit's size on each axis, in world units. The vertical
+        // component is ignored: a patrol walks on whatever floor it finds.
+        glm::vec3 extents{2.f, 0.f, 1.5f};
+        // How close counts as arrived. Too small and the character circles a
+        // corner it can never quite stand on.
+        float arriveRadius = 0.4f;
+        bool run = false;
+        bool jumpAtCorners = true;
+
+        void onSpawn() override;
+        void onFixedTick(float deltaSeconds) override;
+
+    private:
+        glm::vec3 corner(int index) const;
+
+        glm::vec3 origin{0.f};
+        int target = 0;
+    };
+
     // Pushes a dynamic mesh's vertices along their normals by a travelling
     // sine wave. The one behaviour here that exists to prove something rather
     // than to look nice: geometry a script writes every frame.
@@ -94,4 +140,16 @@ EGE_REFLECT(ege::Ripple)
 EGE_FIELD(amplitude).range(0.f, 1.f);
 EGE_FIELD(wavelength).range(0.05f, 5.f);
 EGE_FIELD(speed).range(-10.f, 10.f);
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::PlayerCharacter)
+EGE_FIELD(mouseSensitivity).range(0.0001f, 0.02f).tooltip("Radians per pixel of mouse movement");
+EGE_FIELD(lookYaw).range(-3.1416f, 3.1416f).tooltip("Where the player is looking, about Y");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::Patrol)
+EGE_FIELD(extents).tooltip("Half the circuit's size on each axis; Y is ignored");
+EGE_FIELD(arriveRadius).range(0.05f, 3.f).tooltip("How close to a corner counts as arrived");
+EGE_FIELD(run);
+EGE_FIELD(jumpAtCorners);
 EGE_REFLECT_END()

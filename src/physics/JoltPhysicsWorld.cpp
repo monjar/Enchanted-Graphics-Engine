@@ -12,6 +12,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
@@ -26,6 +27,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <unordered_map>
 
 namespace ege {
 
@@ -197,7 +199,9 @@ namespace ege {
                 // step is one ThreadSanitizer can actually see through -
                 // Jolt's lock-free internals synchronise with bare fences,
                 // which TSan cannot model and would report as races.
-                : tempAllocator{tempAllocatorBytes}, jobs{JPH::cMaxPhysicsJobs} {
+                : worldGravity{settings.gravity},
+                  tempAllocator{tempAllocatorBytes},
+                  jobs{JPH::cMaxPhysicsJobs} {
                 system.Init(
                     settings.maxBodies,
                     0,
@@ -211,6 +215,10 @@ namespace ege {
             }
 
             ~JoltPhysicsWorld() override {
+                // Characters hold a reference to the system they collide
+                // against, so they go first.
+                characters.clear();
+
                 // Bodies must be removed before the system is destroyed;
                 // destroying the interface-issued handles is enough.
                 JPH::BodyInterface& bodies = system.GetBodyInterface();
@@ -320,6 +328,171 @@ namespace ege {
                 system.GetBodyInterface().AddImpulse(JPH::BodyID{body}, toJolt(impulse));
             }
 
+            // ---- Characters ---------------------------------------------
+
+            PhysicsCharacterId addCharacter(const CharacterSettings& settings) override {
+                const glm::vec3 up = normalisedUp(settings.up);
+                JPH::ShapeRefC shape = buildCharacterShape(settings, up);
+                if (shape == nullptr) {
+                    return invalidPhysicsCharacter;
+                }
+
+                JPH::CharacterVirtualSettings creation{};
+                creation.mShape = shape;
+                creation.mUp = toJolt(up);
+                creation.mMaxSlopeAngle = settings.maxSlopeAngle;
+                creation.mMass = settings.mass;
+                creation.mMaxStrength = settings.pushForce;
+                // Which contacts count as standing on something. Jolt's
+                // default accepts any contact at all, which means a hand
+                // against a wall reads as ground. The capsule's origin is at
+                // its centre, so the floor is everything below the bottom
+                // cap's own centre - one half-height down.
+                creation.mSupportingVolume = JPH::Plane{toJolt(up), settings.halfHeight};
+                // Ghost contacts against the internal edges of the box soup a
+                // level is made of are what make a character stutter across a
+                // flat floor built from two triangles.
+                creation.mEnhancedInternalEdgeRemoval = true;
+
+                const PhysicsCharacterId id = nextCharacter++;
+                CharacterRecord record{};
+                record.up = up;
+                record.stepHeight = settings.stepHeight;
+                record.stickToFloor = settings.stickToFloor;
+                record.character = new JPH::CharacterVirtual{
+                    &creation,
+                    toJolt(settings.position),
+                    JPH::Quat::sIdentity(),
+                    settings.userData,
+                    &system};
+                characters.emplace(id, std::move(record));
+                return id;
+            }
+
+            void removeCharacter(PhysicsCharacterId character) override {
+                characters.erase(character);
+            }
+
+            std::size_t characterCount() const override { return characters.size(); }
+
+            glm::vec3 characterPosition(PhysicsCharacterId character) const override {
+                const CharacterRecord* record = findCharacter(character);
+                return record == nullptr ? glm::vec3{0.f}
+                                         : fromJolt(record->character->GetPosition());
+            }
+
+            void setCharacterPosition(PhysicsCharacterId character, glm::vec3 position) override {
+                CharacterRecord* record = findCharacter(character);
+                if (record == nullptr) {
+                    return;
+                }
+                record->character->SetPosition(toJolt(position));
+                // A teleported character's idea of what is underfoot belongs
+                // to wherever it used to be.
+                record->character->RefreshContacts(
+                    system.GetDefaultBroadPhaseLayerFilter(layers::moving),
+                    system.GetDefaultLayerFilter(layers::moving),
+                    {},
+                    {},
+                    tempAllocator);
+            }
+
+            glm::vec3 characterVelocity(PhysicsCharacterId character) const override {
+                const CharacterRecord* record = findCharacter(character);
+                return record == nullptr ? glm::vec3{0.f}
+                                         : fromJolt(record->character->GetLinearVelocity());
+            }
+
+            void setCharacterVelocity(PhysicsCharacterId character, glm::vec3 velocity) override {
+                if (CharacterRecord* record = findCharacter(character); record != nullptr) {
+                    record->character->SetLinearVelocity(toJolt(velocity));
+                }
+            }
+
+            CharacterGround characterGround(PhysicsCharacterId character) const override {
+                const CharacterRecord* record = findCharacter(character);
+                if (record == nullptr) {
+                    return CharacterGround{};
+                }
+
+                CharacterGround ground{};
+                switch (record->character->GetGroundState()) {
+                    case JPH::CharacterBase::EGroundState::OnGround:
+                        ground.state = CharacterGroundState::grounded;
+                        break;
+                    case JPH::CharacterBase::EGroundState::OnSteepGround:
+                        ground.state = CharacterGroundState::steep;
+                        break;
+                    // Touching something that cannot hold it is falling, as
+                    // far as anything above this cares: what it is touching
+                    // still arrives in the normal and the user datum.
+                    case JPH::CharacterBase::EGroundState::NotSupported:
+                    case JPH::CharacterBase::EGroundState::InAir:
+                        ground.state = CharacterGroundState::airborne;
+                        break;
+                }
+                ground.normal = fromJolt(record->character->GetGroundNormal());
+                ground.velocity = fromJolt(record->character->GetGroundVelocity());
+                ground.userData = record->character->GetGroundUserData();
+                return ground;
+            }
+
+            void updateCharacter(PhysicsCharacterId character, float deltaSeconds) override {
+                CharacterRecord* record = findCharacter(character);
+                if (record == nullptr) {
+                    return;
+                }
+                JPH::CharacterVirtual& moving = *record->character;
+
+                // Refuse the part of the velocity that climbs a slope too
+                // steep to climb, before moving rather than after: a
+                // character allowed to push into a wall first and be pushed
+                // back second judders against it.
+                moving.SetLinearVelocity(
+                    moving.CancelVelocityTowardsSteepSlopes(moving.GetLinearVelocity()));
+
+                JPH::CharacterVirtual::ExtendedUpdateSettings update{};
+                update.mStickToFloorStepDown = toJolt(-record->up * record->stickToFloor);
+                update.mWalkStairsStepUp = toJolt(record->up * record->stepHeight);
+
+                const glm::vec3 asked = fromJolt(moving.GetLinearVelocity());
+                const glm::vec3 before = fromJolt(moving.GetPosition());
+
+                moving.ExtendedUpdate(
+                    deltaSeconds,
+                    toJolt(worldGravity),
+                    update,
+                    system.GetDefaultBroadPhaseLayerFilter(layers::moving),
+                    system.GetDefaultLayerFilter(layers::moving),
+                    {},
+                    {},
+                    tempAllocator);
+
+                // What it managed, which Jolt does not work out for itself:
+                // the character's velocity is the caller's to own, and a
+                // character that walked into a wall would otherwise carry on
+                // believing it was running.
+                //
+                // The plane comes from how far it actually got, so a wall or
+                // a slope too steep to climb arrives back as a stop. The axis
+                // of up deliberately does not: stepping up a stair and being
+                // pulled back down onto a floor are both displacements the
+                // character never asked for, and reading them as velocity
+                // would fling it off the step or nail it to the ground. What
+                // it asked for is kept there instead - with one exception, a
+                // rise that did not happen, which is a ceiling.
+                const glm::vec3 moved =
+                    deltaSeconds > 0.f ? (fromJolt(moving.GetPosition()) - before) / deltaSeconds
+                                       : glm::vec3{0.f};
+                const float climbed = glm::dot(moved, record->up);
+                float vertical = glm::dot(asked, record->up);
+                if (vertical > 0.f && climbed <= 0.f) {
+                    vertical = 0.f;
+                }
+                moving.SetLinearVelocity(
+                    toJolt(moved - record->up * climbed + record->up * vertical));
+            }
+
             void step(float deltaSeconds) override {
                 const JPH::EPhysicsUpdateError error =
                     system.Update(deltaSeconds, 1, &tempAllocator, &jobs);
@@ -372,7 +545,67 @@ namespace ege {
                 return hit;
             }
 
+            glm::vec3 gravity() const override { return worldGravity; }
+
         private:
+            // A character, plus the two numbers its move needs that Jolt
+            // keeps in the update settings rather than on the character.
+            struct CharacterRecord {
+                JPH::Ref<JPH::CharacterVirtual> character;
+                glm::vec3 up{0.f, 1.f, 0.f};
+                float stepHeight = 0.3f;
+                float stickToFloor = 0.5f;
+            };
+
+            CharacterRecord* findCharacter(PhysicsCharacterId character) {
+                const auto found = characters.find(character);
+                return found == characters.end() ? nullptr : &found->second;
+            }
+
+            const CharacterRecord* findCharacter(PhysicsCharacterId character) const {
+                const auto found = characters.find(character);
+                return found == characters.end() ? nullptr : &found->second;
+            }
+
+            static glm::vec3 normalisedUp(glm::vec3 up) {
+                const float length = glm::length(up);
+                return length > 1e-6f ? up / length : glm::vec3{0.f, 1.f, 0.f};
+            }
+
+            static JPH::ShapeRefC buildCharacterShape(
+                const CharacterSettings& settings, glm::vec3 up) {
+                JPH::ShapeSettings::ShapeResult result =
+                    JPH::CapsuleShapeSettings{
+                        std::max(settings.halfHeight, 0.01f), std::max(settings.radius, 0.01f)}
+                        .Create();
+                if (result.HasError()) {
+                    EGE_ERROR("could not build character shape: {}", result.GetError().c_str());
+                    return nullptr;
+                }
+
+                // Jolt's capsule stands along Y. A capsule is symmetric about
+                // its axis, so a scene whose up is -Y needs no rotation at
+                // all - and asking sFromTo for the rotation between opposite
+                // vectors is how you get an arbitrary axis and a shape that
+                // is subtly not where it says it is.
+                const float alignment = glm::dot(up, glm::vec3{0.f, 1.f, 0.f});
+                if (std::abs(alignment) > 0.9999f) {
+                    return result.Get();
+                }
+
+                JPH::ShapeSettings::ShapeResult rotated =
+                    JPH::RotatedTranslatedShapeSettings{
+                        JPH::Vec3::sZero(),
+                        JPH::Quat::sFromTo(JPH::Vec3::sAxisY(), toJolt(up)),
+                        result.Get()}
+                        .Create();
+                if (rotated.HasError()) {
+                    EGE_ERROR("could not stand character shape up: {}", rotated.GetError().c_str());
+                    return nullptr;
+                }
+                return rotated.Get();
+            }
+
             static JPH::ShapeRefC buildShape(const BodyShape& shape) {
                 JPH::ShapeSettings::ShapeResult result;
                 switch (shape.kind) {
@@ -420,6 +653,7 @@ namespace ege {
             // for scenes far larger than this engine's.
             static constexpr std::size_t tempAllocatorBytes = 4 * 1024 * 1024;
 
+            glm::vec3 worldGravity{0.f, -9.81f, 0.f};
             BroadPhaseLayerMap broadPhaseMap{};
             ObjectVsBroadPhaseFilter objectVsBroadPhase{};
             ObjectLayerFilter objectPairs{};
@@ -427,6 +661,11 @@ namespace ege {
             JPH::TempAllocatorImpl tempAllocator;
             JPH::JobSystemSingleThreaded jobs;
             JPH::PhysicsSystem system{};
+            // Characters outlive no step and are keyed by a counter rather
+            // than by anything Jolt issues, because a virtual character has
+            // no id of its own - it is an object the caller owns.
+            std::unordered_map<PhysicsCharacterId, CharacterRecord> characters;
+            PhysicsCharacterId nextCharacter = 0;
         };
 
     }  // namespace
