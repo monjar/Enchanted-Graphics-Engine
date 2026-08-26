@@ -17,6 +17,7 @@
 #include "core/Log.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -24,6 +25,20 @@
 #include <vector>
 
 #if defined(EGE_HAS_MINIAUDIO)
+
+// Before anything that might reach <windows.h>, which miniaudio's WASAPI
+// backend does: without this, Windows defines `max` and `min` as macros and
+// every `std::max` in this file becomes `std::(...)`. The error it produces
+// names neither Windows nor the macro, which is why this line is worth a
+// comment rather than a shrug.
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#endif
 
 // What we do not need, and every one of them is a decoder, a backend or a
 // feature the engine has its own answer for. A single header that compiles
