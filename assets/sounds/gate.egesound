@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "sampleRate": 48000,
+  "duration": 0.9,
+  "layers": [
+    {
+      "wave": "square",
+      "frequency": 110,
+      "frequencyEnd": 90,
+      "gain": 0.22,
+      "attack": 0.06,
+      "decay": 0.55
+    },
+    {
+      "wave": "noise",
+      "frequency": 1,
+      "gain": 0.16,
+      "attack": 0.08,
+      "decay": 0.6
+    }
+  ]
+}

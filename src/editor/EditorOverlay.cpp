@@ -1,6 +1,7 @@
 #include "editor/EditorOverlay.hpp"
 
 #include "assets/AssetDatabase.hpp"
+#include "audio/AudioEngine.hpp"
 #include "core/Log.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "scene/ComponentRegistry.hpp"
@@ -90,6 +91,8 @@ namespace ege {
                     return "EGE_ASSET_SCENE";
                 case AssetKind::prefab:
                     return "EGE_ASSET_PREFAB";
+                case AssetKind::sound:
+                    return "EGE_ASSET_SOUND";
                 case AssetKind::unknown:
                     break;
             }
@@ -401,7 +404,7 @@ namespace ege {
         drawStatsPanel(context);
         drawHierarchyPanel(world);
         drawInspectorPanel(world);
-        drawAssetBrowserPanel();
+        drawAssetBrowserPanel(world);
         drawConsolePanel();
 
         endInteractionUndo();
@@ -843,7 +846,29 @@ namespace ege {
         return edited;
     }
 
-    void EditorOverlay::drawAssetBrowserPanel() {
+    void EditorOverlay::previewSound(World& world, Guid id) {
+        AudioEngine* audio = world.audio();
+        if (audio == nullptr) {
+            return;
+        }
+        // The previous audition goes first, so a browser somebody is clicking
+        // through does not accumulate clips.
+        if (previewClip != invalidSound) {
+            audio->unload(previewClip);
+            previewClip = invalidSound;
+        }
+
+        const std::shared_ptr<SoundData> data = AssetDatabase::instance().sound(id);
+        if (data == nullptr || data->empty()) {
+            return;
+        }
+        previewClip = audio->load(*data);
+        // Flat rather than placed: an audition is about what the clip sounds
+        // like, not about where it would be.
+        audio->play(previewClip, VoiceSettings{});
+    }
+
+    void EditorOverlay::drawAssetBrowserPanel(World& world) {
         ImGui::Begin("Assets");
 
         const AssetDatabase& database = AssetDatabase::instance();
@@ -854,8 +879,13 @@ namespace ege {
         ImGui::Separator();
 
         ImGui::BeginChild("assetList");
-        constexpr std::array<AssetKind, 4> kinds{
-            AssetKind::mesh, AssetKind::material, AssetKind::texture, AssetKind::scene};
+        constexpr std::array<AssetKind, 6> kinds{
+            AssetKind::mesh,
+            AssetKind::material,
+            AssetKind::texture,
+            AssetKind::scene,
+            AssetKind::prefab,
+            AssetKind::sound};
         for (const AssetKind kind : kinds) {
             std::vector<const AssetRecord*> matching;
             for (const AssetRecord& record : database.all()) {
@@ -896,11 +926,22 @@ namespace ege {
                     ImGui::TextUnformatted(record->name.c_str());
                     ImGui::EndDragDropSource();
                 }
+                // A sound is the one asset whose whole point is what it is
+                // like, and a name in a list says nothing about that.
+                // Double-clicking auditions it, which is what makes dropping
+                // a file into the project enough to know whether it is the
+                // right file.
+                if (record->kind == AssetKind::sound &&
+                    ImGui::IsItemHovered(ImGuiHoveredFlags_None) &&
+                    ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+                    previewSound(world, record->id);
+                }
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetTooltip(
-                        "%s\n%s",
+                        "%s\n%s%s",
                         record->builtin ? "built in" : record->path.string().c_str(),
-                        record->id.toString().c_str());
+                        record->id.toString().c_str(),
+                        record->kind == AssetKind::sound ? "\ndouble-click to hear it" : "");
                 }
                 ImGui::PopID();
             }

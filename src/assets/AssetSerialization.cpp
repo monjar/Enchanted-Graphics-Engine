@@ -2,6 +2,7 @@
 
 #include "assets/AssetDatabase.hpp"
 #include "assets/AssetRef.hpp"
+#include "audio/AudioEngine.hpp"
 #include "reflect/Serialization.hpp"
 #include "scene/Prefab.hpp"
 
@@ -60,6 +61,7 @@ namespace ege {
         registerRef<Model>(serializer, [&database](Guid id) { return database.mesh(id); });
         registerRef<Material>(serializer, [&database](Guid id) { return database.material(id); });
         registerRef<Prefab>(serializer, [&database](Guid id) { return database.prefab(id); });
+        registerRef<SoundData>(serializer, [&database](Guid id) { return database.sound(id); });
     }
 
 }  // namespace ege

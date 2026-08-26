@@ -34,10 +34,14 @@ namespace ege {
         friend bool operator!=(const AssetRef& a, const AssetRef& b) { return !(a == b); }
     };
 
+    struct SoundData;
+
     using MeshRef = AssetRef<Model>;
     using MaterialRef = AssetRef<Material>;
+    using SoundRef = AssetRef<SoundData>;
 
 }  // namespace ege
 
 EGE_TYPE_NAME(ege::MeshRef, "MeshRef")
 EGE_TYPE_NAME(ege::MaterialRef, "MaterialRef")
+EGE_TYPE_NAME(ege::SoundRef, "SoundRef")

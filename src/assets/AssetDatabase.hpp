@@ -19,8 +19,9 @@ namespace ege {
 
     class JobSystem;
     struct Prefab;
+    struct SoundData;
 
-    enum class AssetKind { unknown, mesh, texture, material, scene, prefab };
+    enum class AssetKind { unknown, mesh, texture, material, scene, prefab, sound };
 
     const char* assetKindName(AssetKind kind);
 
@@ -115,6 +116,13 @@ namespace ege {
         // none, which is also what lets a test spawn one.
         std::shared_ptr<Prefab> prefab(Guid id);
 
+        // Nor do sounds: what loads is samples, and whether anything can play
+        // them is the audio engine's business rather than the database's. A
+        // machine with no sound device still catalogues, loads and hot-reloads
+        // its audio - which is what keeps the silent path exercised rather
+        // than merely tolerated.
+        std::shared_ptr<SoundData> sound(Guid id);
+
         // Starts loading an asset on the job system, if it is not already
         // loaded and not already loading. True when this call started one.
         //
@@ -187,6 +195,7 @@ namespace ege {
         std::unordered_map<Guid, std::shared_ptr<Material>> materials;
         std::unordered_map<Guid, std::shared_ptr<Texture>> textures;
         std::unordered_map<Guid, std::shared_ptr<Prefab>> prefabs;
+        std::unordered_map<Guid, std::shared_ptr<SoundData>> sounds;
 
         AssetLoadQueue loadQueue;
     };

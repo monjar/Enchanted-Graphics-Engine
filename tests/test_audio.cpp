@@ -352,3 +352,207 @@ TEST_CASE("the factory always hands back an engine") {
     CHECK_FALSE(audio->audible());
     CHECK(std::string{audio->backendName()} == "silent");
 }
+
+// ---- Sounds described rather than recorded ---------------------------------
+
+#include "assets/AssetDatabase.hpp"
+#include "audio/SoundSynth.hpp"
+
+#include <filesystem>
+#include <fstream>
+
+using ege::SoundRecipe;
+
+namespace {
+
+    SoundRecipe blip(float duration = 0.1f) {
+        SoundRecipe recipe{};
+        recipe.sampleRate = 48000;
+        recipe.duration = duration;
+        ege::SoundLayer layer{};
+        layer.wave = ege::Waveform::sine;
+        layer.frequency = 440.f;
+        layer.gain = 0.5f;
+        recipe.layers.push_back(layer);
+        return recipe;
+    }
+
+}  // namespace
+
+TEST_CASE("a rendered sound is as long as it says it is") {
+    const SoundData rendered = ege::renderSound(blip(0.25f));
+    CHECK(rendered.channels == 1);
+    CHECK(rendered.sampleRate == 48000);
+    CHECK(rendered.frames() == 12000);
+    CHECK(rendered.duration() == doctest::Approx(0.25f));
+}
+
+TEST_CASE("a rendered sound starts and ends at silence") {
+    const SoundData rendered = ege::renderSound(blip());
+    REQUIRE(!rendered.empty());
+
+    // The envelope's whole job: a sound that begins at full amplitude clicks,
+    // and so does one that stops there.
+    CHECK(std::abs(rendered.samples.front()) < 0.01f);
+    CHECK(std::abs(rendered.samples.back()) < 0.01f);
+
+    // And it is not silent in between, which is the other half of the claim.
+    float peak = 0.f;
+    for (const float sample : rendered.samples) {
+        peak = std::max(peak, std::abs(sample));
+    }
+    CHECK(peak > 0.3f);
+}
+
+TEST_CASE("a swept sound stays continuous through the sweep") {
+    SoundRecipe recipe = blip(0.3f);
+    recipe.layers[0].frequency = 200.f;
+    recipe.layers[0].frequencyEnd = 3000.f;
+
+    const SoundData rendered = ege::renderSound(recipe);
+    REQUIRE(rendered.frames() > 100);
+
+    // The reason phase is accumulated rather than computed from the time: a
+    // sweep evaluated as sin(2*pi*f(t)*t) jumps every time the frequency
+    // changes, and the jumps are audible. Adjacent samples of a wave at three
+    // kilohertz can differ by a good deal, but never by more than the whole
+    // range.
+    for (std::size_t frame = 1; frame < rendered.frames(); frame++) {
+        const float step = std::abs(rendered.samples[frame] - rendered.samples[frame - 1]);
+        CHECK(step < 0.75f);
+    }
+}
+
+TEST_CASE("layers are summed and the result is kept in range") {
+    SoundRecipe loud{};
+    loud.sampleRate = 48000;
+    loud.duration = 0.2f;
+    for (int i = 0; i < 6; i++) {
+        ege::SoundLayer layer{};
+        layer.frequency = 300.f + static_cast<float>(i) * 30.f;
+        layer.gain = 0.9f;
+        layer.attack = 0.001f;
+        layer.decay = 0.02f;
+        loud.layers.push_back(layer);
+    }
+
+    const SoundData rendered = ege::renderSound(loud);
+    for (const float sample : rendered.samples) {
+        // Scaled rather than clamped: clipping changes the shape of a sound
+        // and scaling only changes how loud it is.
+        CHECK(sample <= 1.0001f);
+        CHECK(sample >= -1.0001f);
+    }
+}
+
+TEST_CASE("the same recipe renders to the same samples every time") {
+    SoundRecipe noisy{};
+    noisy.sampleRate = 48000;
+    noisy.duration = 0.05f;
+    ege::SoundLayer layer{};
+    layer.wave = ege::Waveform::noise;
+    layer.gain = 0.5f;
+    noisy.layers.push_back(layer);
+
+    const SoundData first = ege::renderSound(noisy);
+    const SoundData second = ege::renderSound(noisy);
+    REQUIRE(first.samples.size() == second.samples.size());
+
+    // Bit for bit, even for noise: a recorded run has to be reproducible, and
+    // a generator seeded from the clock would make one frame of a recording
+    // differ from the next run's.
+    for (std::size_t i = 0; i < first.samples.size(); i++) {
+        CHECK(first.samples[i] == second.samples[i]);
+    }
+}
+
+TEST_CASE("a recipe with nothing in it renders silence rather than failing") {
+    SoundRecipe empty{};
+    empty.duration = 0.1f;
+    const SoundData rendered = ege::renderSound(empty);
+    CHECK(rendered.frames() == 4800);
+    for (const float sample : rendered.samples) {
+        CHECK(sample == doctest::Approx(0.f));
+    }
+
+    SoundRecipe instant = blip(0.f);
+    CHECK(ege::renderSound(instant).empty());
+}
+
+TEST_CASE("a sound recipe reads from its document, with defaults") {
+    SoundRecipe recipe{};
+    std::string error;
+    const bool read = ege::parseSoundRecipe(
+        R"({"version": 1, "duration": 0.4, "layers": [
+              {"wave": "square", "frequency": 220, "frequencyEnd": 440, "gain": 0.3},
+              {"wave": "noise"}
+            ]})",
+        recipe,
+        error);
+
+    REQUIRE(read);
+    CHECK(recipe.duration == doctest::Approx(0.4f));
+    CHECK(recipe.sampleRate == 48000);
+    REQUIRE(recipe.layers.size() == 2);
+    CHECK(recipe.layers[0].wave == ege::Waveform::square);
+    CHECK(recipe.layers[0].frequencyEnd == doctest::Approx(440.f));
+    // A layer that does not say where it is going stays where it is.
+    CHECK(recipe.layers[1].wave == ege::Waveform::noise);
+    CHECK(recipe.layers[1].frequencyEnd == doctest::Approx(recipe.layers[1].frequency));
+}
+
+TEST_CASE("a recipe that will not read says so rather than rendering rubbish") {
+    SoundRecipe recipe{};
+    std::string error;
+
+    CHECK_FALSE(ege::parseSoundRecipe("{ not json", recipe, error));
+    CHECK(!error.empty());
+    CHECK_FALSE(ege::parseSoundRecipe("[1, 2, 3]", recipe, error));
+    CHECK_FALSE(ege::parseSoundRecipe(R"({"duration": 0.2})", recipe, error));
+}
+
+TEST_CASE("a sound file is catalogued and loaded like everything else") {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "ege-assets-sound";
+    std::error_code errorCode;
+    fs::remove_all(root, errorCode);
+    fs::create_directories(root / "sounds", errorCode);
+
+    {
+        std::ofstream file{root / "sounds" / "beep.egesound"};
+        file << R"({"version": 1, "duration": 0.15,
+                    "layers": [{"wave": "sine", "frequency": 660, "gain": 0.5}]})";
+    }
+
+    ege::AudioEngine::Settings settings{};
+    settings.forceSilent = true;
+    const std::unique_ptr<ege::AudioEngine> audio = ege::AudioEngine::create(settings);
+
+    ege::AssetDatabase& database = ege::AssetDatabase::instance();
+    database.clear();
+    CHECK(database.scan(root) == 1);
+
+    const ege::AssetRecord* record = database.findByPath(fs::path{"sounds"} / "beep.egesound");
+    REQUIRE(record != nullptr);
+    CHECK(record->kind == ege::AssetKind::sound);
+    // The sidecar was written, so the id survives the file being moved - the
+    // same property every other asset has.
+    CHECK(fs::exists(root / "sounds" / "beep.egesound.egameta"));
+
+    // No device anywhere in this test, and it still loads: samples are
+    // samples, and whether anything can play them is the audio engine's
+    // business rather than the database's.
+    const std::shared_ptr<SoundData> loaded = database.sound(record->id);
+    REQUIRE(loaded != nullptr);
+    CHECK(loaded->duration() == doctest::Approx(0.15f));
+
+    // And it is playable, which is the row's whole "done when".
+    const ege::SoundId clip = audio->load(*loaded);
+    const ege::VoiceId voice = audio->play(clip, VoiceSettings{});
+    CHECK(voice != ege::invalidVoice);
+    audio->update(0.2f);
+    CHECK_FALSE(audio->playing(voice));
+
+    database.clear();
+    fs::remove_all(root, errorCode);
+}

@@ -1,5 +1,7 @@
 #include "assets/AssetDatabase.hpp"
 
+#include "audio/AudioEngine.hpp"
+#include "audio/SoundSynth.hpp"
 #include "core/JobSystem.hpp"
 #include "core/Log.hpp"
 #include "reflect/Serialization.hpp"
@@ -38,6 +40,13 @@ namespace ege {
             }
             if (extension == ".egeprefab") {
                 return AssetKind::prefab;
+            }
+            // `.egesound` is a sound *described* rather than recorded - see
+            // audio/SoundSynth.hpp for why a repository that ships no binary
+            // assets needed one.
+            if (extension == ".egesound" || extension == ".wav" || extension == ".mp3" ||
+                extension == ".flac") {
+                return AssetKind::sound;
             }
             if (extension == ".egematerial") {
                 return AssetKind::material;
@@ -90,6 +99,8 @@ namespace ege {
                 return "scene";
             case AssetKind::prefab:
                 return "prefab";
+            case AssetKind::sound:
+                return "sound";
             case AssetKind::unknown:
                 break;
         }
@@ -392,6 +403,46 @@ namespace ege {
         return loaded;
     }
 
+    std::shared_ptr<SoundData> AssetDatabase::sound(Guid id) {
+        if (const auto hit = cached(sounds, id)) {
+            return *hit;
+        }
+
+        const AssetRecord* record = find(id);
+        if (record == nullptr || record->kind != AssetKind::sound || record->path.empty()) {
+            return nullptr;
+        }
+
+        const std::filesystem::path full = assetRoot / record->path;
+        auto loaded = std::make_shared<SoundData>();
+        std::string error;
+
+        if (full.extension() == ".egesound") {
+            std::ifstream file{full};
+            if (file) {
+                std::ostringstream contents;
+                contents << file.rdbuf();
+                SoundRecipe recipe{};
+                if (parseSoundRecipe(contents.str(), recipe, error)) {
+                    *loaded = renderSound(recipe);
+                } else {
+                    EGE_ERROR("cannot read sound {}: {}", record->path.string(), error);
+                }
+            } else {
+                EGE_ERROR("cannot open sound {}", record->path.string());
+            }
+        } else if (!decodeSoundFile(full.string(), *loaded, error)) {
+            EGE_ERROR("cannot decode sound {}: {}", record->path.string(), error);
+        }
+
+        const std::lock_guard<std::mutex> lock{cacheMutex};
+        // Cached even when it came back empty: a file that will not decode
+        // will not decode next frame either, and retrying it every frame is
+        // how a missing asset becomes a stutter.
+        sounds[id] = loaded;
+        return loaded;
+    }
+
     std::shared_ptr<Material> AssetDatabase::loadMaterialFile(const AssetRecord& record) {
         std::ifstream file{assetRoot / record.path};
         if (!file) {
@@ -496,6 +547,16 @@ namespace ege {
             }
                 EGE_INFO("Reloaded prefab {}", record->path.string());
                 return;
+            case AssetKind::sound: {
+                // Dropping the samples is the whole reload. Voices already
+                // playing hold the old buffer through their shared pointer
+                // and finish on it, which is the right answer: a sound
+                // changing under a voice mid-note would be a click.
+                const std::lock_guard<std::mutex> lock{cacheMutex};
+                sounds.erase(id);
+            }
+                EGE_INFO("Reloaded sound {}", record->path.string());
+                return;
             case AssetKind::scene:
             case AssetKind::unknown:
                 return;
@@ -527,6 +588,15 @@ namespace ege {
                 break;
             case AssetKind::material:
                 if (cached(materials, id).has_value()) {
+                    return false;
+                }
+                break;
+            case AssetKind::sound:
+                // Worth a worker, unlike a prefab: decoding a file or
+                // rendering a recipe is real arithmetic, and doing it on the
+                // frame that first wanted the sound is a hitch at exactly the
+                // moment something interesting happened.
+                if (cached(sounds, id).has_value()) {
                     return false;
                 }
                 break;
@@ -576,6 +646,9 @@ namespace ege {
                 return;
             case AssetKind::prefab:
                 prefab(id);
+                return;
+            case AssetKind::sound:
+                sound(id);
                 return;
             case AssetKind::scene:
             case AssetKind::unknown:

@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "sampleRate": 48000,
+  "duration": 0.22,
+  "layers": [
+    {
+      "wave": "sine",
+      "frequency": 880,
+      "frequencyEnd": 1760,
+      "gain": 0.5,
+      "attack": 0.004,
+      "decay": 0.16
+    },
+    {
+      "wave": "triangle",
+      "frequency": 1320,
+      "frequencyEnd": 2640,
+      "gain": 0.22,
+      "attack": 0.004,
+      "decay": 0.12,
+      "delay": 0.02
+    }
+  ]
+}

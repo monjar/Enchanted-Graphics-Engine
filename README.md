@@ -552,8 +552,8 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: audio assets and sources, runtime UI, and the standalone editor
-and player.
+Still to come: audio sources in the world, runtime UI, and the standalone
+editor and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.
@@ -635,6 +635,43 @@ stick into a step with, and a test pins the two together: a player who strafes
 right and a sound panned right have to mean the same side of the world. One of
 them being mirrored is the classic bug here — inaudible on a laptop speaker,
 obvious on headphones.
+
+### Sounds you can read in a diff
+
+`.wav`, `.mp3` and `.flac` load like any other asset — an id, a sidecar, a
+worker thread to decode on, and hot reload. But this repository ships **no
+binary assets**, and a `.wav` would have been the first file in the tree
+nobody can read in a diff or edit without a tool. So there is a second format:
+
+```json
+{
+  "version": 1, "duration": 0.22,
+  "layers": [
+    { "wave": "sine", "frequency": 880, "frequencyEnd": 1760,
+      "gain": 0.5, "attack": 0.004, "decay": 0.16 }
+  ]
+}
+```
+
+A sound *described* rather than recorded — a few oscillators, an envelope, a
+pitch sweep — rendered to samples when it loads. Which turns out to be what
+placeholder audio wants anyway: a rising blip reads as a reward and a falling
+one as a loss, and either is retuned by editing two numbers and saving the
+file, with hot reload doing the rest. `assets/sounds/` holds the level's five.
+
+The renderer is deterministic down to its noise, because a recorded run has to
+be reproducible; phase is accumulated rather than computed from the time,
+because a sweep evaluated as `sin(2πf(t)·t)` jumps audibly every time the
+frequency changes. Both are tests.
+
+The asset browser lists sounds like everything else, and **double-clicking one
+plays it** — a name in a list says nothing about what a sound is like, which is
+the only question anybody has about one.
+
+On a machine with no sound stack at all, ALSA prints its own complaints to
+stderr while miniaudio looks for a device. That noise is the system library's,
+not the engine's; the engine's answer is the line that follows it, saying it
+found no playback device and is running silent.
 
 ## Building
 
@@ -769,7 +806,8 @@ sandbox/        a project's behaviours and its game, built as a module the
                 engine loads at
                 runtime - this is where a game's gameplay code would live
 assets/         runtime assets, resolved via EGE_ASSET_ROOT - models as text
-                glTF, materials, prefabs and scenes as JSON; no binary files
+                glTF, materials, prefabs, scenes and sounds as JSON; no binary
+                files
 tools/          EnchantedFrameChecks, which reads recorded frames back
                 and says whether a picture came out
 tests/          doctest suite

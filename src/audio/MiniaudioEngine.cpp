@@ -351,6 +351,51 @@ namespace ege {
 
 namespace ege {
 
+    bool decodeSoundFile(const std::string& path, SoundData& out, std::string& error) {
+#if defined(EGE_HAS_MINIAUDIO)
+        // Decoded to float and left at whatever rate and channel count the
+        // file has: the mixer resamples per voice anyway, and converting here
+        // would be a second resample nobody asked for.
+        ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 0, 0);
+
+        ma_decoder decoder{};
+        if (ma_decoder_init_file(path.c_str(), &config, &decoder) != MA_SUCCESS) {
+            error = "cannot decode";
+            return false;
+        }
+
+        ma_uint64 frames = 0;
+        if (ma_decoder_get_length_in_pcm_frames(&decoder, &frames) != MA_SUCCESS || frames == 0) {
+            ma_decoder_uninit(&decoder);
+            error = "no decodable frames";
+            return false;
+        }
+
+        out.channels = decoder.outputChannels;
+        out.sampleRate = decoder.outputSampleRate;
+        out.samples.resize(static_cast<std::size_t>(frames) * out.channels);
+
+        ma_uint64 read = 0;
+        const ma_result result =
+            ma_decoder_read_pcm_frames(&decoder, out.samples.data(), frames, &read);
+        ma_decoder_uninit(&decoder);
+
+        if (result != MA_SUCCESS && read == 0) {
+            error = "decoded nothing";
+            return false;
+        }
+        // A file that ended early is a file that ended early, not a failure:
+        // what was read is what there is.
+        out.samples.resize(static_cast<std::size_t>(read) * out.channels);
+        return !out.samples.empty();
+#else
+        (void)path;
+        (void)out;
+        error = "built without an audio backend";
+        return false;
+#endif
+    }
+
     std::unique_ptr<AudioEngine> AudioEngine::create(const Settings& settings) {
 #if defined(EGE_HAS_MINIAUDIO)
         if (!settings.forceSilent) {

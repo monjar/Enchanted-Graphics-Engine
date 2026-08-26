@@ -72,6 +72,16 @@ namespace ege {
         glm::vec3 up{0.f, 1.f, 0.f};
     };
 
+    // Decodes a sound file - `.wav`, `.mp3`, `.flac` - into samples.
+    //
+    // Declared here and implemented in the one translation unit that knows
+    // what the audio library is called, because the decoder is that library's
+    // too and a second file including it would be a second file to keep from
+    // learning its name. False when the file will not read, which the caller
+    // handles the way it handles a mesh that will not load: by not having
+    // one.
+    bool decodeSoundFile(const std::string& path, SoundData& out, std::string& error);
+
     // Sound playback behind an engine-owned interface.
     //
     // The backend today is miniaudio, and nothing outside MiniaudioEngine.cpp

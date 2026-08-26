@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio/AudioEngine.hpp"
+#include "core/Guid.hpp"
 #include "core/LogBuffer.hpp"
 #include "editor/EditorViewport.hpp"
 #include "editor/PlayMode.hpp"
@@ -139,7 +141,11 @@ namespace ege {
         void drawEntityNode(World& world, EntityId entity);
         void drawInspectorPanel(World& world);
         bool drawScriptComponent(World& world, struct Script& script);
-        void drawAssetBrowserPanel();
+        void drawAssetBrowserPanel(World& world);
+
+        // Plays a sound asset once, so the browser can answer the only
+        // question that matters about one.
+        void previewSound(World& world, Guid id);
         void drawConsolePanel();
         void applyPendingEdit(World& world);
 
@@ -181,6 +187,10 @@ namespace ege {
         LogLevel consoleMinimumLevel = LogLevel::info;
         char consoleFilter[64]{};
         char assetFilter[64]{};
+        // The clip the browser is auditioning, if any. One slot rather than a
+        // cache: previewing a second sound replaces the first, which bounds
+        // what a curious click can leave loaded to exactly one clip.
+        SoundId previewClip = invalidSound;
         bool consoleFollowsTail = true;
         std::uint64_t lastSeenLogRevision = 0;
     };
