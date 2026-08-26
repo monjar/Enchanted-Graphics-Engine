@@ -1,5 +1,6 @@
 #include "script/Behaviors.hpp"
 
+#include "anim/SkeletalAnimator.hpp"
 #include "physics/CharacterMotion.hpp"
 #include "physics/PhysicsComponents.hpp"
 #include "platform/Input.hpp"
@@ -82,14 +83,23 @@ namespace ege {
         if (input->cursorMode() != CursorMode::Normal) {
             lookYaw += input->mouseDelta().x * mouseSensitivity;
         }
-        lookYaw += input->axis("LookLeft", "LookRight") * 2.f * deltaSeconds;
+        // The right stick turns as well, at a rate per second rather than per
+        // pixel: a stick held over is a steady turn, where a mouse moved is a
+        // fixed amount of turn.
+        lookYaw += (input->axis("LookLeft", "LookRight") + input->rightStick().x) * lookSpeed *
+                   deltaSeconds;
         lookYaw = std::fmod(lookYaw, glm::two_pi<float>());
 
         // The same forward the rest of the engine builds from a yaw, so
         // "forward" means the same thing to the character as to the camera.
         const glm::vec3 forward{std::sin(lookYaw), 0.f, std::cos(lookYaw)};
-        const glm::vec2 stick{
-            input->axis("MoveLeft", "MoveRight"), input->axis("MoveBackward", "MoveForward")};
+        // Keyboard and stick added rather than chosen between, so a player
+        // can put a hand on either at any moment; the length is clamped
+        // downstream, which is what stops the two adding up to double speed.
+        const glm::vec2 stick =
+            glm::vec2{
+                input->axis("MoveLeft", "MoveRight"), input->axis("MoveBackward", "MoveForward")} +
+            input->leftStick();
 
         // Up is the world's, not the entity's: the demo scene's is -Y, and
         // the plane a character walks in is the one perpendicular to gravity.
@@ -104,6 +114,53 @@ namespace ege {
         if (input->wasActionPressed("Jump")) {
             controller->jump = true;
         }
+    }
+
+    void CharacterAnimation::onFixedTick(float) {
+        SkeletalAnimator* animator = self().find<SkeletalAnimator>();
+        if (animator == nullptr) {
+            return;
+        }
+
+        // The controller is on this entity or on an ancestor: an imported
+        // model arrives as a subtree, and the thing that walks is the root it
+        // was parented to.
+        const CharacterController* controller = nullptr;
+        for (EntityId entity = self().id(); !entity.isNull() && controller == nullptr;
+             entity = hierarchy::parentOf(world(), entity)) {
+            controller = world().find<CharacterController>(entity);
+        }
+        if (controller == nullptr) {
+            return;
+        }
+
+        if (!controller->grounded) {
+            // From the top: a jump is a thing that happens once, and picking
+            // it up mid-clip would play the landing on the way up.
+            animator->play(jumpClip, fadeSeconds, true);
+            animator->loop = false;
+            animator->speed = 1.f;
+            return;
+        }
+
+        animator->loop = true;
+        if (controller->planarSpeed <= idleSpeed) {
+            animator->play(idleClip, fadeSeconds, true);
+            animator->speed = 1.f;
+            return;
+        }
+
+        // Walk below the midpoint of the two authored speeds, run above it.
+        // A single crossing point rather than a band: hysteresis would be the
+        // right answer if the speed oscillated, and it does not - the
+        // controller accelerates smoothly through the middle and the fade
+        // covers the moment.
+        const bool running = controller->planarSpeed > (walkSpeed + runSpeed) * 0.5f;
+        const float authored = running ? runSpeed : walkSpeed;
+        // Phase carried across, because a walk becoming a run is one stride
+        // turning into a faster stride.
+        animator->play(running ? runClip : walkClip, fadeSeconds, false);
+        animator->speed = authored > 0.f ? controller->planarSpeed / authored : 1.f;
     }
 
     void Patrol::onSpawn() {
@@ -182,3 +239,4 @@ EGE_BEHAVIOR(ege::Bobbing)
 EGE_BEHAVIOR(ege::Ripple)
 EGE_BEHAVIOR(ege::PlayerCharacter)
 EGE_BEHAVIOR(ege::Patrol)
+EGE_BEHAVIOR(ege::CharacterAnimation)

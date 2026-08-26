@@ -117,6 +117,40 @@ records its own frames — `--record DIR` writes every one as a PNG, with time
 advancing a fixed step per frame so the same recording is the same on any
 machine.
 
+## Somebody in it
+
+```sh
+./build/default/bin/EnchantedEngine --demo --follow      # watch
+./build/default/bin/EnchantedEngine --play               # or play it
+```
+
+![A rigged humanoid walking a circuit through the demo scene, turning to face where it is going, jumping, and shouldering a crate aside, with the camera following behind](docs/images/character.gif)
+
+A rigged figure, skinned on the GPU, walking on physics geometry with the
+camera behind it. It is 370 vertices on nineteen joints with four clips —
+idle, walk, run, jump — and it is a **text glTF in `assets/models/`**, like
+everything else here: a clean checkout ships no binary assets.
+
+Nothing is driving it by hand in that recording. A `Patrol` behaviour walks it
+between the corners of a rectangle and jumps when it arrives, writing the same
+four intent fields — `move`, `run`, `jump`, `jumpHeld` — that a player's hands
+write through `PlayerCharacter`. The controller cannot tell them apart, which
+is exactly why the recording is reproducible: run it again and you get the
+same walk. Swap `--follow` for `--play` and the fields come from a keyboard or
+a controller instead.
+
+What is on screen is four subsystems agreeing. The **character controller**
+holds the capsule upright and decides its velocity; **physics** finds out how
+far that velocity gets and shoves the crate; the **animation system** picks a
+clip from `grounded` and `planarSpeed` and crossfades into it; and the
+**renderer** skins it through a depth pre-pass, an `EQUAL` depth test and
+GPU-driven indirect draws without any of them knowing a character exists.
+
+![The character mid-stride, with the crate tower, the metal spheres and the imported torus behind it](docs/images/character.png)
+
+[`scripts/record_character_demo.sh`](scripts/record_character_demo.sh) records
+both pictures.
+
 ## The engine, being used
 
 ```sh
@@ -226,6 +260,28 @@ begins touching another, each side told from its own side, and
 a ray. A `RigidBody`'s `body` field holds the live handle, so an impulse is
 `world().physics()->addImpulse(self().fetch<RigidBody>().body, kick)`.
 
+And it reaches input the same way: `world().input()`, null where there is no
+window to read one from — a test, a headless tool — which is why a behaviour
+that checks for null works in the editor, in CI and in a player alike.
+
+**Input is bound by name.** Actions are what gameplay reads (`isActionDown`,
+`wasActionPressed`, `axis`), and keys, mouse buttons, gamepad buttons and
+gamepad axes are what get bound to them — so a rebind is a binding change and
+never a code change. Gamepads come through GLFW's *gamepad* mapping rather
+than raw joystick numbering, which is what makes `GamepadButton::A` the
+bottom face button on every pad its controller database knows rather than
+whichever one the firmware numbered first; four pads are tracked, because
+four is a couch.
+
+An axis binds with a sign and a threshold, which is how one stick axis
+becomes two opposed actions and how a trigger resting at −1 becomes an action
+resting at zero. `axis()` is the difference of two *analog* action values, so
+a stick asks for exactly as much as it was pushed while a key still asks for
+exactly one, and `leftStick()` / `rightStick()` hand over a deadzoned vector
+with +y forward for anything that wants a direction rather than two numbers.
+Neither the free-fly camera nor the character controller contains the word
+"gamepad".
+
 ## Physics
 
 Rigid bodies, through [Jolt](https://github.com/jrouwe/JoltPhysics) — but
@@ -279,6 +335,17 @@ same four fields, which is why the demo's walker is a recording of the real
 thing rather than a mime of it. Behaviours reach the keyboard through
 `world().input()`, the same way they reach `world().physics()`.
 
+A **third-person camera** follows it: at a distance behind the player's own
+look yaw, smoothed by an exponential damp that closes the same fraction of
+the gap per second however many frames that second took, and casting from
+what it is aiming at out to where it wants to be so it stops short of
+whatever is in the way. What that found missing is worth saying: gameplay
+cannot own the camera yet. The viewer is a `Transform` the application
+drives, so the follow camera is an engine class rather than the behaviour it
+ought to be, and it only avoids things the physics world knows about — the
+demo's decorative scenery has no colliders and the camera goes straight
+through it.
+
 **Asset hot reload.** The engine watches the project directory while it runs:
 save a change to `assets/materials/floor.egematerial` and the demo's floor
 changes without a restart. A material is rewritten inside the object every
@@ -315,11 +382,48 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: gamepads, a third-person camera, triggers and named collision
-layers, prefabs, sound, runtime UI, and the standalone editor and player.
+Still to come: triggers and named collision layers, prefabs, sound, runtime
+UI, and the standalone editor and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.
+
+## Animation
+
+Skeletons, clips and GPU skinning — arriving from glTF, sampled on the CPU,
+applied in the vertex stage.
+
+**The import earns an invariant the file never promises.** A glTF's joints
+come in whatever order the exporter felt like, and every sweep that composes a
+skeleton relies on parents preceding children — so the importer reorders them,
+carries the inverse bind matrices along, and remaps every vertex's joint
+indices to match. Weights are renormalised on the way in. A `CUBICSPLINE`
+channel is skipped aloud rather than half-played.
+
+**A pose keeps rotation apart from translation and scale.** Sampling produces
+`JointPose`s, not matrices, because halfway between two poses is a pose and
+halfway between two matrices is shear. Interpolation is a slerp along the
+shorter arc, renormalised — two unit quaternions interpolated stay *close* to
+unit, and "close to" compounds over a skeleton's depth. All of it is
+device-free and tested against derivations on paper.
+
+**Skinning happens on the GPU.** Every animated entity's matrices are packed
+end to end into one palette buffer per frame; a draw pushes the base its run
+starts at. The skinned pipelines share the rigid ones' layouts — one extra
+push range and one extra binding the rigid shaders simply never name — so a
+batch walk switches pipelines without disturbing a bound descriptor set. One
+skinning include is used by both the depth shader and the scene shader,
+because the scene pass tests `EQUAL` against the depth pass and two skinning
+expressions one operation order apart produce a character that vanishes.
+
+**Clips crossfade.** `play()` samples both clips at their own times and blends
+the poses; a fade either restarts the new clip, which is what a jump wants, or
+carries the phase across, which is what a walk becoming a run wants — since
+restarting a stride mid-step is a stumble.
+
+Animation runs in the editor as well as in play. A clip advancing is how a
+rigged mesh *looks*, not something that happens to it, and a character frozen
+in bind pose until someone presses Play is a character being authored blind.
 
 ## Building
 
@@ -405,9 +509,12 @@ is why that question is answered by the unit tests above.
 | `Q` / `E` | Down / up |
 | Arrow keys | Look |
 | Hold right mouse | Mouse-look (captures the cursor) |
-| `Space` / `Shift` | Jump / run — bound for characters, unused until one is player-driven |
+| `Space` / `Shift` | Jump / run, with `--play` |
 | `F1` | Show or hide the editor |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
+
+Or a gamepad, on the same actions: left stick moves, right stick looks,
+triggers rise and fall, `A` jumps, the left stick pressed in runs.
 
 With the editor up, the camera answers only while the cursor is over the
 scene view; anywhere else the mouse and keyboard belong to the panels.
@@ -419,10 +526,13 @@ app/            entry point
 src/
   core/         application root, logging, assertions, time, job system
   reflect/      runtime type information
-  platform/     window and input; everything touching GLFW
+  platform/     window, keyboard, mouse and gamepad input, the free-fly
+                and third-person cameras; everything touching GLFW
   assets/       asset database, stable ids, glTF import (cgltf)
   editor/       in-process panels, the offscreen viewport, play mode and undo;
                 these move into EnchantedEditor rather than being rewritten
+  anim/         skeletons, clips, sampling and blending, and the system
+                that fills the frame's skinning palette
   physics/      the PhysicsWorld interface, its Jolt backend, rigid bodies,
                 colliders, the character controller and its device-free
                 motion arithmetic, and the ECS sync

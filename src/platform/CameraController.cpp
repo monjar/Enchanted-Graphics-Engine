@@ -8,6 +8,21 @@
 
 namespace ege {
 
+    namespace {
+
+        // At most a unit vector, and no more than what was asked for.
+        //
+        // Normalising instead - which this used to do - is right for the two
+        // keys of a diagonal, which arrive as a vector of length root two and
+        // must not outrun a straight line. It is wrong for a stick, which
+        // arrives at whatever length the player pushed it to and means it.
+        glm::vec3 clampToUnit(glm::vec3 direction) {
+            const float length = glm::length(direction);
+            return length > 1.f ? direction / length : direction;
+        }
+
+    }  // namespace
+
     void CameraController::registerDefaultActions(Input& input) {
         input.bindAction("MoveForward", Key::W);
         input.bindAction("MoveBackward", Key::S);
@@ -23,6 +38,23 @@ namespace ege {
 
         // Hold to look with the mouse; the cursor is captured while held.
         input.bindAction("Look", MouseButton::Right);
+
+        // And the same actions on a pad, which is the point of binding by
+        // name: nothing that reads these learns that a controller exists.
+        // A stick axis becomes two opposed actions through the sign of its
+        // scale - GLFW reports -1 at the top of a stick and at its left.
+        input.bindAction("MoveForward", GamepadAxis::LeftY, -1.f);
+        input.bindAction("MoveBackward", GamepadAxis::LeftY, 1.f);
+        input.bindAction("MoveLeft", GamepadAxis::LeftX, -1.f);
+        input.bindAction("MoveRight", GamepadAxis::LeftX, 1.f);
+        // Triggers rise, bumpers fall: up and down where a thumb expects them.
+        input.bindAction("MoveUp", GamepadAxis::RightTrigger, 1.f, 0.15f);
+        input.bindAction("MoveDown", GamepadAxis::LeftTrigger, 1.f, 0.15f);
+
+        input.bindAction("LookUp", GamepadAxis::RightY, -1.f);
+        input.bindAction("LookDown", GamepadAxis::RightY, 1.f);
+        input.bindAction("LookLeft", GamepadAxis::RightX, -1.f);
+        input.bindAction("LookRight", GamepadAxis::RightX, 1.f);
     }
 
     void CameraController::update(Input& input, float dt, Transform& viewer) {
@@ -40,7 +72,7 @@ namespace ege {
         rotate.y += input.axis("LookLeft", "LookRight");
 
         if (glm::dot(rotate, rotate) > std::numeric_limits<float>::epsilon()) {
-            viewer.rotation += lookSpeed * dt * glm::normalize(rotate);
+            viewer.rotation += lookSpeed * dt * clampToUnit(rotate);
         }
 
         if (looking) {
@@ -69,7 +101,7 @@ namespace ege {
         direction += up * input.axis("MoveDown", "MoveUp");
 
         if (glm::dot(direction, direction) > std::numeric_limits<float>::epsilon()) {
-            viewer.translation += moveSpeed * dt * glm::normalize(direction);
+            viewer.translation += moveSpeed * dt * clampToUnit(direction);
         }
     }
 

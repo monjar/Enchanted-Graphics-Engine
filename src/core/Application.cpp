@@ -1,6 +1,7 @@
 #include "core/Application.hpp"
 
 #include "anim/AnimationSystem.hpp"
+#include "anim/SkeletalAnimator.hpp"
 #include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
 #include "core/DemoTour.hpp"
@@ -9,9 +10,11 @@
 #include "core/Time.hpp"
 #include "editor/EditorOverlay.hpp"
 #include "editor/PlayMode.hpp"
+#include "physics/CharacterMotion.hpp"
 #include "physics/PhysicsComponents.hpp"
 #include "physics/PhysicsSystem.hpp"
 #include "platform/CameraController.hpp"
+#include "platform/FollowCamera.hpp"
 #include "platform/Input.hpp"
 #include "reflect/BuiltinTypes.hpp"
 #include "reflect/Serialization.hpp"
@@ -421,6 +424,17 @@ namespace ege {
         // leaving it along the bottom edge.
         viewerTransform.rotation.x = -.35f;
         CameraController cameraController{};
+        FollowCamera followCamera{};
+        // Framed for this scene rather than for a person: the character is
+        // 0.6 units tall in a diorama whose crates are a third of a unit, and
+        // a camera two metres back from it would be watching from across the
+        // room.
+        followCamera.settings.distance = 1.35f;
+        followCamera.settings.height = 0.58f;
+        followCamera.settings.aimHeight = 0.2f;
+        followCamera.settings.lag = 8.f;
+        followCamera.settings.minDistance = 0.3f;
+        followCamera.settings.wallMargin = 0.05f;
         CameraController::registerDefaultActions(window.input());
         // What a character is driven by. Separate from the camera's bindings
         // because they answer to different things - the camera's move the
@@ -428,6 +442,11 @@ namespace ege {
         // scene, having one keyboard, shares the four movement actions.
         window.input().bindAction("Jump", Key::Space);
         window.input().bindAction("Run", Key::LeftShift);
+        // Where a thumb expects them on a pad, and bound by the same names,
+        // so nothing downstream is told which one is in use.
+        window.input().bindAction("Jump", GamepadButton::A);
+        window.input().bindAction("Run", GamepadButton::LeftThumb);
+        window.input().bindAction("Run", GamepadAxis::RightTrigger, 1.f, 0.5f);
 
         // Behaviours read input through the world, the same way they reach
         // physics. Set once and left: the window outlives every scene, and a
@@ -588,7 +607,46 @@ namespace ege {
             // the input, in which case dragging a slider must not also fly
             // the camera. A captured cursor is not over anything, so a look
             // drag that began in the scene view keeps the camera regardless.
-            if (options.demo) {
+            if (options.followCharacter) {
+                // Behind the character rather than on rails or on the
+                // free-fly controls.
+                const Entity subject = world.findByName("Walker");
+                const CharacterController* controller =
+                    subject.alive() ? world.find<CharacterController>(subject.id()) : nullptr;
+                if (controller != nullptr) {
+                    // Where the body is pointing, unless somebody is looking
+                    // somewhere else: the player's own yaw wins, because a
+                    // camera that follows the body rather than the eyes turns
+                    // after the player rather than with them.
+                    float yaw = controller->facing;
+                    if (const Script* script = world.find<Script>(subject.id())) {
+                        for (const Script::Slot& slot : script->behaviors) {
+                            if (const auto* player =
+                                    dynamic_cast<const PlayerCharacter*>(slot.instance.get())) {
+                                yaw = player->lookYaw;
+                            }
+                        }
+                    }
+                    followCamera.update(
+                        glm::vec3{hierarchy::worldMatrix(world, subject.id())[3]},
+                        yaw,
+                        upFromGravity(
+                            physics.running() ? physics.physicsWorld()->gravity()
+                                              : glm::vec3{0.f, 9.81f, 0.f}),
+                        frameTime,
+                        physics.physicsWorld(),
+                        viewerTransform);
+                }
+                if (options.demo) {
+                    // The tour is not driving the camera here, but it still
+                    // says how long the demo runs for - so it advances into a
+                    // pose nobody looks at, purely to say when it is over.
+                    Transform unused{};
+                    if (!tour.advance(frameTime, unused)) {
+                        running = false;
+                    }
+                }
+            } else if (options.demo) {
                 if (!tour.advance(frameTime, viewerTransform)) {
                     running = false;
                 }
@@ -1868,20 +1926,18 @@ namespace ege {
         // Drawn as a box until there is a rigged body to put here, which is
         // the next thing this milestone owes.
         {
-            Entity walker = addMesh(
-                "Walker",
-                box,
-                makeMaterial("Walker", glm::vec3{0.85f, 0.45f, 0.15f}, 0.f, 0.5f),
-                {-0.6f, 0.1f, -1.6f},
-                {0.24f, 0.6f, 0.24f});
+            Entity walker = world.spawn("Walker");
+            Transform walkerTransform{};
+            walkerTransform.translation = {1.4f, 0.1f, -1.5f};
+            walker.attach<Transform>(walkerTransform);
 
             CharacterController controller{};
-            // In local units and scaled by the entity, like every collider:
-            // half a unit box across, and caps that make up the rest of its
-            // height. Scaled, that is a capsule 0.24 wide and 0.6 tall,
-            // inscribed exactly in the box being drawn.
-            controller.radius = 0.5f;
-            controller.halfHeight = 0.3f;
+            // A capsule 0.24 across and 0.6 tall, which is the imported
+            // figure's own size: it is drawn by a rigged model parented under
+            // this entity rather than by a mesh on it, so there is no scale
+            // here for the collider to be multiplied by.
+            controller.radius = 0.12f;
+            controller.halfHeight = 0.18f;
             // This scene is a diorama - a crate is a third of a unit - so a
             // person-sized character walks at a person's speed relative to
             // the things around it rather than at three metres a second.
@@ -1893,32 +1949,29 @@ namespace ege {
             controller.turnRate = 8.f;
             // Enough to walk up the plank's lip, not enough to step onto a
             // crate: what it cannot climb it has to push.
-            controller.stepHeight = 0.2f;
-            controller.stickToFloor = 0.4f;
+            controller.stepHeight = 0.12f;
+            controller.stickToFloor = 0.24f;
             controller.mass = 6.f;
             controller.pushForce = 12.f;
             walker.attach<CharacterController>(controller);
 
-            // A nose, so which way it is facing is visible from any angle.
-            // Parented, which also puts a character at the top of a hierarchy
-            // the fixed step moves - the transform write has to divide back
-            // through the parent, and a child of a character proves it.
-            Entity nose = addMesh(
-                "WalkerNose",
-                box,
-                makeMaterial("WalkerNose", glm::vec3{0.15f, 0.15f, 0.18f}, 0.2f, 0.4f),
-                {0.f, -0.28f, 0.6f},
-                glm::vec3{0.45f, 0.18f, 0.5f});
-            hierarchy::setParent(world, nose.id(), walker.id());
-
+            // Who drives. The two write the same four intent fields, so the
+            // controller cannot tell them apart - which is exactly why the
+            // recorded tour, where there are no hands on the keyboard, is a
+            // recording of the thing a player gets rather than a mime of it.
             Script script{};
             Script::Slot slot{};
-            slot.behavior = "ege::Patrol";
-            auto patrol = std::make_shared<Patrol>();
-            patrol->extents = {1.f, 0.f, 0.6f};
-            patrol->arriveRadius = 0.25f;
-            patrol->jumpAtCorners = true;
-            slot.instance = std::move(patrol);
+            if (options.playCharacter) {
+                slot.behavior = "ege::PlayerCharacter";
+                slot.instance = std::make_shared<PlayerCharacter>();
+            } else {
+                slot.behavior = "ege::Patrol";
+                auto patrol = std::make_shared<Patrol>();
+                patrol->extents = {0.9f, 0.f, 0.45f};
+                patrol->arriveRadius = 0.25f;
+                patrol->jumpAtCorners = true;
+                slot.instance = std::move(patrol);
+            }
             script.behaviors.push_back(std::move(slot));
             walker.attach<Script>(std::move(script));
 
@@ -1931,7 +1984,7 @@ namespace ege {
                 "WalkerCrate",
                 box,
                 makeMaterial("WalkerCrate", glm::vec3{0.55f, 0.5f, 0.28f}, 0.f, 0.7f),
-                {-0.6f, 0.35f, -1.f},
+                {1.4f, 0.35f, -1.05f},
                 glm::vec3{.3f},
                 {0.f, 0.3f, 0.f});
             crate.attach<BoxCollider>();
@@ -2036,7 +2089,46 @@ namespace ege {
             sun.attach<DirectionalLight>(sunLight);
         }
 
-        importGltfModels();
+        const std::unordered_map<std::string, EntityId> imported = importGltfModels();
+
+        // The character's body. Imported like any other model and then picked
+        // up and put under the entity that walks - which is the whole reason
+        // importing hands back its roots. The model's own node carries the
+        // offset that lines its feet up with the bottom of the capsule, so
+        // parenting it needs no numbers here.
+        //
+        // The animator the import attached is on the skinned node inside;
+        // CharacterAnimation goes there, and looks up the hierarchy for the
+        // controller telling it what the body is doing.
+        if (const auto walkerBody = imported.find("walker"); walkerBody != imported.end()) {
+            const Entity walker = world.findByName("Walker");
+            if (walker.alive() && !walkerBody->second.isNull()) {
+                hierarchy::setParent(world, walkerBody->second, walker.id());
+
+                // Collected first and attached afterwards: adding a component
+                // while iterating the pool of another is fine, and doing it
+                // in two steps means nobody has to know that.
+                std::vector<EntityId> animated;
+                world.each<SkeletalAnimator>([&](Entity entity, SkeletalAnimator&) {
+                    if (hierarchy::isDescendantOf(world, entity.id(), walker.id())) {
+                        animated.push_back(entity.id());
+                    }
+                });
+                for (const EntityId entity : animated) {
+                    Script script{};
+                    Script::Slot slot{};
+                    slot.behavior = "ege::CharacterAnimation";
+                    auto animation = std::make_shared<CharacterAnimation>();
+                    // The speeds the clips were drawn for, which are the ones
+                    // this character was tuned to walk and run at.
+                    animation->walkSpeed = 0.9f;
+                    animation->runSpeed = 1.8f;
+                    slot.instance = std::move(animation);
+                    script.behaviors.push_back(std::move(slot));
+                    world.lookup(entity).attach<Script>(std::move(script));
+                }
+            }
+        }
 
         EGE_INFO(
             "Scene loaded: {} entities, {} drawn, {} point lights, {} spot lights, {} assets",
@@ -2179,7 +2271,7 @@ namespace ege {
 #endif
     }
 
-    void Application::importGltfModels() {
+    std::unordered_map<std::string, EntityId> Application::importGltfModels() {
         // Driven by the database rather than by another directory walk: the
         // scan has already found every model and given it an id, and that id
         // is what the meshes and materials inside it are numbered from.
@@ -2214,6 +2306,7 @@ namespace ege {
                 {&record, jobs.submit([path]() { return gltf::parseFile(path.string()); })});
         }
 
+        std::unordered_map<std::string, EntityId> roots;
         for (PendingImport& import : pending) {
             try {
                 const GltfSceneData scene = import.parsed.get();
@@ -2232,10 +2325,12 @@ namespace ege {
                     stats.meshes,
                     stats.materials,
                     stats.textures);
+                roots[import.record->name] = stats.root;
             } catch (const std::exception& error) {
                 EGE_ERROR("{}", error.what());
             }
         }
+        return roots;
     }
 
     void Application::verifySceneRoundTrip() {

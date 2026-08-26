@@ -13,6 +13,8 @@ namespace {
         EGE_INFO("  --exit-after SECONDS close after this long regardless");
         EGE_INFO("  --record DIR         write every frame there as a PNG");
         EGE_INFO("  --record-fps N       frames per recorded second (default 30)");
+        EGE_INFO("  --follow             put the camera behind the character");
+        EGE_INFO("  --play               drive the character yourself (implies --follow)");
         EGE_INFO("  --editor             keep the editor up during the demo");
         EGE_INFO("  --size W H           open a window this size (default 800 600)");
         EGE_INFO("  --script-module PATH load this module instead of the default sandbox");
@@ -34,6 +36,11 @@ int main(int argc, char** argv) {
             options.recordDirectory = argv[++index];
         } else if (argument == "--record-fps" && index + 1 < argc) {
             options.recordFrameRate = std::strtof(argv[++index], nullptr);
+        } else if (argument == "--follow") {
+            options.followCharacter = true;
+        } else if (argument == "--play") {
+            options.playCharacter = true;
+            options.followCharacter = true;
         } else if (argument == "--editor") {
             options.showEditor = true;
         } else if (argument == "--size" && index + 2 < argc) {

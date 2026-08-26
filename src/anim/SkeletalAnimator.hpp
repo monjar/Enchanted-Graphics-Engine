@@ -43,9 +43,51 @@ namespace ege {
         // top rather than mid-stride.
         float time = 0.f;
 
+        // A crossfade in progress: what was playing before it started, where
+        // that clip had got to, and how much of the fade is left.
+        //
+        // Two clips sampled independently and blended pose by pose, rather
+        // than one clip's matrices blended into another's: a pose keeps
+        // rotation apart from translation and scale, so the halfway point
+        // between two poses is a pose. Halfway between two matrices is
+        // shear.
+        int previousClip = -1;
+        float previousTime = 0.f;
+        float fadeRemaining = 0.f;
+        float fadeDuration = 0.f;
+
         // Where this frame's skinning matrices landed in the palette,
         // written by the system for the draw that consumes them.
         uint32_t paletteBase = 0;
+
+        // Starts `next` playing, crossfading out of whatever was.
+        //
+        // `fromTheTop` restarts the new clip, which is what a jump wants.
+        // False carries the phase across instead - a walk becoming a run is
+        // one stride turning into a faster stride, and restarting it mid-step
+        // is a stumble. Asking for the clip already playing does nothing, so
+        // a driver may call this every tick.
+        void play(int next, float seconds = 0.15f, bool fromTheTop = true) {
+            if (next == clip) {
+                return;
+            }
+            previousClip = clip;
+            previousTime = time;
+            fadeDuration = seconds > 0.f ? seconds : 0.f;
+            fadeRemaining = fadeDuration;
+
+            float phase = 0.f;
+            if (!fromTheTop && rig != nullptr) {
+                const auto count = static_cast<int>(rig->clips.size());
+                if (clip >= 0 && clip < count && next >= 0 && next < count) {
+                    const float from = rig->clips[static_cast<std::size_t>(clip)].duration;
+                    const float to = rig->clips[static_cast<std::size_t>(next)].duration;
+                    phase = from > 0.f ? (time / from) * to : 0.f;
+                }
+            }
+            clip = next;
+            time = phase;
+        }
     };
 
 }  // namespace ege
