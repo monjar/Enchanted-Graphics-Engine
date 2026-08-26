@@ -304,3 +304,48 @@ else()
   message(FATAL_ERROR "nlohmann_json resolved but exported no usable target")
 endif()
 add_library(ege::json ALIAS ege_json)
+
+# ---------------------------------------------------------------------------
+# miniaudio - the audio backend
+# ---------------------------------------------------------------------------
+#
+# A single header, and the implementation is compiled in exactly one of our
+# own translation units - src/audio/MiniaudioEngine.cpp - which is the same
+# arrangement the physics backend has: one file knows the library's name and
+# nothing else in the engine can accidentally learn it.
+#
+# It needs no system packages to build. On Linux it opens ALSA, PulseAudio or
+# JACK at *runtime* through dlopen, so a build machine with no sound stack
+# still compiles it and a machine with no sound device still runs - it just
+# reports that it has no playback device, which is exactly what the silent
+# backend is for.
+CPMAddPackage(
+  NAME miniaudio
+  GITHUB_REPOSITORY mackron/miniaudio
+  GIT_TAG 0.11.21
+  VERSION 0.11.21
+  DOWNLOAD_ONLY YES
+)
+
+add_library(ege_miniaudio INTERFACE)
+if(miniaudio_ADDED)
+  # SYSTEM, because this is a 90,000-line single header written to compile
+  # everywhere rather than to pass our warning settings.
+  target_include_directories(ege_miniaudio SYSTEM INTERFACE "${miniaudio_SOURCE_DIR}")
+  target_compile_definitions(ege_miniaudio INTERFACE EGE_HAS_MINIAUDIO=1)
+
+  # What miniaudio's backends want. Nothing at build time on Linux beyond the
+  # threading and dynamic-loading primitives it uses to find a sound server;
+  # the Apple backends are frameworks and have to be named.
+  if(APPLE)
+    target_link_libraries(
+      ege_miniaudio
+      INTERFACE "-framework CoreFoundation" "-framework CoreAudio" "-framework AudioToolbox")
+  elseif(UNIX)
+    find_package(Threads REQUIRED)
+    target_link_libraries(ege_miniaudio INTERFACE Threads::Threads ${CMAKE_DL_LIBS} m)
+  endif()
+else()
+  message(WARNING "miniaudio was not resolved; the engine will run silent")
+endif()
+add_library(ege::miniaudio ALIAS ege_miniaudio)

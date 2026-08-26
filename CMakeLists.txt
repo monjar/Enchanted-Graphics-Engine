@@ -101,7 +101,8 @@ target_link_libraries(Enchanted PUBLIC
   ege::vma
   ege::stb
   ege::json
-  ege::jolt)
+  ege::jolt
+  ege::miniaudio)
 
 target_compile_definitions(Enchanted PRIVATE
   EGE_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets"

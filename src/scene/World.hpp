@@ -181,6 +181,20 @@ namespace ege {
 
         void setPhysics(class PhysicsWorld* backend) { physicsBackend = backend; }
 
+        // ---- Audio ---------------------------------------------------------
+
+        // The engine's sound, carried the same way physics and input are and
+        // for the same reason: gameplay asks `world().audio()` and the ECS
+        // learns nothing about miniaudio.
+        //
+        // Unlike physics this is never null while the application is
+        // running - a machine with no playback device still gets a backend,
+        // because a subsystem that can be absent is a subsystem every call
+        // site has to check for and nobody ever tests the other branch of.
+        class AudioEngine* audio() const { return audioEngine; }
+
+        void setAudio(class AudioEngine* engine) { audioEngine = engine; }
+
         // ---- Events --------------------------------------------------------
 
         // The scene's event bus, owned rather than pointed at: unlike physics
@@ -243,6 +257,7 @@ namespace ege {
         std::unordered_map<std::type_index, std::unique_ptr<ComponentPoolBase>> componentPools;
 
         class PhysicsWorld* physicsBackend = nullptr;
+        class AudioEngine* audioEngine = nullptr;
         class Input* inputSource = nullptr;
     };
 

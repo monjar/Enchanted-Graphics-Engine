@@ -25,4 +25,16 @@ namespace ege {
         glm::mat4 viewMatrix{1.f};
     };
 
+    // Which way a viewer with these Tait-Bryan angles is looking, and which
+    // way is up for it.
+    //
+    // The same two columns setViewYXZ builds its matrix from, pulled out
+    // because something other than the renderer wants them now: the audio
+    // listener sits where the camera sits and hears along the same axes, and
+    // two places deriving a forward vector from angles is two places for the
+    // rotation order to be wrong in.
+    glm::vec3 forwardFromAngles(glm::vec3 rotation);
+
+    glm::vec3 upFromAngles(glm::vec3 rotation);
+
 }  // namespace ege
