@@ -11,6 +11,7 @@
 #include "reflect/Serialization.hpp"
 #include "scene/ComponentRegistry.hpp"
 #include "scene/Components.hpp"
+#include "scene/Prefab.hpp"
 #include "scene/SceneSerializer.hpp"
 #include "script/Behavior.hpp"
 #include "script/BehaviorRegistry.hpp"
@@ -399,7 +400,7 @@ TEST_CASE("contacts reach the behaviours on both sides, each from its own side")
 
     for (int i = 0; i < 180; i++) {
         scripts.fixedTick(world, 1.f / 60.f);
-        scripts.deliverContacts(world, physics.fixedTick(world, 1.f / 60.f));
+        scripts.deliverContacts(world, physics.fixedTick(world, 1.f / 60.f).contacts);
     }
     physics.stop(world);
 
@@ -579,4 +580,225 @@ TEST_CASE("a reload leaves alone a behaviour the new module does not have") {
     CHECK(live->behaviors[0].behavior == "test::NotInThisBuild");
     CHECK(live->behaviors[0].savedFields == R"({"rate":7.0})");
     CHECK(live->behaviors[0].instance == nullptr);
+}
+
+namespace {
+
+    // Counts arrivals and departures, from whichever side it is attached to.
+    class TriggerLog : public ege::Behavior {
+    public:
+        std::vector<ege::Entity> arrived;
+        std::vector<ege::Entity> departed;
+
+        void onTriggerEnter(ege::Entity other) override { arrived.push_back(other); }
+
+        void onTriggerExit(ege::Entity other) override { departed.push_back(other); }
+    };
+
+}  // namespace
+
+EGE_REFLECT(TriggerLog)
+EGE_REFLECT_END()
+
+TEST_CASE("both sides of a trigger hear about it") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<TriggerLog>("TriggerLog");
+
+    World world;
+
+    const auto attachLog = [](Entity entity) {
+        Script script{};
+        Script::Slot slot{};
+        slot.behavior = "TriggerLog";
+        auto log = std::make_shared<TriggerLog>();
+        slot.instance = log;
+        script.behaviors.push_back(std::move(slot));
+        entity.attach<Script>(std::move(script));
+        return log;
+    };
+
+    Entity floor = world.spawn("Floor");
+    Transform floorTransform{};
+    floorTransform.translation = {0.f, -0.5f, 0.f};
+    floor.attach<Transform>(floorTransform);
+    floor.attach<ege::BoxCollider>(ege::BoxCollider{{10.f, 0.5f, 10.f}, {0.f, 0.f, 0.f}});
+
+    Entity plate = world.spawn("Plate");
+    Transform plateTransform{};
+    plateTransform.translation = {0.f, 0.5f, 0.f};
+    plate.attach<Transform>(plateTransform);
+    plate.attach<ege::BoxCollider>(ege::BoxCollider{{1.f, 0.1f, 1.f}, {0.f, 0.f, 0.f}});
+    plate.attach<ege::Trigger>();
+    auto plateLog = attachLog(plate);
+
+    Entity ball = world.spawn("Ball");
+    Transform ballTransform{};
+    ballTransform.translation = {0.f, 3.f, 0.f};
+    ball.attach<Transform>(ballTransform);
+    ball.attach<ege::SphereCollider>();
+    ege::RigidBody bouncy{};
+    bouncy.restitution = 0.8f;
+    ball.attach<ege::RigidBody>(bouncy);
+    auto ballLog = attachLog(ball);
+
+    ScriptSystem scripts;
+    ege::PhysicsSystem physics{};
+    scripts.spawnPending(world);
+    physics.start(world);
+
+    for (int i = 0; i < 300; i++) {
+        scripts.fixedTick(world, 1.f / 60.f);
+        const ege::PhysicsEvents events = physics.fixedTick(world, 1.f / 60.f);
+        scripts.deliverTriggers(world, events.entered, true);
+        scripts.deliverTriggers(world, events.left, false);
+    }
+    physics.stop(world);
+
+    // The plate was told who stepped on it, and whoever stepped was told
+    // which plate: either end can be the one that knows what to do.
+    REQUIRE(!plateLog->arrived.empty());
+    REQUIRE(!ballLog->arrived.empty());
+    CHECK(plateLog->arrived.front() == ball);
+    CHECK(ballLog->arrived.front() == plate);
+
+    // And the bounce back out was heard on both sides too.
+    REQUIRE(!plateLog->departed.empty());
+    REQUIRE(!ballLog->departed.empty());
+    CHECK(plateLog->departed.front() == ball);
+    CHECK(ballLog->departed.front() == plate);
+}
+
+TEST_CASE("a pressure plate opens its door while something stands on it") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+
+    World world;
+
+    Entity door = world.spawn("Door");
+    Transform doorTransform{};
+    doorTransform.translation = {5.f, 0.f, 0.f};
+    door.attach<Transform>(doorTransform);
+
+    Entity plate = world.spawn("Plate");
+    plate.attach<Transform>();
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "ege::PressurePlate";
+    auto pressure = std::make_shared<ege::PressurePlate>();
+    pressure->door = "Door";
+    pressure->opening = {0.f, -1.f, 0.f};
+    pressure->speed = 2.f;
+    slot.instance = pressure;
+    script.behaviors.push_back(std::move(slot));
+    plate.attach<Script>(std::move(script));
+
+    Entity first = world.spawn("First");
+    Entity second = world.spawn("Second");
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+
+    const auto tick = [&](int steps) {
+        for (int i = 0; i < steps; i++) {
+            scripts.fixedTick(world, 1.f / 60.f);
+        }
+    };
+
+    // Closed is where the door was, read rather than authored.
+    tick(30);
+    CHECK(door.fetch<Transform>().translation.y == doctest::Approx(0.f));
+
+    // Two things step on: two arrivals, and the door opens once.
+    scripts.deliverTriggers(world, {{plate, first}, {plate, second}}, true);
+    tick(60);
+    CHECK(door.fetch<Transform>().translation.y == doctest::Approx(-1.f).epsilon(0.02f));
+
+    // One steps off, and the door stays open - the whole reason the plate
+    // counts rather than remembering a yes or a no. A door that shut here
+    // would shut on whoever was still standing there.
+    scripts.deliverTriggers(world, {{plate, first}}, false);
+    tick(60);
+    CHECK(door.fetch<Transform>().translation.y == doctest::Approx(-1.f).epsilon(0.02f));
+
+    // The last one steps off and it closes again.
+    scripts.deliverTriggers(world, {{plate, second}}, false);
+    tick(60);
+    CHECK(door.fetch<Transform>().translation.y == doctest::Approx(0.f).epsilon(0.02f));
+
+    // And it never goes further than closed, however many departures arrive:
+    // a count that could go negative is a plate that sticks open.
+    scripts.deliverTriggers(world, {{plate, first}, {plate, second}}, false);
+    tick(60);
+    CHECK(door.fetch<Transform>().translation.y == doctest::Approx(0.f).epsilon(0.02f));
+    scripts.deliverTriggers(world, {{plate, first}}, true);
+    tick(60);
+    CHECK(door.fetch<Transform>().translation.y == doctest::Approx(-1.f).epsilon(0.02f));
+}
+
+TEST_CASE("a spawner stamps out its prefab when something enters") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinSerializers();
+    ege::registerBuiltinComponents();
+
+    // The fragment, built in a scratch world and written out - which is what
+    // an editor's "save as prefab" would have done.
+    World source;
+    Entity crate = source.spawn("Crate");
+    crate.attach<Transform>();
+    const std::string document = ege::prefab::write(source, crate.id());
+
+    World world;
+    Entity pad = world.spawn("Pad");
+    Transform padTransform{};
+    padTransform.translation = {4.f, 0.f, 0.f};
+    pad.attach<Transform>(padTransform);
+
+    Script script{};
+    Script::Slot slot{};
+    slot.behavior = "ege::Spawner";
+    auto spawner = std::make_shared<ege::Spawner>();
+    // Resolved by hand rather than through the database: what a reference is
+    // for is naming an asset, and what a spawner needs is the document.
+    spawner->prefab = ege::PrefabRef{
+        ege::Guid::fromName("prefab:test"), std::make_shared<ege::Prefab>(ege::Prefab{document})};
+    spawner->offset = {0.f, 1.f, 0.f};
+    spawner->limit = 2;
+    spawner->cooldown = 0.5f;
+    slot.instance = spawner;
+    script.behaviors.push_back(std::move(slot));
+    pad.attach<Script>(std::move(script));
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+
+    Entity visitor = world.spawn("Visitor");
+    const auto enter = [&] { scripts.deliverTriggers(world, {{pad, visitor}}, true); };
+    const auto tick = [&](int steps) {
+        for (int i = 0; i < steps; i++) {
+            scripts.fixedTick(world, 1.f / 60.f);
+        }
+    };
+
+    enter();
+    CHECK(world.findByName("Crate").alive());
+    // Placed where the spawner said, relative to the spawner - whatever the
+    // prefab's own root transform held is where it sits inside the fragment.
+    CHECK(world.findByName("Crate").fetch<Transform>().translation.x == doctest::Approx(4.f));
+    CHECK(world.findByName("Crate").fetch<Transform>().translation.y == doctest::Approx(1.f));
+
+    // Straight back in, inside the cooldown: a character standing in the
+    // volume is not a fountain.
+    const std::size_t afterFirst = world.entityCount();
+    enter();
+    CHECK(world.entityCount() == afterFirst);
+
+    // Past the cooldown, a second one - and then never again, because the
+    // limit is what stops a spawner filling the world it is standing in.
+    tick(60);
+    enter();
+    CHECK(world.entityCount() == afterFirst + 1);
+    tick(60);
+    enter();
+    CHECK(world.entityCount() == afterFirst + 1);
 }

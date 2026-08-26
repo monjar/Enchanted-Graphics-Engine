@@ -45,6 +45,8 @@ namespace ege {
         registry.add<BoxCollider>();
         registry.add<SphereCollider>();
         registry.add<CapsuleCollider>();
+        registry.add<PhysicsLayer>();
+        registry.add<Trigger>();
         registry.add<CharacterController>();
         registry.add<SkeletalAnimator>();
 

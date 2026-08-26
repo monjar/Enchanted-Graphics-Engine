@@ -255,7 +255,8 @@ upload for the frame however many times the vertices were touched. The demo's
 rippling sheet is a script rewriting 2 401 vertices every tick.
 
 A behaviour hears about physics too: `onContact` runs when the entity's body
-begins touching another, each side told from its own side, and
+begins touching another and `onTriggerEnter` / `onTriggerExit` when something
+arrives in or leaves a `Trigger` volume, each side told from its own side, and
 `world().physics()->raycast(...)` asks the running simulation what lies along
 a ray. A `RigidBody`'s `body` field holds the live handle, so an impulse is
 `world().physics()->addImpulse(self().fetch<RigidBody>().body, kick)`.
@@ -346,6 +347,54 @@ ought to be, and it only avoids things the physics world knows about — the
 demo's decorative scenery has no colliders and the camera goes straight
 through it.
 
+**Triggers.** A collider plus a `Trigger` component is a volume that notices
+who is inside it and stops nothing. Behaviours on it hear `onTriggerEnter`
+when something arrives and `onTriggerExit` when the last of it leaves — and
+so do behaviours on whatever arrived, each told from its own side, so either
+end can be the one that knows what to do. A departure survives the body that
+caused it: being despawned inside a volume is one of the ways to leave one,
+which is what a pickup is.
+
+Triggers are built as *kinematic* sensors rather than static ones, and the
+reason is worth knowing: a static sensor in Jolt notices only bodies that are
+moving, so a plate would miss a player who walked onto it and stopped. By the
+same rule, a crate that settles inside a trigger and falls asleep is reported
+as having left — characters never sleep, so a plate a player stands on stays
+pressed.
+
+**Collision layers are named.** Sixteen of them and a matrix between them,
+symmetric by construction, because "the player collides with pickups" and
+"pickups collide with the player" are one fact and a matrix that can disagree
+with itself eventually does. Everything collides with everything until told
+otherwise: a fresh layer that collided with nothing would first be noticed as
+objects falling through the floor.
+
+An entity says which layer it is in by *name* — a `PhysicsLayer` component —
+because the number is an index into a table the scene does not own, and a
+scene file that said "layer 3" would mean something else the day someone
+inserted a layer above it. A name the world has never heard of falls back to
+the default and says so. Underneath, the layer rides in the top bits of
+Jolt's object layer alongside the moves-or-not bit the broad phase already
+used, so the optimisation and the gameplay filter stay separate questions.
+
+**Prefabs.** A `.egeprefab` is a scene fragment — one entity, everything
+under it, and every component on any of them — written in the same shape a
+scene is. That is not a coincidence: parents are recorded as positions inside
+the document rather than as entity ids, which is what lets a fragment re-link
+to itself when it is stamped out and what lets it be stamped twice into the
+same world.
+
+```cpp
+Entity pickup = prefab::spawn(world(), reference);
+```
+
+The loaded form is the *document*, not a world: a prefab is a description, and
+each instantiation is a fresh set of entities with no link back to the file.
+Editing a prefab does not reach into the copies already spawned — that wants
+an instance link, which is a different feature and one the editor should ask
+for before it exists. A `PrefabRef` resolves like any other asset reference,
+so a behaviour can name one in a reflected field and a scene can save it.
+
 **Asset hot reload.** The engine watches the project directory while it runs:
 save a change to `assets/materials/floor.egematerial` and the demo's floor
 changes without a restart. A material is rewritten inside the object every
@@ -382,8 +431,8 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: triggers and named collision layers, prefabs, sound, runtime
-UI, and the standalone editor and player.
+Still to come: timers and typed events, sound, runtime UI, and the standalone
+editor and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.
@@ -546,14 +595,16 @@ src/
                 the depth pyramid and GPU-driven culling, skybox, bloom and
                 post-process
   scene/        world, entities, component pools, components, hierarchy,
-                serialization, render-transform interpolation
+                scene and prefab serialization, render-transform
+                interpolation
   script/       behaviours, the behaviour registry, and the runtime module
                 loader that makes them reloadable
 shaders/        GLSL, compiled to SPIR-V into the build tree; .glsl files
                 are shared declarations, included rather than compiled
 sandbox/        a project's behaviours, built as a module the engine loads at
                 runtime - this is where a game's gameplay code would live
-assets/         runtime assets, resolved via EGE_ASSET_ROOT
+assets/         runtime assets, resolved via EGE_ASSET_ROOT - models as text
+                glTF, materials and prefabs as JSON; no binary files
 tools/          EnchantedFrameChecks, which reads recorded frames back
                 and says whether a picture came out
 tests/          doctest suite

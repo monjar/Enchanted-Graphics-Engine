@@ -160,6 +160,31 @@ namespace ege {
         }
     }
 
+    void ScriptSystem::deliverTriggers(
+        World& world, const std::vector<TriggerEvent>& events, bool entering) {
+        for (const TriggerEvent& event : events) {
+            const EntityId trigger = event.trigger.id();
+            const EntityId other = event.other.id();
+
+            // Re-checked per behaviour, not just per event: an earlier call
+            // may have despawned either side, and the dead take no calls.
+            for (const std::shared_ptr<Behavior>& behavior : behaviorsOf(world, trigger)) {
+                if (!world.alive(trigger)) {
+                    break;
+                }
+                entering ? behavior->onTriggerEnter(event.other)
+                         : behavior->onTriggerExit(event.other);
+            }
+            for (const std::shared_ptr<Behavior>& behavior : behaviorsOf(world, other)) {
+                if (!world.alive(other)) {
+                    break;
+                }
+                entering ? behavior->onTriggerEnter(event.trigger)
+                         : behavior->onTriggerExit(event.trigger);
+            }
+        }
+    }
+
     void ScriptSystem::deliverContacts(World& world, const std::vector<EntityContact>& contacts) {
         for (const EntityContact& event : contacts) {
             // Re-checked per event, not just per batch: an earlier onContact

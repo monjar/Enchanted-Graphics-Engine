@@ -209,7 +209,7 @@ TEST_CASE("contacts come back as entities") {
 
     bool touched = false;
     for (int i = 0; i < 120 && !touched; i++) {
-        for (const EntityContact& contact : physics.fixedTick(world, step)) {
+        for (const EntityContact& contact : physics.fixedTick(world, step).contacts) {
             const bool pairMatches = (contact.a == floor && contact.b == ball) ||
                                      (contact.a == ball && contact.b == floor);
             touched = touched || pairMatches;
@@ -397,6 +397,172 @@ TEST_CASE("a character despawned mid-play takes its capsule with it") {
     world.despawn(walker.id());
     physics.fixedTick(world, step);
     CHECK(physics.physicsWorld()->characterCount() == 0);
+    physics.stop(world);
+}
+
+// ---- Triggers and layers --------------------------------------------------
+
+namespace {
+
+    // A plate lying on the floor: a collider and a Trigger and nothing else.
+    Entity spawnPlate(World& world, glm::vec3 position, std::string only = {}) {
+        Entity plate = world.spawn("Plate");
+        Transform transform{};
+        transform.translation = position;
+        plate.attach<Transform>(transform);
+        plate.attach<BoxCollider>(BoxCollider{{1.f, 0.1f, 1.f}, {0.f, 0.f, 0.f}});
+        plate.attach<ege::Trigger>(ege::Trigger{std::move(only)});
+        return plate;
+    }
+
+}  // namespace
+
+TEST_CASE("something falling into a trigger is reported, and leaving it too") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity plate = spawnPlate(world, {0.f, 0.5f, 0.f});
+    Entity ball = spawnBall(world, {0.f, 3.f, 0.f});
+    ball.fetch<RigidBody>().restitution = 0.8f;
+
+    physics.start(world);
+
+    // It falls in, bounces back out, and comes down again. Run to the end
+    // rather than stopping at the first event, because where it finishes is
+    // half of what this is checking.
+    bool entered = false;
+    bool left = false;
+    for (int i = 0; i < 600; i++) {
+        const ege::PhysicsEvents events = physics.fixedTick(world, step);
+        for (const ege::TriggerEvent& event : events.entered) {
+            entered = entered || (event.trigger == plate && event.other == ball);
+        }
+        for (const ege::TriggerEvent& event : events.left) {
+            left = left || (event.trigger == plate && event.other == ball);
+        }
+    }
+
+    CHECK(entered);
+    CHECK(left);
+    // Through, not onto: it came to rest on the floor at its own radius,
+    // rather than on top of the plate half a unit higher. A trigger that
+    // also blocks is a wall.
+    CHECK(ball.fetch<Transform>().translation.y == doctest::Approx(0.5f).epsilon(0.05f));
+    physics.stop(world);
+}
+
+TEST_CASE("a trigger can be told which layer sets it off") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity plate = spawnPlate(world, {0.f, 0.5f, 0.f}, "Player");
+
+    Entity ball = spawnBall(world, {0.f, 3.f, 0.f});
+    ball.attach<ege::PhysicsLayer>(ege::PhysicsLayer{"Crates"});
+
+    PhysicsWorld::Settings settings{};
+    settings.layers.add("Player");
+    settings.layers.add("Crates");
+    physics.start(world, settings);
+
+    bool entered = false;
+    for (int i = 0; i < 240; i++) {
+        for (const ege::TriggerEvent& event : physics.fixedTick(world, step).entered) {
+            entered = entered || event.trigger == plate;
+        }
+    }
+    // It fell right through it and the plate said nothing: a plate any
+    // passing crate can open is not a door with a key.
+    CHECK_FALSE(entered);
+    physics.stop(world);
+}
+
+TEST_CASE("the collision matrix reaches the ECS by name") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world).attach<ege::PhysicsLayer>(ege::PhysicsLayer{"Ground"});
+
+    Entity ghost = spawnBall(world, {0.f, 3.f, 0.f});
+    ghost.attach<ege::PhysicsLayer>(ege::PhysicsLayer{"Ghosts"});
+
+    PhysicsWorld::Settings settings{};
+    settings.layers.add("Ground");
+    settings.layers.add("Ghosts");
+    settings.layers.setCollides("Ground", "Ghosts", false);
+    physics.start(world, settings);
+    simulate(physics, world, 240);
+
+    // Straight through the floor it would otherwise have landed on.
+    CHECK(ghost.fetch<Transform>().translation.y < -3.f);
+    physics.stop(world);
+}
+
+TEST_CASE("a layer name nobody declared falls back rather than disappearing") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+
+    Entity ball = spawnBall(world, {0.f, 3.f, 0.f});
+    ball.attach<ege::PhysicsLayer>(ege::PhysicsLayer{"Typo"});
+
+    physics.start(world);
+    simulate(physics, world, 300);
+
+    // The default layer collides with everything, so a mistyped name costs a
+    // warning rather than an object falling out of the world.
+    CHECK(ball.fetch<Transform>().translation.y == doctest::Approx(0.5f).epsilon(0.05f));
+    physics.stop(world);
+}
+
+TEST_CASE("a character sets off a trigger it walks onto") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity plate = spawnPlate(world, {2.f, 0.1f, 0.f});
+    Entity walker = spawnWalker(world, {0.f, 0.75f, 0.f});
+    walker.fetch<ege::CharacterController>().walkSpeed = 2.f;
+
+    physics.start(world);
+
+    bool entered = false;
+    for (int i = 0; i < 120 && !entered; i++) {
+        walker.fetch<ege::CharacterController>().move = {1.f, 0.f, 0.f};
+        for (const ege::TriggerEvent& event : physics.fixedTick(world, step).entered) {
+            entered = entered || (event.trigger == plate && event.other == walker);
+        }
+    }
+    CHECK(entered);
+    physics.stop(world);
+}
+
+TEST_CASE("something despawned inside a trigger still leaves it") {
+    World world;
+    PhysicsSystem physics{};
+    spawnFloor(world);
+    Entity plate = spawnPlate(world, {0.f, 0.5f, 0.f});
+    Entity ball = spawnBall(world, {0.f, 2.f, 0.f});
+
+    physics.start(world);
+
+    bool entered = false;
+    for (int i = 0; i < 240 && !entered; i++) {
+        for (const ege::TriggerEvent& event : physics.fixedTick(world, step).entered) {
+            entered = entered || event.trigger == plate;
+        }
+    }
+    REQUIRE(entered);
+
+    // Consumed where it stands, which is what a pickup is. The plate has to
+    // hear about it or it counts an occupant that never left.
+    ball.despawn();
+
+    bool left = false;
+    for (int i = 0; i < 30 && !left; i++) {
+        for (const ege::TriggerEvent& event : physics.fixedTick(world, step).left) {
+            left = left || event.trigger == plate;
+        }
+    }
+    CHECK(left);
     physics.stop(world);
 }
 

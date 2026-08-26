@@ -30,6 +30,11 @@ namespace ege {
         // entity named and the normal pointing away from themselves.
         void deliverContacts(World& world, const std::vector<EntityContact>& contacts);
 
+        // Trigger arrivals and departures, each side told from its own side.
+        // `entering` chooses between onTriggerEnter and onTriggerExit,
+        // because the two differ in nothing but which call to make.
+        void deliverTriggers(World& world, const std::vector<TriggerEvent>& events, bool entering);
+
         // Calls onDespawn on everything that has spawned and forgets the
         // instances. Called when play stops - the world is about to be replaced
         // by the snapshot, and a behaviour should hear about that.

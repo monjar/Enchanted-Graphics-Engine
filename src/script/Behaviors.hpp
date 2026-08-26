@@ -1,9 +1,12 @@
 #pragma once
 
 #include "reflect/BuiltinTypes.hpp"
+#include "scene/Prefab.hpp"
 #include "script/Behavior.hpp"
 
 #include <glm/glm.hpp>
+
+#include <string>
 
 namespace ege {
 
@@ -139,6 +142,67 @@ namespace ege {
         void onFixedTick(float deltaSeconds) override;
     };
 
+    // A door that slides open while something stands on its plate.
+    //
+    // Attached to the plate, not to the door: the plate is the thing that
+    // knows, and what it knows is a count. Two crates and a player standing
+    // on it is three arrivals and three departures, and a door that opened on
+    // the first and shut on the first departure would shut under whoever was
+    // still standing there.
+    //
+    // The door itself is a kinematic body, so it pushes what is in the way
+    // rather than passing through it - which is also what stops a player
+    // closing a door on themselves and ending up inside it.
+    class PressurePlate : public Behavior {
+    public:
+        // The entity to move, by name. A name rather than a handle because a
+        // handle means nothing in the next run, and this has to survive being
+        // saved.
+        std::string door;
+        // How far the door travels from where it started, and how fast.
+        glm::vec3 opening{0.f, -0.9f, 0.f};
+        float speed = 1.6f;
+
+        void onSpawn() override;
+        void onTriggerEnter(Entity other) override;
+        void onTriggerExit(Entity other) override;
+        void onFixedTick(float deltaSeconds) override;
+
+    private:
+        glm::vec3 closed{0.f};
+        // How many things are standing on it, and how far open the door is.
+        int occupants = 0;
+        float openness = 0.f;
+    };
+
+    // Stamps out a prefab when something enters the trigger it is attached
+    // to.
+    //
+    // The whole of what a prefab is for, in one behaviour: naming an asset
+    // and asking for a copy of it. Nothing here knows what is in the prefab -
+    // a crate, a pickup, a monster - which is the difference between spawning
+    // and constructing.
+    class Spawner : public Behavior {
+    public:
+        PrefabRef prefab;
+        // Where the copy appears, relative to this entity.
+        glm::vec3 offset{0.f, -1.f, 0.f};
+        // The most it will ever make. A spawner that runs forever fills the
+        // world, and the world is what the spawner is standing in.
+        int limit = 4;
+        // Seconds before it will answer again, so a character standing in the
+        // volume does not become a fountain.
+        float cooldown = 1.5f;
+
+        void onSpawn() override;
+        void onTriggerEnter(Entity other) override;
+        void onFixedTick(float deltaSeconds) override;
+
+    private:
+        int made = 0;
+        float ready = 0.f;
+    };
+
     // Pushes a dynamic mesh's vertices along their normals by a travelling
     // sine wave. The one behaviour here that exists to prove something rather
     // than to look nice: geometry a script writes every frame.
@@ -194,6 +258,19 @@ EGE_FIELD(walkSpeed).range(0.f, 20.f).tooltip("The ground speed the walk clip wa
 EGE_FIELD(runSpeed).range(0.f, 40.f).tooltip("The ground speed the run clip was drawn for");
 EGE_FIELD(idleSpeed).range(0.f, 2.f).tooltip("Below this it is standing still");
 EGE_FIELD(fadeSeconds).range(0.f, 1.f).tooltip("How long a change of clip takes");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::Spawner)
+EGE_FIELD(prefab).tooltip("The scene fragment to stamp out");
+EGE_FIELD(offset).tooltip("Where the copy appears, relative to this entity");
+EGE_FIELD(limit).range(0.f, 64.f).tooltip("The most it will ever make");
+EGE_FIELD(cooldown).range(0.f, 30.f).tooltip("Seconds before it answers again");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::PressurePlate)
+EGE_FIELD(door).tooltip("The entity this plate opens, by name");
+EGE_FIELD(opening).tooltip("How far the door travels from where it started");
+EGE_FIELD(speed).range(0.f, 20.f).tooltip("Units per second the door moves");
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::Patrol)

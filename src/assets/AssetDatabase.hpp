@@ -18,8 +18,9 @@
 namespace ege {
 
     class JobSystem;
+    struct Prefab;
 
-    enum class AssetKind { unknown, mesh, texture, material, scene };
+    enum class AssetKind { unknown, mesh, texture, material, scene, prefab };
 
     const char* assetKindName(AssetKind kind);
 
@@ -109,6 +110,11 @@ namespace ege {
         std::shared_ptr<Material> material(Guid id);
         std::shared_ptr<Texture> texture(Guid id);
 
+        // Prefabs need no device: what loads is the text of a scene fragment,
+        // not a buffer on a GPU. So this one answers on a machine that has
+        // none, which is also what lets a test spawn one.
+        std::shared_ptr<Prefab> prefab(Guid id);
+
         // Starts loading an asset on the job system, if it is not already
         // loaded and not already loading. True when this call started one.
         //
@@ -180,6 +186,7 @@ namespace ege {
         std::unordered_map<Guid, std::shared_ptr<Model>> meshes;
         std::unordered_map<Guid, std::shared_ptr<Material>> materials;
         std::unordered_map<Guid, std::shared_ptr<Texture>> textures;
+        std::unordered_map<Guid, std::shared_ptr<Prefab>> prefabs;
 
         AssetLoadQueue loadQueue;
     };
