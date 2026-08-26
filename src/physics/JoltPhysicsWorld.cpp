@@ -26,8 +26,10 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <map>
 #include <mutex>
 #include <unordered_map>
+#include <utility>
 
 namespace ege {
 
@@ -53,14 +55,36 @@ namespace ege {
 
         // ---- Layers --------------------------------------------------------
 
-        // Two object layers: bodies that never move and bodies that might.
-        // Their only job is to let the broad phase skip static-versus-static
-        // pairs, which can never collide. Gameplay-facing collision filtering
-        // arrives when something needs it, as more layers here.
-        namespace layers {
-            constexpr JPH::ObjectLayer nonMoving = 0;
-            constexpr JPH::ObjectLayer moving = 1;
-        }  // namespace layers
+        // Two kinds of layer are at work here and they answer different
+        // questions.
+        //
+        // The *broad phase* layer says whether something moves. Its only job
+        // is to let the broad phase skip static-versus-static pairs, which
+        // can never collide however the matrix is set - a pure optimisation
+        // nobody outside this file names.
+        //
+        // The *collision* layer is the one a designer names, and the matrix
+        // between those is gameplay's to decide. Both live in one Jolt object
+        // layer: the collision layer shifted up by one, with "this thing
+        // moves" in the bottom bit. Sixteen collision layers and one bit make
+        // thirty-two object layers, which is well inside Jolt's sixteen.
+        namespace objectLayers {
+            constexpr JPH::ObjectLayer movingBit = 1;
+
+            JPH::ObjectLayer encode(CollisionLayer layer, bool moving) {
+                return static_cast<JPH::ObjectLayer>(
+                    (static_cast<JPH::ObjectLayer>(layer) << 1) |
+                    (moving ? movingBit : JPH::ObjectLayer{0}));
+            }
+
+            CollisionLayer collisionLayerOf(JPH::ObjectLayer layer) {
+                return static_cast<CollisionLayer>(layer >> 1);
+            }
+
+            bool movesOf(JPH::ObjectLayer layer) {
+                return (layer & movingBit) != 0;
+            }
+        }  // namespace objectLayers
 
         namespace broadPhaseLayers {
             constexpr JPH::BroadPhaseLayer nonMoving{0};
@@ -73,8 +97,8 @@ namespace ege {
             JPH::uint GetNumBroadPhaseLayers() const override { return broadPhaseLayers::count; }
 
             JPH::BroadPhaseLayer GetBroadPhaseLayer(JPH::ObjectLayer layer) const override {
-                return layer == layers::nonMoving ? broadPhaseLayers::nonMoving
-                                                  : broadPhaseLayers::moving;
+                return objectLayers::movesOf(layer) ? broadPhaseLayers::moving
+                                                    : broadPhaseLayers::nonMoving;
             }
 
 #if defined(JPH_EXTERNAL_PROFILE) || defined(JPH_PROFILE_ENABLED)
@@ -88,18 +112,34 @@ namespace ege {
         public:
             bool ShouldCollide(
                 JPH::ObjectLayer layer, JPH::BroadPhaseLayer broadPhase) const override {
-                if (layer == layers::nonMoving) {
+                if (!objectLayers::movesOf(layer)) {
                     return broadPhase == broadPhaseLayers::moving;
                 }
                 return true;
             }
         };
 
+        // The matrix, asked one pair at a time. Holds a pointer rather than a
+        // copy because Jolt calls this from its own threads throughout a
+        // step: the layers are fixed for the world's lifetime, so a read
+        // needs no lock, and a copy would be a second thing to keep in step.
         class ObjectLayerFilter final : public JPH::ObjectLayerPairFilter {
         public:
+            explicit ObjectLayerFilter(const CollisionLayers& layersRef) : layers{&layersRef} {}
+
             bool ShouldCollide(JPH::ObjectLayer a, JPH::ObjectLayer b) const override {
-                return a == layers::moving || b == layers::moving;
+                // Neither moves: the broad phase would have skipped this pair
+                // anyway, and asking the matrix about it would let a designer
+                // turn on a collision that can never happen.
+                if (!objectLayers::movesOf(a) && !objectLayers::movesOf(b)) {
+                    return false;
+                }
+                return layers->collides(
+                    objectLayers::collisionLayerOf(a), objectLayers::collisionLayerOf(b));
             }
+
+        private:
+            const CollisionLayers* layers;
         };
 
         // ---- Process-wide Jolt state ---------------------------------------
@@ -159,6 +199,14 @@ namespace ege {
         // from whatever threads its job system runs - today that is the
         // stepping thread only, but this class must not silently become
         // wrong the day the backend grows a worker pool.
+        //
+        // Jolt reports a contact per pair of *sub-shapes*, and gameplay means
+        // a pair of *bodies*: a crate landing flat on the floor arrives here
+        // four times and is one thing that happened. So each pair is counted,
+        // and only the first arrival and the last departure are events. That
+        // counting is also the only way to know a touch ended, since Jolt's
+        // removal callback hands over sub-shape ids and nothing else - not
+        // even the bodies, which may already be gone.
         class ContactCollector final : public JPH::ContactListener {
         public:
             void OnContactAdded(
@@ -166,13 +214,44 @@ namespace ege {
                 const JPH::Body& bodyB,
                 const JPH::ContactManifold& manifold,
                 JPH::ContactSettings&) override {
+                const std::lock_guard<std::mutex> lock{mutex};
+                Touch& touch = touching[pairOf(bodyA.GetID(), bodyB.GetID())];
+                if (++touch.corners != 1) {
+                    // Another corner of the same two objects.
+                    return;
+                }
+
+                // Whose touch this is, remembered here rather than looked up
+                // when it ends: by then a body may have been destroyed - and
+                // being destroyed inside a trigger is one of the ways to
+                // leave one - so the name has to outlive the body.
+                touch.userDataA = bodyA.GetUserData();
+                touch.userDataB = bodyB.GetUserData();
+
                 ContactEvent event{};
-                event.userDataA = bodyA.GetUserData();
-                event.userDataB = bodyB.GetUserData();
+                event.userDataA = touch.userDataA;
+                event.userDataB = touch.userDataB;
                 event.point = fromJolt(manifold.GetWorldSpaceContactPointOn1(0));
                 event.normal = fromJolt(manifold.mWorldSpaceNormal);
-                const std::lock_guard<std::mutex> lock{mutex};
                 events.push_back(event);
+            }
+
+            void OnContactRemoved(const JPH::SubShapeIDPair& pairIds) override {
+                const std::lock_guard<std::mutex> lock{mutex};
+                const auto found =
+                    touching.find(pairOf(pairIds.GetBody1ID(), pairIds.GetBody2ID()));
+                if (found == touching.end()) {
+                    return;
+                }
+                if (--found->second.corners > 0) {
+                    return;
+                }
+
+                SeparationEvent event{};
+                event.userDataA = found->second.userDataA;
+                event.userDataB = found->second.userDataB;
+                separations.push_back(event);
+                touching.erase(found);
             }
 
             std::vector<ContactEvent> drain() {
@@ -182,9 +261,39 @@ namespace ege {
                 return out;
             }
 
+            std::vector<SeparationEvent> drainSeparations() {
+                const std::lock_guard<std::mutex> lock{mutex};
+                std::vector<SeparationEvent> out = std::move(separations);
+                separations.clear();
+                return out;
+            }
+
         private:
+            // Ordered, so that the same two bodies key the same entry however
+            // they arrive.
+            using Pair = std::pair<std::uint32_t, std::uint32_t>;
+
+            // How many sub-shape pairs of these two bodies are touching, and
+            // who they were when the touch began.
+            struct Touch {
+                int corners = 0;
+                std::uint64_t userDataA = 0;
+                std::uint64_t userDataB = 0;
+            };
+
+            static Pair pairOf(JPH::BodyID a, JPH::BodyID b) {
+                const std::uint32_t first = a.GetIndexAndSequenceNumber();
+                const std::uint32_t second = b.GetIndexAndSequenceNumber();
+                return first <= second ? Pair{first, second} : Pair{second, first};
+            }
+
             std::mutex mutex;
             std::vector<ContactEvent> events;
+            std::vector<SeparationEvent> separations;
+            // Bounded by what is actually touching: an entry appears with the
+            // first corner and is gone with the last, so nothing accumulates
+            // over a long session.
+            std::map<Pair, Touch> touching;
         };
 
         // ---- The backend ---------------------------------------------------
@@ -200,6 +309,8 @@ namespace ege {
                 // Jolt's lock-free internals synchronise with bare fences,
                 // which TSan cannot model and would report as races.
                 : worldGravity{settings.gravity},
+                  worldLayers{settings.layers},
+                  objectPairs{worldLayers},
                   tempAllocator{tempAllocatorBytes},
                   jobs{JPH::cMaxPhysicsJobs} {
                 system.Init(
@@ -241,7 +352,7 @@ namespace ege {
                     : settings.motion == BodyMotion::kinematic ? JPH::EMotionType::Kinematic
                                                                : JPH::EMotionType::Static;
                 const JPH::ObjectLayer layer =
-                    settings.motion == BodyMotion::stationary ? layers::nonMoving : layers::moving;
+                    objectLayers::encode(settings.layer, settings.motion != BodyMotion::stationary);
 
                 JPH::BodyCreationSettings creation{
                     shape,
@@ -353,12 +464,22 @@ namespace ege {
                 // level is made of are what make a character stutter across a
                 // flat floor built from two triangles.
                 creation.mEnhancedInternalEdgeRemoval = true;
+                if (settings.proxyBody) {
+                    // A kinematic body of the same shape, kept on the
+                    // character by Jolt, so that everything else in the world
+                    // can see it. Jolt creates it awake and keeps it that
+                    // way, which is what makes a sensor notice a character
+                    // standing still inside it.
+                    creation.mInnerBodyShape = shape;
+                    creation.mInnerBodyLayer = objectLayers::encode(settings.layer, true);
+                }
 
                 const PhysicsCharacterId id = nextCharacter++;
                 CharacterRecord record{};
                 record.up = up;
                 record.stepHeight = settings.stepHeight;
                 record.stickToFloor = settings.stickToFloor;
+                record.layer = objectLayers::encode(settings.layer, true);
                 record.character = new JPH::CharacterVirtual{
                     &creation,
                     toJolt(settings.position),
@@ -390,8 +511,8 @@ namespace ege {
                 // A teleported character's idea of what is underfoot belongs
                 // to wherever it used to be.
                 record->character->RefreshContacts(
-                    system.GetDefaultBroadPhaseLayerFilter(layers::moving),
-                    system.GetDefaultLayerFilter(layers::moving),
+                    system.GetDefaultBroadPhaseLayerFilter(record->layer),
+                    system.GetDefaultLayerFilter(record->layer),
                     {},
                     {},
                     tempAllocator);
@@ -462,8 +583,8 @@ namespace ege {
                     deltaSeconds,
                     toJolt(worldGravity),
                     update,
-                    system.GetDefaultBroadPhaseLayerFilter(layers::moving),
-                    system.GetDefaultLayerFilter(layers::moving),
+                    system.GetDefaultBroadPhaseLayerFilter(record->layer),
+                    system.GetDefaultLayerFilter(record->layer),
                     {},
                     {},
                     tempAllocator);
@@ -520,6 +641,20 @@ namespace ege {
                 return events;
             }
 
+            std::vector<SeparationEvent> drainSeparations() override {
+                std::vector<SeparationEvent> events = contacts.drainSeparations();
+                std::sort(
+                    events.begin(),
+                    events.end(),
+                    [](const SeparationEvent& a, const SeparationEvent& b) {
+                        if (a.userDataA != b.userDataA) {
+                            return a.userDataA < b.userDataA;
+                        }
+                        return a.userDataB < b.userDataB;
+                    });
+                return events;
+            }
+
             std::optional<RaycastHit> raycast(
                 glm::vec3 origin, glm::vec3 direction, float maxDistance) const override {
                 const glm::vec3 scaled = direction * maxDistance;
@@ -547,6 +682,8 @@ namespace ege {
 
             glm::vec3 gravity() const override { return worldGravity; }
 
+            const CollisionLayers& collisionLayers() const override { return worldLayers; }
+
         private:
             // A character, plus the two numbers its move needs that Jolt
             // keeps in the update settings rather than on the character.
@@ -555,6 +692,10 @@ namespace ege {
                 glm::vec3 up{0.f, 1.f, 0.f};
                 float stepHeight = 0.3f;
                 float stickToFloor = 0.5f;
+                // The object layer it moves as, so a character is filtered by
+                // the same matrix as everything else rather than colliding
+                // with whatever moves.
+                JPH::ObjectLayer layer = 0;
             };
 
             CharacterRecord* findCharacter(PhysicsCharacterId character) {
@@ -654,9 +795,13 @@ namespace ege {
             static constexpr std::size_t tempAllocatorBytes = 4 * 1024 * 1024;
 
             glm::vec3 worldGravity{0.f, -9.81f, 0.f};
+            // Declared before the filter that points at it, because members
+            // are destroyed in reverse and a filter outliving its matrix
+            // would be a dangling read on the way down.
+            CollisionLayers worldLayers{};
             BroadPhaseLayerMap broadPhaseMap{};
             ObjectVsBroadPhaseFilter objectVsBroadPhase{};
-            ObjectLayerFilter objectPairs{};
+            ObjectLayerFilter objectPairs;
             ContactCollector contacts{};
             JPH::TempAllocatorImpl tempAllocator;
             JPH::JobSystemSingleThreaded jobs;

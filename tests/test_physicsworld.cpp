@@ -437,3 +437,183 @@ TEST_CASE("removing a character removes it") {
     // gameplay holding a stale one is a bug in gameplay, not a fault here.
     CHECK(world->characterPosition(walker) == glm::vec3{0.f});
 }
+
+// ---- Layers and triggers --------------------------------------------------
+
+TEST_CASE("the collision matrix decides what meets what") {
+    PhysicsWorld::Settings settings{};
+    const ege::CollisionLayer ghosts = settings.layers.add("Ghosts");
+    const ege::CollisionLayer ground = settings.layers.add("Ground");
+    settings.layers.setCollides(ghosts, ground, false);
+    auto world = PhysicsWorld::create(settings);
+
+    BodySettings floorBody = floorSettings();
+    floorBody.layer = ground;
+    world->addBody(floorBody);
+
+    // One that the floor catches, and one it does not - identical in every
+    // other respect, so the layer is the only thing that can explain it.
+    BodySettings solid = ballSettings({-1.f, 3.f, 0.f});
+    solid.layer = ege::CollisionLayers::defaultLayer;
+    const ege::PhysicsBodyId caught = world->addBody(solid);
+
+    BodySettings ghost = ballSettings({1.f, 3.f, 0.f});
+    ghost.layer = ghosts;
+    const ege::PhysicsBodyId falling = world->addBody(ghost);
+
+    for (int i = 0; i < 240; i++) {
+        world->step(step);
+    }
+
+    CHECK(world->pose(caught).position.y == doctest::Approx(0.5f).epsilon(0.05f));
+    CHECK(world->pose(falling).position.y < -3.f);
+    // And the world hands its layers back, so a caller holding a name can
+    // turn it into the number bodies are created with.
+    CHECK(world->collisionLayers().find("Ghosts") == ghosts);
+}
+
+TEST_CASE("a touch that begins is one event however many corners meet") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+
+    // A box lands flat: four corners, one manifold per sub-shape pair, and
+    // one thing that happened to two objects.
+    BodySettings crate{};
+    crate.shape = BodyShape::box(glm::vec3{0.5f});
+    crate.position = {0.f, 0.55f, 0.f};
+    crate.userData = 9;
+    world->addBody(crate);
+
+    int began = 0;
+    for (int i = 0; i < 240; i++) {
+        world->step(step);
+        began += static_cast<int>(world->drainContacts().size());
+    }
+    CHECK(began == 1);
+}
+
+TEST_CASE("a touch that ends is reported once, and names both sides") {
+    auto world = PhysicsWorld::create();
+    BodySettings floorBody = floorSettings();
+    floorBody.userData = 7;
+    world->addBody(floorBody);
+
+    // Bounced hard enough to leave the floor again.
+    BodySettings ball = ballSettings({0.f, 2.f, 0.f});
+    ball.restitution = 0.9f;
+    ball.userData = 42;
+    world->addBody(ball);
+
+    int began = 0;
+    std::vector<ege::SeparationEvent> ended;
+    for (int i = 0; i < 240; i++) {
+        world->step(step);
+        began += static_cast<int>(world->drainContacts().size());
+        for (const ege::SeparationEvent& event : world->drainSeparations()) {
+            ended.push_back(event);
+        }
+    }
+
+    CHECK(began > 0);
+    REQUIRE(!ended.empty());
+    const bool pairMatches = (ended.front().userDataA == 7 && ended.front().userDataB == 42) ||
+                             (ended.front().userDataA == 42 && ended.front().userDataB == 7);
+    CHECK(pairMatches);
+    // Every landing has its departure, or a trigger would count occupants
+    // that never left.
+    CHECK(static_cast<int>(ended.size()) <= began);
+}
+
+TEST_CASE("removing a body ends its touches, and still says whose they were") {
+    auto world = PhysicsWorld::create();
+    BodySettings floorBody = floorSettings();
+    floorBody.userData = 7;
+    world->addBody(floorBody);
+
+    BodySettings ball = ballSettings({0.f, 1.f, 0.f});
+    ball.userData = 42;
+    const ege::PhysicsBodyId resting = world->addBody(ball);
+
+    // Stepped only until it lands, not until it settles: a body that has
+    // fallen asleep has already had its contacts reported as ended, which is
+    // Jolt's own rule about sleeping bodies and is why a trigger notices only
+    // things that are awake.
+    bool landed = false;
+    for (int i = 0; i < 240 && !landed; i++) {
+        world->step(step);
+        landed = !world->drainContacts().empty();
+        world->drainSeparations();
+    }
+    REQUIRE(landed);
+
+    // Taken out of the world while touching it. This is what a pickup being
+    // consumed inside a trigger looks like, and the event has to survive the
+    // body it names.
+    world->removeBody(resting);
+    // A few steps, not one: Jolt notices a manifold has gone when the update
+    // that would have persisted it does not, and the cache it sweeps is the
+    // previous step's.
+    std::vector<ege::SeparationEvent> ended;
+    for (int i = 0; i < 5 && ended.empty(); i++) {
+        world->step(step);
+        ended = world->drainSeparations();
+    }
+    REQUIRE(!ended.empty());
+    const bool pairMatches = (ended.front().userDataA == 7 && ended.front().userDataB == 42) ||
+                             (ended.front().userDataA == 42 && ended.front().userDataB == 7);
+    CHECK(pairMatches);
+}
+
+TEST_CASE("a character is seen by a sensor because it carries a proxy body") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+
+    // A plate on the floor, exactly as a Trigger is built: kinematic so that
+    // it notices things that are not moving, and a sensor so it stops none of
+    // them.
+    BodySettings plate{};
+    plate.shape = BodyShape::box(glm::vec3{1.f, 0.05f, 1.f});
+    plate.motion = BodyMotion::kinematic;
+    plate.sensor = true;
+    plate.gravityFactor = 0.f;
+    plate.position = {2.f, 0.05f, 0.f};
+    plate.userData = 5;
+    world->addBody(plate);
+
+    ege::CharacterSettings walker = walkerSettings({0.f, 0.75f, 0.f});
+    walker.userData = 6;
+    const ege::PhysicsCharacterId id = world->addCharacter(walker);
+
+    bool noticed = false;
+    for (int i = 0; i < 120 && !noticed; i++) {
+        const glm::vec3 current = world->characterVelocity(id);
+        world->setCharacterVelocity(id, {2.f, current.y - 9.81f * step, 0.f});
+        world->updateCharacter(id, step);
+        world->step(step);
+        for (const ContactEvent& event : world->drainContacts()) {
+            noticed = noticed || event.userDataA + event.userDataB == 11;
+        }
+    }
+    CHECK(noticed);
+    // And it walked over the plate rather than onto it: a sensor stops
+    // nothing, including a character.
+    CHECK(world->characterPosition(id).y == doctest::Approx(0.75f).epsilon(0.1f));
+}
+
+TEST_CASE("a character without a proxy is invisible to everything else") {
+    auto world = PhysicsWorld::create();
+    world->addBody(floorSettings());
+
+    ege::CharacterSettings walker = walkerSettings({0.f, 0.75f, 0.f});
+    walker.proxyBody = false;
+    world->addCharacter(walker);
+
+    // Nothing to hit: the solver never sees a virtual character, so without
+    // the proxy a ray passes straight through where it is standing.
+    CHECK(!world->raycast({-3.f, 0.75f, 0.f}, {1.f, 0.f, 0.f}, 2.f).has_value());
+
+    ege::CharacterSettings seen = walkerSettings({5.f, 0.75f, 0.f});
+    world->addCharacter(seen);
+    const auto hit = world->raycast({2.f, 0.75f, 0.f}, {1.f, 0.f, 0.f}, 5.f);
+    CHECK(hit.has_value());
+}

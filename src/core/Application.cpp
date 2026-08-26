@@ -558,6 +558,21 @@ namespace ege {
                 // This scene treats -Y as up, so down - the way things
                 // fall - is +Y.
                 physicsSettings.gravity = {0.f, 9.81f, 0.f};
+                // The scene's collision matrix, declared here because a
+                // world's layers are fixed once its bodies are in the broad
+                // phase. Three layers and one rule between them: the gravel
+                // ring is scenery the character walks over rather than
+                // through, and it must not be what a pressure plate notices.
+                physicsSettings.layers.add("Character");
+                physicsSettings.layers.add("Props");
+                physicsSettings.layers.add("Exhibit");
+                // One rule, and it earns itself: the crate tower is a
+                // demonstration of the simulation, and a character wandering
+                // into it mid-fall would be a character rewriting the thing
+                // being demonstrated. So the two share a floor and never
+                // touch. Everything else collides with everything, which is
+                // what an empty matrix means.
+                physicsSettings.layers.setCollides("Character", "Exhibit", false);
                 physics.start(world, physicsSettings);
             } else if (!scriptsRunning && physics.running()) {
                 physics.stop(world);
@@ -583,9 +598,13 @@ namespace ege {
 
                 if (playMode.consumeTick()) {
                     scripts.fixedTick(world, time.fixedStep());
-                    const std::vector<EntityContact> contacts =
-                        physics.fixedTick(world, time.fixedStep());
-                    scripts.deliverContacts(world, contacts);
+                    const PhysicsEvents events = physics.fixedTick(world, time.fixedStep());
+                    scripts.deliverContacts(world, events.contacts);
+                    // Arrivals before departures, so that a thing which
+                    // entered and left inside one tick is heard about in the
+                    // order it happened.
+                    scripts.deliverTriggers(world, events.entered, true);
+                    scripts.deliverTriggers(world, events.left, false);
                 }
             }
             if (playMode.isPlaying()) {
@@ -1861,6 +1880,7 @@ namespace ege {
                 // The unit box's own half extents; the entity's scale is
                 // applied when the body is built.
                 crate.attach<BoxCollider>();
+                crate.attach<PhysicsLayer>(PhysicsLayer{"Exhibit"});
                 RigidBody body{};
                 body.mass = 2.f;
                 body.friction = 0.35f;
@@ -1898,6 +1918,7 @@ namespace ege {
                 {.5f, .06f, 1.3f},
                 {0.42f, 0.f, 0.f});
             plank.attach<BoxCollider>();
+            plank.attach<PhysicsLayer>(PhysicsLayer{"Exhibit"});
 
             Entity boulder = addMesh(
                 "Boulder",
@@ -1906,6 +1927,7 @@ namespace ege {
                 {-2.44f, -.75f, 2.05f},
                 glm::vec3{.7f});
             boulder.attach<SphereCollider>();
+            boulder.attach<PhysicsLayer>(PhysicsLayer{"Exhibit"});
             RigidBody heavy{};
             heavy.mass = 12.f;
             heavy.friction = 0.5f;
@@ -1954,6 +1976,7 @@ namespace ege {
             controller.mass = 6.f;
             controller.pushForce = 12.f;
             walker.attach<CharacterController>(controller);
+            walker.attach<PhysicsLayer>(PhysicsLayer{"Character"});
 
             // Who drives. The two write the same four intent fields, so the
             // controller cannot tell them apart - which is exactly why the
@@ -1988,10 +2011,66 @@ namespace ege {
                 glm::vec3{.3f},
                 {0.f, 0.3f, 0.f});
             crate.attach<BoxCollider>();
+            crate.attach<PhysicsLayer>(PhysicsLayer{"Props"});
             RigidBody light{};
             light.mass = 1.5f;
             light.friction = 0.6f;
             crate.attach<RigidBody>(light);
+
+            // A pressure plate on the circuit, and a door it opens.
+            //
+            // The plate is a collider and a Trigger and nothing else: no
+            // rigid body, no script deciding what "on" means. It notices what
+            // stands on it and says so, and the behaviour attached to it
+            // counts arrivals and departures - because two things standing on
+            // a plate is two arrivals, and a door that shut on the first
+            // departure would shut on whoever was still standing there.
+            //
+            // `only` is the other half of the demonstration: the crate above
+            // gets shoved across the plate every lap, and the door does not
+            // open for it. A plate that any passing box could open is not a
+            // door with a key.
+            Entity door = addMesh(
+                "Door",
+                box,
+                makeMaterial("Door", glm::vec3{0.30f, 0.45f, 0.52f}, 0.3f, 0.35f),
+                {2.9f, 0.15f, -1.5f},
+                {0.12f, 0.7f, 0.62f});
+            door.attach<BoxCollider>();
+            RigidBody doorBody{};
+            // Kinematic: the plate's behaviour writes its Transform, and a
+            // kinematic body pushes what is in the way rather than passing
+            // through it.
+            doorBody.kinematic = true;
+            door.attach<RigidBody>(doorBody);
+
+            Entity plate = addMesh(
+                "Plate",
+                box,
+                makeMaterial("Plate", glm::vec3{0.72f, 0.62f, 0.18f}, 0.6f, 0.3f),
+                {2.3f, 0.47f, -1.5f},
+                {0.5f, 0.06f, 0.5f});
+            // The volume is knee-high even though the plate is flat: what a
+            // trigger draws and what it notices are different shapes, and a
+            // trigger only as thick as the plate would be a sliver the
+            // character's feet barely clip. Local units, scaled by the entity
+            // like every collider - which is why the numbers look large next
+            // to a slab six hundredths of a unit thick.
+            plate.attach<BoxCollider>(BoxCollider{{0.5f, 3.f, 0.5f}, {0.f, -1.5f, 0.f}});
+            plate.attach<Trigger>(Trigger{"Character"});
+
+            Script plateScript{};
+            Script::Slot plateSlot{};
+            plateSlot.behavior = "ege::PressurePlate";
+            auto pressure = std::make_shared<PressurePlate>();
+            pressure->door = "Door";
+            // Down into the floor, and far enough that the whole slab goes:
+            // remember -Y is up, so down is +Y.
+            pressure->opening = {0.f, 0.72f, 0.f};
+            pressure->speed = 1.1f;
+            plateSlot.instance = std::move(pressure);
+            plateScript.behaviors.push_back(std::move(plateSlot));
+            plate.attach<Script>(std::move(plateScript));
         }
 
         // Lights are entities too. Remember -Y is up, so a negative Y is above

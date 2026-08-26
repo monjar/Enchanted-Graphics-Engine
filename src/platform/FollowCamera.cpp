@@ -66,19 +66,31 @@ namespace ege {
 
         glm::vec3 target = wanted.translation;
 
-        // Cast from where the camera is aiming out to where it wants to be:
-        // anything in between would be drawn over the subject, or worse, the
-        // camera would be inside it looking at its back faces.
+        // Cast out from what the camera is aiming at towards where it wants
+        // to be: anything in between would be drawn over the subject, or
+        // worse, the camera would be inside it looking at its back faces.
+        //
+        // The cast starts `minDistance` out rather than at the subject,
+        // because the subject is solid too - a character carries a body so
+        // that the rest of the world can see it - and a ray beginning inside
+        // it would hit it immediately and pull the camera onto its back. That
+        // is also why minDistance has to be larger than whatever it is
+        // following: everything nearer than the closest the camera may come
+        // is, by definition, not what stopped it.
         if (physics != nullptr) {
             const glm::vec3 aim = subject + axis * settings.aimHeight;
             const glm::vec3 gap = target - aim;
-            const float reach = glm::length(gap);
-            if (reach > 1e-4f) {
-                const glm::vec3 direction = gap / reach;
-                if (const std::optional<RaycastHit> hit = physics->raycast(aim, direction, reach)) {
-                    const float allowed =
-                        std::max(hit->distance - settings.wallMargin, settings.minDistance);
-                    target = aim + direction * std::min(allowed, reach);
+            const float back = glm::length(gap);
+            if (back > settings.minDistance + 1e-4f) {
+                const glm::vec3 direction = gap / back;
+                const glm::vec3 start = aim + direction * settings.minDistance;
+                const float reach = back - settings.minDistance;
+                if (const std::optional<RaycastHit> hit =
+                        physics->raycast(start, direction, reach)) {
+                    const float allowed = std::max(
+                        settings.minDistance + hit->distance - settings.wallMargin,
+                        settings.minDistance);
+                    target = aim + direction * std::min(allowed, back);
                 }
             }
         }

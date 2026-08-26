@@ -512,10 +512,10 @@ For this to be demonstrable at all, the demo's floor is now a real `.egematerial
 
 *Not done, each for a stated reason:*
 
+- ~~**Collision layers and filter masks**~~ - **landed in v0.6**: two layers turned out to be enough right up until two things had to share a floor without touching. Named, sixteen of them, with a matrix that cannot disagree with itself.
 - ~~**CharacterController**~~ - **landed in v0.5**, and the reason given here turned out to be half wrong: a character controller is not a sandbox convenience, it is an engine feature the sandbox uses. What was right is that nothing about the body interface blocked it - the virtual character arrived alongside bodies rather than through them. See the v0.5 table in §11.3.
 - **ConvexHullCollider / MeshCollider** - both want an asset-derived hull or triangle soup, which is the asset pipeline's cooked-data story; a hand-authored primitive covers everything the engine currently draws.
 - **Constraints** (hinge, slider, distance, fixed, 6-DOF) - API surface with no caller yet; the backend supports them whenever something needs a door.
-- **Collision layers and filter masks** - the two layers that exist (moving, non-moving) are a broad-phase optimisation, not a gameplay feature. Named layers arrive when two things exist that must not collide.
 - **Shapecast and overlap queries** - raycast has a caller-shaped hole today; the others do not.
 - **Render-transform interpolation** - `Time::fixedAlpha()` has existed since Phase 1 for exactly this, but nothing else in the engine interpolates and physics should not be the odd one out. It lands as one change when rendering learns to interpolate everything the simulation moves.
 - **Collider gizmos and physics debug draw** - editor work, worth doing when colliders are being authored in the editor rather than in code.
@@ -753,7 +753,7 @@ is a decision rather than an oversight.
 | Debt | Left because |
 |---|---|
 | Tangents from glTF | The shader derives a tangent frame from screen-space derivatives, which breaks only on mirrored UVs — and no asset in the project has any. |
-| Physics constraints, shapecast, overlap, named collision layers | API surface with no caller. The backend supports all of them whenever something needs a door or a trigger volume that ignores the player. |
+| Physics constraints, shapecast and overlap | API surface with no caller. The backend supports all of them whenever something needs a door that swings rather than slides. (Named collision layers left this list in v0.6, when something did need a trigger volume that ignores a crate.) |
 | `CharacterController`, `ConvexHullCollider`, `MeshCollider` | The first belongs to the sandbox project, which Phase 10 owns; the other two want cooked hull and triangle data from a pipeline that does not exist yet. |
 | Collider gizmos and physics debug draw | Worth doing when colliders are authored in the editor rather than in code. |
 | Editor multi-select and enum drawers | Neither is load-bearing; both are an afternoon whenever they start to grate. |
@@ -958,7 +958,7 @@ missing by whoever builds the v0.5 demo and fixed while the finding is warm.
 
 | Item | What it is | Done when |
 |---|---|---|
-| Triggers and collision layers | A `Trigger` volume that reports enter/leave to behaviours; named layers with a designer-readable collision matrix. Both exist in Jolt; the engine just never asked. | A pressure plate opens a door in the sandbox. |
+| ~~Triggers and collision layers~~ | **Landed.** A `Trigger` is a collider and nothing else: built as a kinematic sensor, because a static one in Jolt notices only bodies that are moving and a plate must not miss a player who stopped on it. Both sides hear `onTriggerEnter` and `onTriggerExit`, and a touch that ends survives the body it named - being despawned inside a volume is one of the ways to leave one. Layers are named and the matrix between them is symmetric by construction, riding in the bottom bits of Jolt's object layer alongside the moves-or-not bit the broad phase already used. Characters gained the proxy body §10.4 deferred: without one a virtual character is invisible to sensors, raycasts and every other body. | **Done: the demo's character opens a door by standing on a plate, and the crate it shoves across the same plate does not.** |
 | Prefabs | A scene fragment saved as an asset and instantiated by the editor or a behaviour, ids remapped on the way in. The serializer already knows how to write a world; this is teaching it to write part of one. | Spawning a pickup is one call naming one asset. |
 | Timers and events | `after(seconds, fn)` on behaviours, and a typed event a behaviour can raise and another subscribe to - the two things deferred since Phase 7 "for want of a caller", which the v0.5 demo finally is. | The sandbox game's win condition uses both. |
 | Script reload keeping play state | The `onReload` hook §10.2's last row described: hand the old instance to the new one so unreflected state can cross when the author wants it to. | A behaviour mid-flight survives a reload on purpose. |

@@ -73,9 +73,46 @@ namespace ege {
             return std::nullopt;
         }
 
+        // The layer an entity's collider is in. A name the world has never
+        // heard of is the default layer and a warning: silently putting it
+        // somewhere it collides with nothing is how a typo becomes an object
+        // falling through the floor three scenes later.
+        CollisionLayer layerOf(World& world, EntityId entity, const CollisionLayers& layers) {
+            const PhysicsLayer* named = world.find<PhysicsLayer>(entity);
+            if (named == nullptr) {
+                return CollisionLayers::defaultLayer;
+            }
+            const CollisionLayer layer = layers.find(named->name);
+            if (layer == invalidCollisionLayer) {
+                EGE_WARN("no collision layer called '{}'; using the default one", named->name);
+                return CollisionLayers::defaultLayer;
+            }
+            return layer;
+        }
+
+        // Whether `other` is allowed to set `trigger` off. An empty filter
+        // means anything the collision matrix already let touch it, which is
+        // the answer for a plate in a room with one player in it.
+        bool triggeredBy(World& world, EntityId trigger, EntityId other) {
+            const Trigger* volume = world.find<Trigger>(trigger);
+            if (volume == nullptr || volume->only.empty()) {
+                return volume != nullptr;
+            }
+            const PhysicsLayer* layer = world.find<PhysicsLayer>(other);
+            return layer != nullptr && layer->name == volume->only;
+        }
+
         BodyMotion motionOf(World& world, EntityId entity) {
             if (const RigidBody* rigidBody = world.find<RigidBody>(entity)) {
                 return rigidBody->kinematic ? BodyMotion::kinematic : BodyMotion::dynamic;
+            }
+            if (world.find<Trigger>(entity) != nullptr) {
+                // Kinematic rather than stationary, and this is the whole
+                // reason: a static sensor in Jolt notices only bodies that
+                // are moving, so a plate would miss a player who walked onto
+                // it and stopped. Kinematic also means it follows its
+                // Transform, so a trigger can ride a lift.
+                return BodyMotion::kinematic;
             }
             // A collider with no RigidBody is scenery: the simulation may
             // land on it but never move it.
@@ -134,7 +171,7 @@ namespace ege {
         world.setPhysics(nullptr);
     }
 
-    std::vector<EntityContact> PhysicsSystem::fixedTick(World& world, float deltaSeconds) {
+    PhysicsEvents PhysicsSystem::fixedTick(World& world, float deltaSeconds) {
         if (!running()) {
             return {};
         }
@@ -189,7 +226,7 @@ namespace ege {
         // Contacts, with both opaque sides resolved back to entities. An
         // entity despawned in the same tick its touch began drops the event:
         // gameplay should not hear from the dead.
-        std::vector<EntityContact> contacts;
+        PhysicsEvents events;
         for (const ContactEvent& event : backend->drainContacts()) {
             const EntityId a = fromUserData(event.userDataA);
             const EntityId b = fromUserData(event.userDataB);
@@ -201,9 +238,25 @@ namespace ege {
             contact.b = world.lookup(b);
             contact.point = event.point;
             contact.normal = event.normal;
-            contacts.push_back(contact);
+            events.contacts.push_back(contact);
+
+            if (const std::optional<TriggerEvent> trigger = triggerEventOf(world, a, b)) {
+                events.entered.push_back(*trigger);
+            }
         }
-        return contacts;
+
+        for (const SeparationEvent& event : backend->drainSeparations()) {
+            const EntityId a = fromUserData(event.userDataA);
+            const EntityId b = fromUserData(event.userDataB);
+            // A trigger whose occupant was despawned is exactly the case that
+            // matters - a pickup consumed inside its own volume - so the
+            // event survives one side being gone, and only the trigger has to
+            // still be there to hear it.
+            if (const std::optional<TriggerEvent> trigger = triggerEventOf(world, a, b)) {
+                events.left.push_back(*trigger);
+            }
+        }
+        return events;
     }
 
     void PhysicsSystem::reconcile(World& world) {
@@ -214,7 +267,13 @@ namespace ege {
         for (const auto& [entity, record] : bodies) {
             const bool gone =
                 !world.alive(entity) || !shapeOf(world, entity, glm::vec3{1.f}).has_value();
-            if (gone || motionOf(world, entity) != record.motion) {
+            // A layer edited mid-play is rebuilt like a motion type is: which
+            // layer a body is in is decided when it enters the broad phase,
+            // so the only way to change it is to make the body again.
+            const bool changed =
+                !gone && (motionOf(world, entity) != record.motion ||
+                          layerOf(world, entity, backend->collisionLayers()) != record.layer);
+            if (gone || changed) {
                 stale.push_back(entity);
             }
         }
@@ -275,7 +334,16 @@ namespace ege {
         settings.motion = motionOf(world, entity);
         settings.position = worldPose.pose.position;
         settings.rotation = worldPose.pose.rotation;
+        settings.layer = layerOf(world, entity, backend->collisionLayers());
         settings.userData = toUserData(entity);
+
+        // A Trigger is a sensor whether or not it also has a RigidBody, and
+        // gravity has nothing to pull on: a plate that fell out of the world
+        // the moment play began would be a plate nobody ever stood on.
+        if (world.find<Trigger>(entity) != nullptr) {
+            settings.sensor = true;
+            settings.gravityFactor = 0.f;
+        }
 
         RigidBody* rigidBody = world.find<RigidBody>(entity);
         if (rigidBody != nullptr) {
@@ -285,14 +353,14 @@ namespace ege {
             settings.linearDamping = rigidBody->linearDamping;
             settings.angularDamping = rigidBody->angularDamping;
             settings.gravityFactor = rigidBody->gravityFactor;
-            settings.sensor = rigidBody->sensor;
+            settings.sensor = settings.sensor || rigidBody->sensor;
         }
 
         const PhysicsBodyId body = backend->addBody(settings);
         if (body == invalidPhysicsBody) {
             return;
         }
-        bodies[entity] = BodyRecord{body, settings.motion};
+        bodies[entity] = BodyRecord{body, settings.motion, settings.layer};
         // From here the fixed step decides where this entity is, so the
         // renderer should draw it between steps rather than on them. The
         // component is the opt-in; anything else moved on the fixed clock
@@ -301,6 +369,31 @@ namespace ege {
         if (rigidBody != nullptr) {
             rigidBody->body = body;
         }
+    }
+
+    std::optional<TriggerEvent> PhysicsSystem::triggerEventOf(
+        World& world, EntityId a, EntityId b) const {
+        // Exactly one side is the volume. Two triggers overlapping is not an
+        // event anybody has asked for, and answering it twice - once each way
+        // round - is worse than not answering it.
+        const bool aIsTrigger = world.alive(a) && world.find<Trigger>(a) != nullptr;
+        const bool bIsTrigger = world.alive(b) && world.find<Trigger>(b) != nullptr;
+        if (aIsTrigger == bIsTrigger) {
+            return std::nullopt;
+        }
+
+        const EntityId trigger = aIsTrigger ? a : b;
+        const EntityId other = aIsTrigger ? b : a;
+        if (!triggeredBy(world, trigger, other)) {
+            return std::nullopt;
+        }
+
+        TriggerEvent event{};
+        event.trigger = world.lookup(trigger);
+        // The occupant may be gone - despawned inside the volume, which is
+        // what a pickup is - and a dead handle is what says so.
+        event.other = world.alive(other) ? world.lookup(other) : Entity{};
+        return event;
     }
 
     void PhysicsSystem::createCharacter(World& world, EntityId entity) {
@@ -326,6 +419,7 @@ namespace ege {
         settings.stickToFloor = controller->stickToFloor * worldPose.scale.y;
         settings.mass = controller->mass;
         settings.pushForce = controller->pushForce;
+        settings.layer = layerOf(world, entity, backend->collisionLayers());
         settings.userData = toUserData(entity);
 
         const PhysicsCharacterId id = backend->addCharacter(settings);

@@ -23,7 +23,9 @@ namespace ege {
         // becomes a rigid arm.
         float lag = 9.f;
         // How close the camera may be pulled when something is in the way,
-        // and how far off a wall it stops.
+        // and how far off a wall it stops. Larger than the subject: the
+        // subject is solid too, and everything nearer than the closest the
+        // camera may come is by definition not what stopped it.
         float minDistance = 0.45f;
         float wallMargin = 0.08f;
     };

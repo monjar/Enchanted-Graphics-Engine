@@ -1,5 +1,7 @@
 #pragma once
 
+#include "physics/CollisionLayers.hpp"
+
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
@@ -64,6 +66,9 @@ namespace ege {
         // A sensor detects overlap and reports contacts but pushes nothing:
         // a trigger volume rather than an obstacle.
         bool sensor = false;
+        // Which named layer this body is in, and therefore what it meets.
+        // The world's own CollisionLayers is what the number means.
+        CollisionLayer layer = CollisionLayers::defaultLayer;
         // Round-tripped through contact events and raycast hits, so the
         // caller can find its own object again. The physics world never
         // interprets it.
@@ -79,6 +84,11 @@ namespace ege {
 
     // A new touch between two bodies, reported once when it begins - a
     // trigger for gameplay, not a stream of contact manifolds.
+    //
+    // Once means once per pair of bodies, not once per pair of sub-shapes: a
+    // box landing flat on a floor touches it along four manifold points and
+    // is one event, because "began touching" is a thing that happened to two
+    // objects rather than to eight corners.
     struct ContactEvent {
         std::uint64_t userDataA = 0;
         std::uint64_t userDataB = 0;
@@ -86,6 +96,17 @@ namespace ege {
         glm::vec3 point{0.f};
         // From A towards B.
         glm::vec3 normal{0.f};
+    };
+
+    // A touch that ended, reported once when the last of it does.
+    //
+    // No point and no normal: there is no contact left to describe one, which
+    // is the whole meaning of the event. A body removed while touching
+    // something separates from it, so a trigger that spawned nothing hears
+    // about the pickup it consumed.
+    struct SeparationEvent {
+        std::uint64_t userDataA = 0;
+        std::uint64_t userDataB = 0;
     };
 
     // Handle to a walking capsule inside a PhysicsWorld. A separate handle
@@ -118,6 +139,16 @@ namespace ege {
         // it can push with.
         float mass = 70.f;
         float pushForce = 100.f;
+        CollisionLayer layer = CollisionLayers::defaultLayer;
+        // Whether a kinematic body of the same shape follows the character
+        // around. Without one a virtual character is invisible to everything
+        // else: the solver never sees it, so no raycast finds it, no other
+        // body collides with it, and no sensor notices it standing in one -
+        // which is most of what a trigger is for. With one, the character is
+        // still moved entirely by its own collision detection, and Jolt
+        // excludes the proxy from the character's own queries so it cannot
+        // collide with itself.
+        bool proxyBody = true;
         std::uint64_t userData = 0;
     };
 
@@ -166,6 +197,12 @@ namespace ege {
             // demo's is -Y - passes its own.
             glm::vec3 gravity{0.f, -9.81f, 0.f};
             std::uint32_t maxBodies = 4096;
+            // The layers this world knows about and the matrix between them.
+            // Fixed for the world's lifetime: a body's layer is baked into
+            // the broad phase when it is created, so a matrix that changed
+            // underneath would be a matrix half the world had not heard
+            // about. Play builds the world, so play is when this is decided.
+            CollisionLayers layers{};
         };
 
         // The one place a backend is chosen. Two overloads rather than a
@@ -248,11 +285,21 @@ namespace ege {
         // caller carrying a copy that can disagree with it.
         virtual glm::vec3 gravity() const = 0;
 
+        // The layers this world was built with, so a caller holding a name
+        // can turn it into the number bodies are created with.
+        virtual const CollisionLayers& collisionLayers() const = 0;
+
         // Contacts that began since the last drain, in a deterministic order.
         // Collected during step() from whatever threads the backend simulates
         // on and handed over here, so the caller touches gameplay state from
         // its own thread only.
         virtual std::vector<ContactEvent> drainContacts() = 0;
+
+        // And the ones that ended, in the same way and for the same reason.
+        // Kept apart from contacts rather than folded into them with a flag,
+        // because the two carry different things: a touch has a place and a
+        // direction, and an ending has neither.
+        virtual std::vector<SeparationEvent> drainSeparations() = 0;
 
         // First body along the ray, or nothing. Direction need not be
         // normalised; the ray ends at origin + direction * maxDistance.

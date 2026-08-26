@@ -5,6 +5,8 @@
 
 #include <glm/glm.hpp>
 
+#include <string>
+
 namespace ege {
 
     // The behaviours the demo scene is built from.
@@ -139,6 +141,39 @@ namespace ege {
         void onFixedTick(float deltaSeconds) override;
     };
 
+    // A door that slides open while something stands on its plate.
+    //
+    // Attached to the plate, not to the door: the plate is the thing that
+    // knows, and what it knows is a count. Two crates and a player standing
+    // on it is three arrivals and three departures, and a door that opened on
+    // the first and shut on the first departure would shut under whoever was
+    // still standing there.
+    //
+    // The door itself is a kinematic body, so it pushes what is in the way
+    // rather than passing through it - which is also what stops a player
+    // closing a door on themselves and ending up inside it.
+    class PressurePlate : public Behavior {
+    public:
+        // The entity to move, by name. A name rather than a handle because a
+        // handle means nothing in the next run, and this has to survive being
+        // saved.
+        std::string door;
+        // How far the door travels from where it started, and how fast.
+        glm::vec3 opening{0.f, -0.9f, 0.f};
+        float speed = 1.6f;
+
+        void onSpawn() override;
+        void onTriggerEnter(Entity other) override;
+        void onTriggerExit(Entity other) override;
+        void onFixedTick(float deltaSeconds) override;
+
+    private:
+        glm::vec3 closed{0.f};
+        // How many things are standing on it, and how far open the door is.
+        int occupants = 0;
+        float openness = 0.f;
+    };
+
     // Pushes a dynamic mesh's vertices along their normals by a travelling
     // sine wave. The one behaviour here that exists to prove something rather
     // than to look nice: geometry a script writes every frame.
@@ -194,6 +229,12 @@ EGE_FIELD(walkSpeed).range(0.f, 20.f).tooltip("The ground speed the walk clip wa
 EGE_FIELD(runSpeed).range(0.f, 40.f).tooltip("The ground speed the run clip was drawn for");
 EGE_FIELD(idleSpeed).range(0.f, 2.f).tooltip("Below this it is standing still");
 EGE_FIELD(fadeSeconds).range(0.f, 1.f).tooltip("How long a change of clip takes");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::PressurePlate)
+EGE_FIELD(door).tooltip("The entity this plate opens, by name");
+EGE_FIELD(opening).tooltip("How far the door travels from where it started");
+EGE_FIELD(speed).range(0.f, 20.f).tooltip("Units per second the door moves");
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::Patrol)

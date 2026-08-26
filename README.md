@@ -255,7 +255,8 @@ upload for the frame however many times the vertices were touched. The demo's
 rippling sheet is a script rewriting 2 401 vertices every tick.
 
 A behaviour hears about physics too: `onContact` runs when the entity's body
-begins touching another, each side told from its own side, and
+begins touching another and `onTriggerEnter` / `onTriggerExit` when something
+arrives in or leaves a `Trigger` volume, each side told from its own side, and
 `world().physics()->raycast(...)` asks the running simulation what lies along
 a ray. A `RigidBody`'s `body` field holds the live handle, so an impulse is
 `world().physics()->addImpulse(self().fetch<RigidBody>().body, kick)`.
@@ -346,6 +347,36 @@ ought to be, and it only avoids things the physics world knows about — the
 demo's decorative scenery has no colliders and the camera goes straight
 through it.
 
+**Triggers.** A collider plus a `Trigger` component is a volume that notices
+who is inside it and stops nothing. Behaviours on it hear `onTriggerEnter`
+when something arrives and `onTriggerExit` when the last of it leaves — and
+so do behaviours on whatever arrived, each told from its own side, so either
+end can be the one that knows what to do. A departure survives the body that
+caused it: being despawned inside a volume is one of the ways to leave one,
+which is what a pickup is.
+
+Triggers are built as *kinematic* sensors rather than static ones, and the
+reason is worth knowing: a static sensor in Jolt notices only bodies that are
+moving, so a plate would miss a player who walked onto it and stopped. By the
+same rule, a crate that settles inside a trigger and falls asleep is reported
+as having left — characters never sleep, so a plate a player stands on stays
+pressed.
+
+**Collision layers are named.** Sixteen of them and a matrix between them,
+symmetric by construction, because "the player collides with pickups" and
+"pickups collide with the player" are one fact and a matrix that can disagree
+with itself eventually does. Everything collides with everything until told
+otherwise: a fresh layer that collided with nothing would first be noticed as
+objects falling through the floor.
+
+An entity says which layer it is in by *name* — a `PhysicsLayer` component —
+because the number is an index into a table the scene does not own, and a
+scene file that said "layer 3" would mean something else the day someone
+inserted a layer above it. A name the world has never heard of falls back to
+the default and says so. Underneath, the layer rides in the top bits of
+Jolt's object layer alongside the moves-or-not bit the broad phase already
+used, so the optimisation and the gameplay filter stay separate questions.
+
 **Asset hot reload.** The engine watches the project directory while it runs:
 save a change to `assets/materials/floor.egematerial` and the demo's floor
 changes without a restart. A material is rewritten inside the object every
@@ -382,8 +413,8 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: triggers and named collision layers, prefabs, sound, runtime
-UI, and the standalone editor and player.
+Still to come: prefabs, timers and typed events, sound, runtime UI, and the
+standalone editor and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.

@@ -5,6 +5,8 @@
 
 #include <glm/glm.hpp>
 
+#include <string>
+
 namespace ege {
 
     // What an entity is to the simulation.
@@ -65,6 +67,54 @@ namespace ege {
         float radius = 0.5f;
         float halfHeight = 0.5f;
         glm::vec3 offset{0.f};
+    };
+
+    // Which named collision layer an entity's collider is in.
+    //
+    // A name rather than a number, because the number is an index into a
+    // table the scene does not own: a world may define its layers in any
+    // order, and a scene file that said "layer 3" would mean something
+    // different the day someone inserted a layer above it. The name is
+    // resolved when the body is built, and a name the world has never heard
+    // of falls back to the default layer and says so.
+    //
+    // An entity without one is in the default layer, which collides with
+    // everything - so a scene that never mentions layers behaves exactly as
+    // it did before they existed.
+    struct PhysicsLayer {
+        std::string name = "Default";
+    };
+
+    // A volume that notices who is inside it and stops nothing.
+    //
+    // A collider plus this is a trigger: a pressure plate, a checkpoint, the
+    // mouth of a pit. Behaviours on it hear `onTriggerEnter` when something
+    // arrives and `onTriggerExit` when the last of it leaves, and behaviours
+    // on the thing that arrived hear the same pair from their own side - so
+    // either end can be the one that knows what to do.
+    //
+    // A trigger is built as a kinematic sensor rather than a static one,
+    // because a static sensor in Jolt notices only bodies that are moving,
+    // and a plate that misses a player who walked on and stopped is a plate
+    // that does not work. It follows its Transform like any kinematic body,
+    // so a trigger can ride a lift.
+    //
+    // `RigidBody::sensor` says the same thing about a body that is already
+    // simulated. This is the other case, and the common one: a volume that
+    // is nothing but a trigger and does not want a rigid body at all.
+    //
+    // One thing to know, because it is the backend's rule rather than this
+    // engine's: a trigger notices things that are *awake*. A crate that
+    // settles inside one and falls asleep is reported as having left, and is
+    // not reported as arriving again until something wakes it. Characters
+    // never sleep, so a plate a player stands on stays pressed; a plate held
+    // down by a crate is a design that wants a weight rather than a count.
+    struct Trigger {
+        // Which layers may set it off, by name. Empty means anything the
+        // collision matrix already allows - which is the answer for a plate
+        // in a room with one player in it, and the wrong one for a door that
+        // opens for the player and not for the crates they push.
+        std::string only;
     };
 
     // A capsule that walks.
@@ -216,6 +266,14 @@ EGE_REFLECT(ege::CapsuleCollider)
 EGE_FIELD(radius).range(0.01f, 100.f);
 EGE_FIELD(halfHeight).range(0.f, 100.f).tooltip("Half the cylinder between the two caps");
 EGE_FIELD(offset).tooltip("Where the shape sits relative to the entity's origin");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::PhysicsLayer)
+EGE_FIELD(name).tooltip("Which named collision layer this entity's collider is in");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::Trigger)
+EGE_FIELD(only).tooltip("Only this collision layer sets it off; empty means anything");
 EGE_REFLECT_END()
 
 // Shape and tuning only - see the note on the struct. Showing `grounded` and

@@ -55,6 +55,19 @@ namespace ege {
         // be touched.
         virtual void onContact(const Contact& contact) { (void)contact; }
 
+        // When something arrives in this entity's Trigger volume, and when
+        // the last of it leaves. Both sides hear both calls: a behaviour on
+        // the plate is told who stepped on it, and a behaviour on whoever
+        // stepped is told which plate - so either end can be the one that
+        // knows what to do.
+        //
+        // `other` may be dead by the time a leaving is reported, because
+        // being despawned inside a volume is one of the ways to leave it -
+        // that is what a pickup is - so check before reaching through it.
+        virtual void onTriggerEnter(Entity other) { (void)other; }
+
+        virtual void onTriggerExit(Entity other) { (void)other; }
+
         // When play stops, or the entity is despawned while playing.
         virtual void onDespawn() {}
 

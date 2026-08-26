@@ -35,6 +35,14 @@ rate the ground demands. The **renderer** skins the result through a depth
 pre-pass, an `EQUAL` depth test and GPU-driven indirect draws — and none of
 those four knows the others exist.
 
+Along one edge of its circuit there is a **pressure plate** and a door. The
+plate is a collider and a `Trigger` and nothing else; the behaviour on it
+counts arrivals and departures, because two things standing on a plate is two
+arrivals and a door that shut on the first departure would shut on whoever
+was still there. It is set to notice only the `Character` layer, so the crate
+the character shoves across the same plate every lap does not open it — a
+plate any passing box can open is not a door with a key.
+
 `scripts/record_character_demo.sh` records it.
 
 ## The engine being used

@@ -6,6 +6,7 @@
 #include <glm/glm.hpp>
 
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -19,6 +20,21 @@ namespace ege {
         glm::vec3 point{0.f};
         // From a towards b.
         glm::vec3 normal{0.f};
+    };
+
+    // Something entering or leaving a trigger volume, resolved to entities.
+    // `trigger` is the volume; `other` is whatever set it off.
+    struct TriggerEvent {
+        Entity trigger{};
+        Entity other{};
+    };
+
+    // What one fixed tick reported: touches that began, and things that
+    // entered or left a trigger.
+    struct PhysicsEvents {
+        std::vector<EntityContact> contacts;
+        std::vector<TriggerEvent> entered;
+        std::vector<TriggerEvent> left;
     };
 
     // Keeps the ECS and the physics world agreeing about who is where.
@@ -51,10 +67,10 @@ namespace ege {
 
         bool running() const { return backend != nullptr; }
 
-        // Advances the simulation one fixed step and returns the contacts
-        // that began during it, both sides resolved to entities. Does nothing
-        // and returns nothing while stopped.
-        std::vector<EntityContact> fixedTick(World& world, float deltaSeconds);
+        // Advances the simulation one fixed step and returns what happened
+        // during it, every side resolved to entities. Does nothing and
+        // returns nothing while stopped.
+        PhysicsEvents fixedTick(World& world, float deltaSeconds);
 
         PhysicsWorld* physicsWorld() { return backend.get(); }
 
@@ -79,6 +95,7 @@ namespace ege {
         struct BodyRecord {
             PhysicsBodyId id = invalidPhysicsBody;
             BodyMotion motion = BodyMotion::stationary;
+            CollisionLayer layer = CollisionLayers::defaultLayer;
         };
 
         // What was built for a character, and where the system last put it -
@@ -95,6 +112,11 @@ namespace ege {
         // same handle for gameplay's convenience, but this map is the record
         // - a despawned entity takes its components with it, and the body
         // left behind is exactly what this exists to find.
+        // Turns one opaque pair into a trigger event, or nothing: kept only
+        // when exactly one side is a trigger and the other is allowed to set
+        // it off.
+        std::optional<TriggerEvent> triggerEventOf(World& world, EntityId a, EntityId b) const;
+
         std::unordered_map<EntityId, BodyRecord> bodies;
         std::unordered_map<EntityId, CharacterRecord> characters;
     };

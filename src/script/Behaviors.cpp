@@ -11,6 +11,7 @@
 
 #include <glm/gtc/constants.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 namespace ege {
@@ -204,6 +205,51 @@ namespace ege {
         controller->run = run;
     }
 
+    void PressurePlate::onSpawn() {
+        occupants = 0;
+        openness = 0.f;
+        // Where the door starts is where "closed" is, read rather than
+        // authored - so the plate works wherever the door was dropped, and
+        // Stop putting the scene back also puts the door back.
+        const Entity target = world().findByName(door);
+        closed = target.alive() && target.find<Transform>() != nullptr
+                     ? target.fetch<Transform>().translation
+                     : glm::vec3{0.f};
+    }
+
+    void PressurePlate::onTriggerEnter(Entity) {
+        occupants++;
+    }
+
+    void PressurePlate::onTriggerExit(Entity) {
+        // Never below zero: an occupant despawned inside the volume leaves
+        // exactly once, but a plate that had been counting since before this
+        // behaviour spawned would otherwise go negative and stick open.
+        occupants = std::max(occupants - 1, 0);
+    }
+
+    void PressurePlate::onFixedTick(float deltaSeconds) {
+        Entity target = world().findByName(door);
+        if (!target.alive()) {
+            return;
+        }
+        Transform* transform = target.find<Transform>();
+        if (transform == nullptr) {
+            return;
+        }
+
+        const float travel = glm::length(opening);
+        const float step = travel > 0.f ? speed * deltaSeconds / travel : 1.f;
+        const float wanted = occupants > 0 ? 1.f : 0.f;
+        // Moved towards rather than set: a door that teleported open would
+        // leave whatever was standing in it on the wrong side.
+        openness = openness < wanted ? std::min(openness + step, wanted)
+                                     : std::max(openness - step, wanted);
+
+        transform->translation = closed + opening * openness;
+        hierarchy::markDirty(world(), target.id());
+    }
+
     void Ripple::onSpawn() {
         time = 0.f;
     }
@@ -240,3 +286,4 @@ EGE_BEHAVIOR(ege::Ripple)
 EGE_BEHAVIOR(ege::PlayerCharacter)
 EGE_BEHAVIOR(ege::Patrol)
 EGE_BEHAVIOR(ege::CharacterAnimation)
+EGE_BEHAVIOR(ege::PressurePlate)
