@@ -1,11 +1,41 @@
 # The demo
 
-There are two, and they show different things.
+There are three, and they show different things.
 
 | | What it shows |
 |---|---|
 | `--demo` | The picture. A camera tour with the editor hidden, because most of what a renderer does only becomes visible when the camera moves |
 | `--demo --editor` | The engine. The same tour with the panels up, and a script module rebuilt underneath it partway through |
+| `--demo --follow` | The game. The camera behind a rigged character walking, turning, jumping and shoving a crate — four subsystems agreeing |
+
+## Somebody in it
+
+```sh
+./build/default/bin/EnchantedEngine --demo --follow      # watch
+./build/default/bin/EnchantedEngine --play               # or take the controls
+```
+
+![A rigged humanoid walking a circuit with the camera following](images/character.gif)
+
+Nothing is driving it by hand. The `Patrol` behaviour walks it between the
+corners of a rectangle and jumps when it arrives, writing the same four intent
+fields a player's hands write through `PlayerCharacter` — `move`, `run`,
+`jump`, `jumpHeld`. The character controller cannot tell them apart, which is
+what makes this recording reproducible rather than a thing someone did once
+with a controller in their hands. `--play` swaps the driver for a keyboard or
+a gamepad and changes nothing else.
+
+Four things are agreeing on screen. The **character controller** holds the
+capsule upright and decides its velocity from the intent, with acceleration,
+air control, coyote time and a jump authored as a height. **Physics** finds
+out how far that velocity actually gets, walks it up the step it can and
+shoves the crate it cannot. The **animation system** reads `grounded` and
+`planarSpeed`, picks idle, walk, run or jump, and crossfades into it at the
+rate the ground demands. The **renderer** skins the result through a depth
+pre-pass, an `EQUAL` depth test and GPU-driven indirect draws — and none of
+those four knows the others exist.
+
+`scripts/record_character_demo.sh` records it.
 
 ## The engine being used
 
@@ -137,6 +167,8 @@ scenes, fixed camera, the exact pixels the GPU produced.
 | Flag | Effect |
 |---|---|
 | `--demo` | Run the tour with the editor hidden and the scene playing, then close |
+| `--follow` | Put the camera behind the character instead of on the tour's rails |
+| `--play` | Drive the character yourself rather than letting the patrol walk it (implies `--follow`) |
 | `--editor` | Keep the editor up during the tour, with a scripted entity selected |
 | `--size W H` | Open a window this size. The editor wants more than the default 800×600 |
 | `--record DIR` | Write every frame there as a PNG |

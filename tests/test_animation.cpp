@@ -379,6 +379,37 @@ namespace {
         return rig;
     }
 
+    // The slide, and a second clip that holds the tip somewhere else - two
+    // poses far enough apart that a blend between them is unmistakable.
+    AnimationClip holdClip(float x, float duration) {
+        AnimationClip clip;
+        clip.name = "hold";
+        clip.duration = duration;
+        AnimationChannel channel;
+        channel.joint = 1;
+        channel.path = AnimationPath::translation;
+        channel.times = {0.f, duration};
+        channel.values = {{x, 2.f, 0.f, 0.f}, {x, 2.f, 0.f, 0.f}};
+        clip.channels.push_back(std::move(channel));
+        return clip;
+    }
+
+    std::shared_ptr<ege::AnimationRig> twoClipRig() {
+        auto rig = std::make_shared<ege::AnimationRig>();
+        rig->skeleton = chainSkeleton();
+        // Clip 0 holds the tip at x = 0 for one second; clip 1 holds it at
+        // x = 10 for two.
+        rig->clips.push_back(holdClip(0.f, 1.f));
+        rig->clips.push_back(holdClip(10.f, 2.f));
+        return rig;
+    }
+
+    // Where the tip ended up, which for this rig is the palette's second
+    // matrix times the bind position - or, more simply, its translation.
+    float tipX(const std::vector<glm::mat4>& palette) {
+        return palette[1][3][0];
+    }
+
 }  // namespace
 
 TEST_CASE("the animation system packs palettes end to end") {
@@ -466,4 +497,75 @@ TEST_CASE("an animator without a rig writes nothing and breaks nothing") {
     std::vector<glm::mat4> palette;
     system.update(world, 0.1f, palette);
     CHECK(palette.empty());
+}
+
+TEST_CASE("play does nothing when asked for the clip already playing") {
+    ege::SkeletalAnimator animator{};
+    animator.rig = twoClipRig();
+    animator.time = 0.4f;
+
+    animator.play(0, 0.2f);
+    CHECK(animator.clip == 0);
+    CHECK(animator.previousClip == -1);
+    // And it did not restart what was already running, which is what would
+    // happen if a driver calling this every tick were taken literally.
+    CHECK(animator.time == doctest::Approx(0.4f));
+}
+
+TEST_CASE("a crossfade starts on the old pose and ends on the new one") {
+    ege::World world;
+    ege::AnimationSystem system;
+
+    ege::Entity entity = world.spawn("walker");
+    ege::SkeletalAnimator animator{};
+    animator.rig = twoClipRig();
+    entity.attach<ege::SkeletalAnimator>(std::move(animator));
+
+    std::vector<glm::mat4> palette;
+    system.update(world, 0.f, palette);
+    REQUIRE(palette.size() == 2);
+    CHECK(tipX(palette) == doctest::Approx(0.f));
+
+    // Half a second of fade, sampled at the moment it begins: entirely the
+    // clip being left, which is what makes a transition invisible rather
+    // than a jump followed by a slide.
+    //
+    // The fade advances after sampling, like the clock does and for the same
+    // reason - the pose at the moment something starts is the pose anyone
+    // watching sees first - so each step below shows where the fade was, not
+    // where it is about to be.
+    entity.fetch<ege::SkeletalAnimator>().play(1, 0.5f);
+    system.update(world, 0.f, palette);
+    CHECK(tipX(palette) == doctest::Approx(0.f));
+
+    system.update(world, 0.25f, palette);
+    CHECK(tipX(palette) == doctest::Approx(0.f));
+
+    // Half the fade spent, half the way across.
+    system.update(world, 0.25f, palette);
+    CHECK(tipX(palette) == doctest::Approx(5.f));
+
+    // And past the end of it, entirely the new clip - with the fade forgotten
+    // rather than left to be blended again for ever.
+    system.update(world, 0.f, palette);
+    CHECK(tipX(palette) == doctest::Approx(10.f));
+    CHECK(entity.fetch<ege::SkeletalAnimator>().previousClip == -1);
+}
+
+TEST_CASE("a fade can carry the phase across, or start from the top") {
+    ege::SkeletalAnimator restarting{};
+    restarting.rig = twoClipRig();
+    restarting.time = 0.5f;  // half way through a one-second clip
+    restarting.play(1, 0.2f, true);
+    CHECK(restarting.time == doctest::Approx(0.f));
+
+    ege::SkeletalAnimator carrying{};
+    carrying.rig = twoClipRig();
+    carrying.time = 0.5f;
+    carrying.play(1, 0.2f, false);
+    // Half way through a one-second clip is half way through a two-second
+    // one, which is one second in - a walk becoming a run without a stumble.
+    CHECK(carrying.time == doctest::Approx(1.f));
+    CHECK(carrying.previousClip == 0);
+    CHECK(carrying.previousTime == doctest::Approx(0.5f));
 }

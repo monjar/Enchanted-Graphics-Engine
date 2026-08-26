@@ -930,19 +930,26 @@ pull requests in the §10.7 shape, and the rows inside a milestone can
 reorder freely; the milestones themselves mostly cannot, because each stands
 on the one before it.
 
-#### v0.5 — The character
+#### v0.5 — The character — **landed**
 
 The largest gap first. A game is usually somebody moving through a world,
-and this engine cannot yet animate a somebody.
+and this engine could not animate a somebody.
+
+It can now: a rigged humanoid walks, runs and jumps through the demo scene,
+skinned on the GPU through both depth phases and the GPU-driven indirect
+draws, driven through the same four intent fields whether a player's hands, a
+patrol behaviour or a gamepad is writing them, with a third-person camera
+behind it. Every row below is struck. What the milestone found missing along
+the way is recorded in the rows themselves rather than quietly fixed.
 
 | Item | What it is | Done when |
 |---|---|---|
 | ~~glTF skins and clips~~ | **Landed.** Rigs arrive with joints reordered parent-before-child - the invariant the file never promises and every sampling sweep relies on - with inverse binds following their joints through the reorder, vertex indices remapped to match, and weights renormalised. The sampling arithmetic (keyframes, slerp, blending, the palette) landed with it, device-free. CUBICSPLINE channels are skipped aloud rather than half-played. | Done: a hand-built rigged glTF - joints deliberately child-first - round-trips numerically, and a sampled pose lands where paper says. |
 | ~~GPU skinning~~ | **Landed.** The palette rides binding 12, the skinned pipelines share the rigid layouts - one extra push range and one extra binding the rigid shaders never name, so a batch walk switches pipelines without disturbing a bound set - and skinned batches never merge, because a batch is one entity's palette run. Skinned draws go through GPU culling with their rest sphere grown by half, since animation moves vertices past the box they were modelled in. The demo gained a rigged, swaying banner, generated like the torus. | Done: the banner deforms through both depth phases and the EQUAL test under indirect draws, validation-clean, and the palette a test computes by hand is the palette the system writes. |
-| Clip playback and blending | A component that plays clips, crossfades between them, and exposes a small state machine - walk/run/jump/idle is the bar, not a graph editor. | Reflected in the inspector, saved in the scene, driven from a behaviour. |
+| ~~Clip playback and blending~~ | **Landed.** `SkeletalAnimator::play()` crossfades: two clips sampled at their own times and blended pose by pose, because halfway between two poses is a pose and halfway between two matrices is shear. A fade can restart the new clip - what a jump wants - or carry the phase across, which is what a walk becoming a run wants, since restarting a stride mid-step is a stumble. The state machine is the `CharacterAnimation` behaviour, and it turned out to be four rules rather than a graph: airborne is a jump, still is an idle, moving is a walk, moving fast is a run, each played at the rate the ground demands. | Done: reflected, saved, and driven from a behaviour that reads nothing but the controller's `grounded` and `planarSpeed`. |
 | ~~Character controller~~ | **Landed.** Jolt's virtual character behind the same engine-owned interface bodies use, driven by the engine's own motion arithmetic - accelerate, brake, air control, coyote time, a jump authored as a height and cut short when released - which is device-free and tested against hand derivations. The component splits into shape and tuning (authored, saved), intent (written every tick by whoever is driving), and state (written back for gameplay to read), so a player, a patrol behaviour and an AI drive it through identical fields. `World::input()` arrived with it, the way `World::physics()` did. | Done: the demo has somebody walking a circuit on physics geometry, turning to face where it is going, jumping at the corners and shoving a crate out of its way. The §10.4 debt row closes. |
 | ~~Gamepad input~~ | **Landed.** `Input` polls four pads through GLFW's *gamepad* mapping - the one its controller database derives, so `A` is the bottom face button on any recognised pad rather than whichever the firmware numbered first - and exposes buttons, raw axes and deadzoned sticks. Actions bind gamepad buttons, and bind axes with a sign and a threshold, which is how one stick axis becomes two opposed actions and how a trigger resting at −1 becomes an action resting at zero. `axis()` became the difference of two *analog* action values, so a stick asks for what it was actually pushed to while a key still asks for exactly one. | Done: the free-fly camera and the character both play from either hand position, and neither of them learned that a controller exists. |
-| Third-person camera | Follow, orbit, collision-aware enough not to clip through the gravel. In the sandbox, against the public API, where it will find what the API is missing. | **The milestone demo: a rigged character walks, runs and jumps through the demo scene under player control.** |
+| ~~Third-person camera~~ | **Landed.** Follows at a distance behind the player's own look yaw, smoothed with an exponential damp that closes the same fraction of the gap per second however many frames that second took - the naive lerp is frame-rate dependent, and a camera tuned on one machine lags on another. It casts from what it is aiming at out to where it wants to be and stops short of whatever is in the way. **What it found missing:** gameplay cannot own the camera. The viewer is a plain `Transform` the application drives, so the follow camera is an engine class rather than the behaviour it should be - the camera becomes a component when the player binary needs one, in v0.9. | **Done: `--follow` puts the camera behind the character and `--play` hands it to you; the recording in the README is the same run with the patrol driving.** |
 
 #### v0.6 — The game surface
 

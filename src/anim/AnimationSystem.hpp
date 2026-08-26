@@ -34,6 +34,8 @@ namespace ege {
         // Scratch, kept across frames so steady-state animation allocates
         // nothing.
         std::vector<JointPose> pose;
+        std::vector<JointPose> fadingPose;
+        std::vector<JointPose> blended;
         std::vector<glm::mat4> globals;
         std::vector<glm::mat4> skins;
         bool warnedFull = false;

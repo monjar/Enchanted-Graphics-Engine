@@ -42,6 +42,14 @@ namespace ege {
             // the executable. Empty takes the default; "none" loads nothing,
             // which is how the demo is run without it to show the difference.
             std::string scriptModule;
+            // Puts the camera behind the demo's character instead of on the
+            // tour's rails or on the free-fly controls. What `--follow`
+            // selects, and what the milestone recording is made from.
+            bool followCharacter = false;
+            // Hands the character to the player rather than to the patrol
+            // behaviour that walks it in circles. Implies followCharacter,
+            // because driving a character you cannot see is not playing it.
+            bool playCharacter = false;
             // Keeps the editor up during the demo, with an entity selected, so
             // that what is recorded is the engine being used rather than the
             // picture it renders. The tour still flies the camera; the scene
@@ -92,7 +100,11 @@ namespace ege {
         // Imports every .gltf/.glb under assets/models, if the directory
         // exists. The demo ships none - dropping a file there is how content
         // gets in until the asset database gives imports a real home.
-        void importGltfModels();
+        // Instantiates every glTF the asset database catalogued, and returns
+        // the root entity each one landed under, keyed by asset name - so the
+        // scene can pick an import up and put it somewhere, which is what a
+        // character body is.
+        std::unordered_map<std::string, EntityId> importGltfModels();
 
         // Round-trips the scene through the serializer at start-up, which keeps
         // save and load exercised by every run rather than only by the tests.

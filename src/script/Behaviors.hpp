@@ -106,6 +106,39 @@ namespace ege {
         int target = 0;
     };
 
+    // Picks the clip a character's own motion calls for, and plays it at the
+    // rate the ground demands.
+    //
+    // The whole of the state machine v0.5 asked for, which turns out to be
+    // four rules rather than a graph editor: airborne is a jump, standing
+    // still is an idle, moving is a walk, moving fast is a run. What makes it
+    // small is that the character controller already worked out the answer -
+    // `grounded` and `planarSpeed` are exactly the two questions - so this
+    // reads state rather than tracking any.
+    //
+    // Attached to the entity carrying the SkeletalAnimator, which for an
+    // imported model is a child of the one carrying the controller; the
+    // controller is looked for up the hierarchy.
+    class CharacterAnimation : public Behavior {
+    public:
+        int idleClip = 0;
+        int walkClip = 1;
+        int runClip = 2;
+        int jumpClip = 3;
+
+        // The ground speeds the walk and run clips were authored at. A clip
+        // played at the speed it was drawn for has its feet planted; played
+        // at any other, they skate.
+        float walkSpeed = 0.9f;
+        float runSpeed = 1.8f;
+        // Below this the character is standing still rather than creeping.
+        float idleSpeed = 0.08f;
+        // How long a change of mind takes.
+        float fadeSeconds = 0.15f;
+
+        void onFixedTick(float deltaSeconds) override;
+    };
+
     // Pushes a dynamic mesh's vertices along their normals by a travelling
     // sine wave. The one behaviour here that exists to prove something rather
     // than to look nice: geometry a script writes every frame.
@@ -150,6 +183,17 @@ EGE_REFLECT(ege::PlayerCharacter)
 EGE_FIELD(mouseSensitivity).range(0.0001f, 0.02f).tooltip("Radians per pixel of mouse movement");
 EGE_FIELD(lookSpeed).range(0.f, 10.f).tooltip("Radians per second for the stick and arrow keys");
 EGE_FIELD(lookYaw).range(-3.1416f, 3.1416f).tooltip("Where the player is looking, about Y");
+EGE_REFLECT_END()
+
+EGE_REFLECT(ege::CharacterAnimation)
+EGE_FIELD(idleClip).range(0.f, 32.f);
+EGE_FIELD(walkClip).range(0.f, 32.f);
+EGE_FIELD(runClip).range(0.f, 32.f);
+EGE_FIELD(jumpClip).range(0.f, 32.f);
+EGE_FIELD(walkSpeed).range(0.f, 20.f).tooltip("The ground speed the walk clip was drawn for");
+EGE_FIELD(runSpeed).range(0.f, 40.f).tooltip("The ground speed the run clip was drawn for");
+EGE_FIELD(idleSpeed).range(0.f, 2.f).tooltip("Below this it is standing still");
+EGE_FIELD(fadeSeconds).range(0.f, 1.f).tooltip("How long a change of clip takes");
 EGE_REFLECT_END()
 
 EGE_REFLECT(ege::Patrol)

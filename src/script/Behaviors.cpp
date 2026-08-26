@@ -1,5 +1,6 @@
 #include "script/Behaviors.hpp"
 
+#include "anim/SkeletalAnimator.hpp"
 #include "physics/CharacterMotion.hpp"
 #include "physics/PhysicsComponents.hpp"
 #include "platform/Input.hpp"
@@ -115,6 +116,53 @@ namespace ege {
         }
     }
 
+    void CharacterAnimation::onFixedTick(float) {
+        SkeletalAnimator* animator = self().find<SkeletalAnimator>();
+        if (animator == nullptr) {
+            return;
+        }
+
+        // The controller is on this entity or on an ancestor: an imported
+        // model arrives as a subtree, and the thing that walks is the root it
+        // was parented to.
+        const CharacterController* controller = nullptr;
+        for (EntityId entity = self().id(); !entity.isNull() && controller == nullptr;
+             entity = hierarchy::parentOf(world(), entity)) {
+            controller = world().find<CharacterController>(entity);
+        }
+        if (controller == nullptr) {
+            return;
+        }
+
+        if (!controller->grounded) {
+            // From the top: a jump is a thing that happens once, and picking
+            // it up mid-clip would play the landing on the way up.
+            animator->play(jumpClip, fadeSeconds, true);
+            animator->loop = false;
+            animator->speed = 1.f;
+            return;
+        }
+
+        animator->loop = true;
+        if (controller->planarSpeed <= idleSpeed) {
+            animator->play(idleClip, fadeSeconds, true);
+            animator->speed = 1.f;
+            return;
+        }
+
+        // Walk below the midpoint of the two authored speeds, run above it.
+        // A single crossing point rather than a band: hysteresis would be the
+        // right answer if the speed oscillated, and it does not - the
+        // controller accelerates smoothly through the middle and the fade
+        // covers the moment.
+        const bool running = controller->planarSpeed > (walkSpeed + runSpeed) * 0.5f;
+        const float authored = running ? runSpeed : walkSpeed;
+        // Phase carried across, because a walk becoming a run is one stride
+        // turning into a faster stride.
+        animator->play(running ? runClip : walkClip, fadeSeconds, false);
+        animator->speed = authored > 0.f ? controller->planarSpeed / authored : 1.f;
+    }
+
     void Patrol::onSpawn() {
         const Transform* transform = self().find<Transform>();
         origin = transform != nullptr ? transform->translation : glm::vec3{0.f};
@@ -191,3 +239,4 @@ EGE_BEHAVIOR(ege::Bobbing)
 EGE_BEHAVIOR(ege::Ripple)
 EGE_BEHAVIOR(ege::PlayerCharacter)
 EGE_BEHAVIOR(ege::Patrol)
+EGE_BEHAVIOR(ege::CharacterAnimation)
