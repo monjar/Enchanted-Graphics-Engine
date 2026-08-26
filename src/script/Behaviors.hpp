@@ -238,6 +238,14 @@ namespace ege {
 
         void onSpawn() override;
 
+        // A level's progress is worth more than a clean slate: editing the
+        // script that decides *what* happens at the end should not undo the
+        // three pickups the player already collected. Both of these are
+        // unreflected - runtime state, not the entity's description - so
+        // without saying so here they would go back to zero.
+        std::string onSaveState() override;
+        void onReload(const std::string& state) override;
+
         int collected() const { return count; }
 
     private:
@@ -275,6 +283,13 @@ namespace ege {
 
         void onSpawn() override;
         void onFixedTick(float deltaSeconds) override;
+
+        // The wave's phase, carried across a reload so that tuning the
+        // numbers above while it runs changes the wave rather than
+        // restarting it. The whole point of editing a script mid-flight is
+        // to see the difference, and a jump back to zero hides it.
+        std::string onSaveState() override;
+        void onReload(const std::string& state) override;
 
     private:
         float time = 0.f;

@@ -426,6 +426,28 @@ condition is three objects that have never met: a pickup says it was
 collected and removes itself, a goal counts without knowing what it counts,
 and a gate opens without having heard of a pickup.
 
+**A behaviour can survive its own reload.** Reflected fields always cross a
+script reload; anything else is gone, and `onSpawn` runs again so the
+behaviour can work out its private state from where things are now. That is
+still the default. When it is the wrong default — a wave that should not
+restart, a level that should not forget its score — the behaviour says so:
+
+```cpp
+std::string onSaveState() override { return std::to_string(time); }
+
+void onReload(const std::string& state) override {
+    onSpawn();                 // subscriptions, timers, whatever spawning sets up
+    time = std::stof(state);   // and then the thing worth keeping
+}
+```
+
+A string, not the old object, and that is the whole design: a reload happens
+because the source file changed, so the replacement's idea of the class layout
+is not the old one's. Reaching into the outgoing instance through the new type
+would be reading a struct that may have grown a member since. The only thing
+that can safely cross is data the outgoing instance describes using its own
+code.
+
 **Asset hot reload.** The engine watches the project directory while it runs:
 save a change to `assets/materials/floor.egematerial` and the demo's floor
 changes without a restart. A material is rewritten inside the object every
