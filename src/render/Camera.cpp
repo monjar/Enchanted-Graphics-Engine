@@ -53,6 +53,24 @@ namespace ege {
         setViewDirection(position, target - position, up);
     }
 
+    glm::vec3 forwardFromAngles(glm::vec3 rotation) {
+        const float c2 = glm::cos(rotation.x);
+        const float s2 = glm::sin(rotation.x);
+        const float c1 = glm::cos(rotation.y);
+        const float s1 = glm::sin(rotation.y);
+        return glm::vec3{c2 * s1, -s2, c1 * c2};
+    }
+
+    glm::vec3 upFromAngles(glm::vec3 rotation) {
+        const float c3 = glm::cos(rotation.z);
+        const float s3 = glm::sin(rotation.z);
+        const float c2 = glm::cos(rotation.x);
+        const float s2 = glm::sin(rotation.x);
+        const float c1 = glm::cos(rotation.y);
+        const float s1 = glm::sin(rotation.y);
+        return glm::vec3{c3 * s1 * s2 - c1 * s3, c2 * c3, c1 * c3 * s2 + s1 * s3};
+    }
+
     void Camera::setViewYXZ(glm::vec3 position, glm::vec3 rotation) {
         const float c3 = glm::cos(rotation.z);
         const float s3 = glm::sin(rotation.z);
@@ -61,8 +79,8 @@ namespace ege {
         const float c1 = glm::cos(rotation.y);
         const float s1 = glm::sin(rotation.y);
         const glm::vec3 u{(c1 * c3 + s1 * s2 * s3), (c2 * s3), (c1 * s2 * s3 - c3 * s1)};
-        const glm::vec3 v{(c3 * s1 * s2 - c1 * s3), (c2 * c3), (c1 * c3 * s2 + s1 * s3)};
-        const glm::vec3 w{(c2 * s1), (-s2), (c1 * c2)};
+        const glm::vec3 v = upFromAngles(rotation);
+        const glm::vec3 w = forwardFromAngles(rotation);
         viewMatrix = glm::mat4{1.f};
         viewMatrix[0][0] = u.x;
         viewMatrix[1][0] = u.y;

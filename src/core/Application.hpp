@@ -38,6 +38,10 @@ namespace ege {
             // rather than by the clock, so the result is the same however
             // fast the machine renders it.
             float recordFrameRate = 30.f;
+            // Refuses to open a sound device even when there is one. What
+            // `--silent` selects, and what a developer whose colleagues are
+            // trying to work reaches for.
+            bool silent = false;
             // A scene file to open instead of building the demo scene in
             // code. What `--scene` selects, and how a project's own level is
             // run: the engine reads a file and knows nothing about what is

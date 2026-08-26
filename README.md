@@ -552,7 +552,8 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: sound, runtime UI, and the standalone editor and player.
+Still to come: audio assets and sources, runtime UI, and the standalone editor
+and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.
@@ -593,6 +594,47 @@ restarting a stride mid-step is a stumble.
 Animation runs in the editor as well as in play. A clip advancing is how a
 rigged mesh *looks*, not something that happens to it, and a character frozen
 in bind pose until someone presses Play is a character being authored blind.
+
+## Sound
+
+```sh
+./build/default/bin/EnchantedEngine --demo            # with sound, if the machine has any
+./build/default/bin/EnchantedEngine --demo --silent   # without, on purpose
+```
+
+miniaudio, behind an engine-owned interface exactly the way Jolt is: one
+translation unit knows the library's name, and nothing outside it can
+accidentally learn it.
+
+**The mixing is the engine's, not the library's.** miniaudio's high-level
+engine would do spatialisation, buses and voice management for us — and taking
+it would put the answer to "how loud is that" inside a dependency nobody can
+write a test against. What is used is the *device*: a callback asking for
+frames. Everything above that callback is arithmetic in `src/audio/AudioMath`
+— inverse-distance attenuation, constant-power panning, one multiply of
+resampling — which is device-free and therefore checked on a machine with no
+speakers, which is every machine CI has.
+
+**The silent backend is a backend, not a stub.** It accepts every clip, hands
+out voices, expires them after exactly as long as the clip lasts and answers
+every query the audible one does. A game running on it behaves identically —
+the footsteps still start and stop, code that waits for a voice still gets its
+answer — and the only difference is that nobody hears it. That is what makes a
+machine's silence a fact about the machine rather than a second code path
+through the game, and it is why the fallback is a real engine rather than a
+null pointer: `if (audio)` at every call site is how a subsystem becomes
+optional and then becomes untested.
+
+miniaudio's *own* null device is refused. It always succeeds and discards
+everything, so taking it would mean an engine reporting itself audible while
+nobody can hear anything — and the engine already has an honest answer for a
+machine with no sound device.
+
+Panning uses the same `cross(forward, up)` the character controller turns a
+stick into a step with, and a test pins the two together: a player who strafes
+right and a sound panned right have to mean the same side of the world. One of
+them being mirrored is the classic bug here — inaudible on a laptop speaker,
+obvious on headphones.
 
 ## Building
 
@@ -714,6 +756,8 @@ src/
                 clustered light culling, screen-space ambient occlusion,
                 the depth pyramid and GPU-driven culling, skybox, bloom and
                 post-process
+  audio/        the audio interface, its miniaudio backend, its silent one,
+                and the device-free arithmetic both of them mix through
   scene/        world, entities, component pools, components, hierarchy,
                 scene and prefab serialization, render-transform
                 interpolation
@@ -766,6 +810,7 @@ reformat out of `git blame`.
 | [spdlog](https://github.com/gabime/spdlog) 1.14.1 | logging | fetched or system |
 | [VulkanMemoryAllocator](https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator) 3.1.0 | GPU memory | fetched |
 | [Jolt Physics](https://github.com/jrouwe/JoltPhysics) 5.2.0 | rigid-body simulation | fetched |
+| [miniaudio](https://github.com/mackron/miniaudio) 0.11.21 | audio device | fetched |
 | [stb_image](https://github.com/nothings/stb) | image decoding | fetched |
 | [nlohmann/json](https://github.com/nlohmann/json) 3.11.3 | scene serialization | fetched or system |
 | [doctest](https://github.com/doctest/doctest) 2.4.11 | tests | fetched |

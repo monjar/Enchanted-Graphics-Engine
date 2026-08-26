@@ -4,6 +4,7 @@
 #include "anim/SkeletalAnimator.hpp"
 #include "assets/AssetDatabase.hpp"
 #include "assets/GltfLoader.hpp"
+#include "audio/AudioEngine.hpp"
 #include "core/DemoTour.hpp"
 #include "core/FileWatcher.hpp"
 #include "core/Log.hpp"
@@ -416,6 +417,15 @@ namespace ege {
         PlayMode playMode{};
         ScriptSystem scripts{};
         PhysicsSystem physics{};
+
+        // Sound, from here to the end of the run. Never null: a machine with
+        // no playback device gets the silent backend, which behaves exactly
+        // like the audible one and is the reason nothing below has to ask
+        // whether there is any sound.
+        AudioEngine::Settings audioSettings{};
+        audioSettings.forceSilent = options.silent;
+        std::unique_ptr<AudioEngine> audio = AudioEngine::create(audioSettings);
+        world.setAudio(audio.get());
 
         // The viewer is a plain transform rather than an entity: it is the
         // editor camera, not part of the scene being edited.
@@ -928,6 +938,22 @@ namespace ege {
 
                 uboBuffers[frameIndex]->writeToBuffer(&ubo);
                 uboBuffers[frameIndex]->flush();
+
+                // The ears go where the camera is. A listener that followed
+                // the character instead would be right for a first-person
+                // game and wrong for this one: what the player hears should
+                // agree with what they see, and what they see is the
+                // camera's.
+                AudioListener ears{};
+                ears.position = viewerTransform.translation;
+                ears.forward = forwardFromAngles(viewerTransform.rotation);
+                ears.up = upFromAngles(viewerTransform.rotation);
+                audio->setListener(ears);
+                // The real elapsed time, not the fixed step: sound happens in
+                // the world the player is in, and a recording's pinned clock
+                // is about making pictures reproducible rather than about
+                // making a second last less than a second.
+                audio->update(time.rawDelta());
 
                 // Animation first: prepare() reads each animator's palette
                 // base, so the poses must land before the list is gathered.
