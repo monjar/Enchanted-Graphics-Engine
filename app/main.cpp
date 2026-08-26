@@ -17,6 +17,7 @@ namespace {
         EGE_INFO("  --play               drive the character yourself (implies --follow)");
         EGE_INFO("  --editor             keep the editor up during the demo");
         EGE_INFO("  --size W H           open a window this size (default 800 600)");
+        EGE_INFO("  --scene PATH         open this scene file instead of the demo scene");
         EGE_INFO("  --script-module PATH load this module instead of the default sandbox");
         EGE_INFO("                       ('none' loads no behaviours at all)");
     }
@@ -50,6 +51,8 @@ int main(int argc, char** argv) {
                 EGE_ERROR("--size wants a window of at least 64x64");
                 return EXIT_FAILURE;
             }
+        } else if (argument == "--scene" && index + 1 < argc) {
+            options.scenePath = argv[++index];
         } else if (argument == "--script-module" && index + 1 < argc) {
             options.scriptModule = argv[++index];
         } else if (argument == "--help" || argument == "-h") {

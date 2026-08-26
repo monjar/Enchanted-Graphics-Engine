@@ -140,3 +140,58 @@ TEST_CASE("smoothing approaches without overshooting, and a zero rate cuts") {
     // dividing by a zero step.
     CHECK(dampTowards(glm::vec3{0.f}, target, 5.f, 0.f).x == doctest::Approx(1.f));
 }
+
+TEST_CASE("the framing scales to the subject it is following") {
+    ege::FollowCameraSettings written{};
+    // Twice the height the defaults were written for.
+    const ege::FollowCameraSettings framed =
+        ege::framedFor(written, written.writtenForHeight * 2.f);
+
+    CHECK(framed.distance == doctest::Approx(written.distance * 2.f));
+    CHECK(framed.height == doctest::Approx(written.height * 2.f));
+    CHECK(framed.aimHeight == doctest::Approx(written.aimHeight * 2.f));
+    CHECK(framed.minDistance == doctest::Approx(written.minDistance * 2.f));
+    CHECK(framed.wallMargin == doctest::Approx(written.wallMargin * 2.f));
+
+    // Not the lag: how quickly a camera catches up is a matter of feel
+    // rather than of size, and a big character followed by a sluggish camera
+    // is not what anybody meant.
+    CHECK(framed.lag == doctest::Approx(written.lag));
+
+    // And the result says what it is now written for, so framing it again
+    // for the same height changes nothing.
+    CHECK(framed.writtenForHeight == doctest::Approx(written.writtenForHeight * 2.f));
+    const ege::FollowCameraSettings again = ege::framedFor(framed, framed.writtenForHeight);
+    CHECK(again.distance == doctest::Approx(framed.distance));
+}
+
+TEST_CASE("framing for nothing leaves the framing alone") {
+    ege::FollowCameraSettings written{};
+    // A subject with no height, or settings that admit to no reference:
+    // scaling by either would be a division nobody meant.
+    CHECK(ege::framedFor(written, 0.f).distance == doctest::Approx(written.distance));
+    CHECK(ege::framedFor(written, -3.f).distance == doctest::Approx(written.distance));
+
+    ege::FollowCameraSettings unreferenced = written;
+    unreferenced.writtenForHeight = 0.f;
+    CHECK(ege::framedFor(unreferenced, 1.7f).distance == doctest::Approx(written.distance));
+}
+
+TEST_CASE("a taller subject is watched from further back") {
+    // The whole point, at the level the camera actually works at: the same
+    // defaults put the camera a fixed number of subject-heights away, so one
+    // set of numbers frames a mouse and a giant.
+    const ege::FollowCameraSettings small = ege::framedFor(ege::FollowCameraSettings{}, 0.6f);
+    const ege::FollowCameraSettings large = ege::framedFor(ege::FollowCameraSettings{}, 1.7f);
+
+    const ege::Transform watchingSmall =
+        ege::followCameraTarget(glm::vec3{0.f}, 0.f, glm::vec3{0.f, 1.f, 0.f}, small);
+    const ege::Transform watchingLarge =
+        ege::followCameraTarget(glm::vec3{0.f}, 0.f, glm::vec3{0.f, 1.f, 0.f}, large);
+
+    CHECK(glm::length(watchingLarge.translation) > glm::length(watchingSmall.translation));
+    // And by the ratio of the two subjects, not by some other amount.
+    CHECK(
+        glm::length(watchingLarge.translation) ==
+        doctest::Approx(glm::length(watchingSmall.translation) * (1.7f / 0.6f)).epsilon(0.001f));
+}

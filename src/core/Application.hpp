@@ -38,6 +38,11 @@ namespace ege {
             // rather than by the clock, so the result is the same however
             // fast the machine renders it.
             float recordFrameRate = 30.f;
+            // A scene file to open instead of building the demo scene in
+            // code. What `--scene` selects, and how a project's own level is
+            // run: the engine reads a file and knows nothing about what is
+            // in it.
+            std::string scenePath;
             // The script module to load, if it is not the one built beside
             // the executable. Empty takes the default; "none" loads nothing,
             // which is how the demo is run without it to show the difference.
@@ -94,6 +99,16 @@ namespace ege {
         void reloadChangedScripts(class FileWatcher& watcher, class ScriptSystem& scripts);
 
         void loadScene();
+
+        // Catalogues the primitives the engine ships - a box, a plane, a
+        // sphere - under name-derived ids, before any scene is built or
+        // loaded.
+        //
+        // Before, because a scene *file* refers to them by id and cannot
+        // create them: they used to be made inside loadScene, where a scene
+        // built in code could use them and a scene read from disk could not.
+        // They are the engine's, not the demo's.
+        void registerBuiltinMeshes();
         // Acts on whatever the project directory changed since the last look.
         void reloadChangedAssets(class FileWatcher& watcher);
 

@@ -962,7 +962,48 @@ missing by whoever builds the v0.5 demo and fixed while the finding is warm.
 | ~~Prefabs~~ | **Landed.** A `.egeprefab` is a scene fragment in the same shape a scene is - a version and an array of entities whose parents are positions inside that array - which is exactly why a fragment re-links to itself rather than to whatever ids it had when it was saved, and why it can be stamped twice. The per-entity half of the serializer moved into `scene/EntitySerialization` so a scene and a fragment cannot drift into writing subtly different entities. A `PrefabRef` resolves like any other asset reference; the loaded form is the document, not a world, because a prefab is a description and each stamping is a fresh set of entities with no link back. | **Done: `prefab::spawn(world, reference)` is the call, and the demo's dispenser makes pickups out of one asset.** |
 | ~~Timers and events~~ | **Landed.** `after(seconds, fn)` runs on the fixed tick, so a timer is as frame-rate-independent as the physics beside it and a paused game's timers do not advance; the callback belongs to the behaviour and dies with it. Events are typed by the type itself - no base class, no registration - and delivered immediately, under three rules that make immediacy safe: a handler subscribed during a dispatch does not hear it, one unsubscribed during a dispatch is not called, and a cycle stops at a depth rather than at a stack overflow. `Behavior::on<Event>` ends its own subscriptions when it goes, which is what a subscriber would otherwise have to get right by hand. This also made good on the header's older promise that `onDespawn` fires mid-play: it needs a reference the despawned component no longer holds. | **Done: three pickups, a goal that counts them, a beat, and a gate that opens - none of the three knowing the others exist.** |
 | ~~Script reload keeping play state~~ | **Landed**, though not in the shape the row described. Handing the *old instance* over turned out to be the unsafe version of this: a reload happens because the source changed, so the replacement's idea of the class layout is not the old one's, and reaching into the old object through the new type reads a struct that may have grown a member since. What crosses instead is a string the outgoing instance writes with its own code - `onSaveState` on the way out, `onReload(state)` on the way in - and `onReload`'s default is `onSpawn`, so a behaviour that says nothing about reloading still lands where a fresh Play would. | **Done: the demo's ripple keeps its phase and the level keeps its score while their script is rebuilt.** |
-| **The level** | A small, complete, winnable level in the sandbox: goal, obstacles, pickups, a fail state. Not a showcase - a game. | **The milestone demo: someone plays it to the end and nothing along the way needed engine code.** |
+| ~~**The level**~~ | **Landed.** `assets/scenes/level.egescene`, played with `--scene`, and every rule in it in `sandbox/`: three coins, a pit with a bridge over it, three lives, a gate that opens when the coins are gone and an exit pad that ends it. Seven behaviours wired to each other by events rather than by pointers, which is what let each be written without the others existing. | **Done, with two asterisks below: the level is played to the end by a scripted run that a human can take over mid-recording, and the game logic needed no engine code - but getting it *loaded* needed two changes, and neither was gameplay.** |
+
+##### What building it found
+
+The milestone's real output is this list. Everything here was discovered by
+trying to make a game rather than by reading the code, which is what a
+milestone that says "not a showcase - a game" is for.
+
+**Two engine changes were needed, and both were plumbing.** The primitives the
+engine ships were catalogued *inside* the demo scene's construction, so a
+scene read from a file could not name them - they are the engine's, not the
+demo's, and now they are registered before anything is loaded. And there was
+no way to open a scene file at all: `--scene` is four lines and its absence
+meant a project could not run its own level.
+
+**The camera framed one size of character.** The follow camera's distances
+were written for the demo's 0.6-metre walker, so a level with a person-sized
+player watched it from inside its own head. Distances are now a number of
+subject-heights, which is what lets one set of defaults frame a mouse and a
+giant.
+
+**A rigged character cannot live in a scene file yet.** An import's skeleton
+and clips arrive from the importer and are not database assets, so a level
+saved to disk gets a shape that survives the round trip - which is why the
+level's player is a box. Animation rigs want the asset type meshes and
+materials already have; that is v0.7's to schedule.
+
+**The serializer has no containers.** A route is a list of points, and a list
+is not something a reflected field can be, so `ScriptedRun` encodes one in a
+string. Three lines and nobody's permission, which is the right trade for now
+- but a project that wants an array of anything meets this immediately.
+
+**Collision layers are declared in engine code.** The level reuses the demo's
+`Character` and `Props` because `PhysicsWorld::Settings` is filled in by the
+Application. A project should declare its own layers, which wants project
+settings - and project settings are what v0.9's standalone player needs
+anyway.
+
+**A project's code has no test target.** The sandbox module is not linked into
+the test binary, so nothing in CI exercises the level's seven behaviours; the
+recorded run is their only check. A project template that ships a test target
+belongs with v0.9's player.
 
 #### v0.7 — Sound
 

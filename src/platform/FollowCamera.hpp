@@ -28,7 +28,20 @@ namespace ege {
         // camera may come is by definition not what stopped it.
         float minDistance = 0.45f;
         float wallMargin = 0.08f;
+        // The subject these numbers were written for. Every length above is
+        // really "this much, for a subject this tall": a camera framing a
+        // character twice the size wants to be twice as far back, and one
+        // set of defaults that only frames one size of character is a set of
+        // defaults every project has to retune before it can see anything.
+        float writtenForHeight = 0.6f;
     };
+
+    // The same framing, for a subject of a different height.
+    //
+    // Lengths scale; `lag` does not, because it is a rate - how quickly a
+    // camera catches up is a matter of feel rather than of size, and a big
+    // character followed by a sluggish camera is not what anybody meant.
+    FollowCameraSettings framedFor(const FollowCameraSettings& settings, float subjectHeight);
 
     // Where the camera wants to be and which way it wants to look: `distance`
     // back along `yaw`, `height` up, aimed at the subject.
