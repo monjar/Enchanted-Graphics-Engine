@@ -802,3 +802,318 @@ TEST_CASE("a spawner stamps out its prefab when something enters") {
     enter();
     CHECK(world.entityCount() == afterFirst + 1);
 }
+
+// ---- Timers and events ----------------------------------------------------
+
+namespace {
+
+    struct Ping {
+        int value = 0;
+    };
+
+    // Sets a timer on spawn and records when it fired, in ticks.
+    class Ticker : public ege::Behavior {
+    public:
+        float delay = 1.f;
+        int firedAtTick = -1;
+        int ticks = 0;
+        int fires = 0;
+        // A timer that another timer sets, to prove a callback may add to the
+        // list it was called from.
+        bool chain = false;
+        int chained = 0;
+        bool cancelImmediately = false;
+
+        void onSpawn() override {
+            const ege::TimerId timer = after(delay, [this]() {
+                fires++;
+                firedAtTick = ticks;
+                if (chain) {
+                    after(0.f, [this]() { chained++; });
+                }
+            });
+            if (cancelImmediately) {
+                cancel(timer);
+            }
+        }
+
+        void onFixedTick(float) override { ticks++; }
+    };
+
+    // Listens for a Ping for as long as it exists.
+    //
+    // The count lives outside the behaviour on purpose: what these tests want
+    // to know is what happens *after* the behaviour is gone, and a counter
+    // inside it would keep it alive to be read.
+    class Listener : public ege::Behavior {
+    public:
+        std::shared_ptr<int> heard = std::make_shared<int>(0);
+        std::shared_ptr<int> despawns = std::make_shared<int>(0);
+
+        void onSpawn() override {
+            std::shared_ptr<int> counter = heard;
+            on<Ping>([counter](const Ping&) { (*counter)++; });
+        }
+
+        void onDespawn() override { (*despawns)++; }
+    };
+
+}  // namespace
+
+EGE_REFLECT(Ticker)
+EGE_REFLECT_END()
+
+EGE_REFLECT(Listener)
+EGE_REFLECT_END()
+
+namespace {
+
+    // Attaches one behaviour to a fresh entity and hands back the instance.
+    template<typename T>
+    std::shared_ptr<T> attachTo(Entity entity, const char* name) {
+        Script script{};
+        Script::Slot slot{};
+        slot.behavior = name;
+        auto instance = std::make_shared<T>();
+        slot.instance = instance;
+        script.behaviors.push_back(std::move(slot));
+        entity.attach<Script>(std::move(script));
+        return instance;
+    }
+
+}  // namespace
+
+TEST_CASE("a timer fires once, after the time it was given") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<Ticker>("Ticker");
+
+    World world;
+    auto ticker = attachTo<Ticker>(world.spawn("Ticker"), "Ticker");
+    ticker->delay = 0.5f;
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+
+    for (int i = 0; i < 60; i++) {
+        scripts.fixedTick(world, 1.f / 60.f);
+    }
+
+    // Half a second at sixty ticks is thirty of them. Timers advance before
+    // onFixedTick, so the count seen by the callback is the number of ticks
+    // that had already completed.
+    CHECK(ticker->fires == 1);
+    CHECK(ticker->firedAtTick == 29);
+
+    // Once, not once per tick from then on.
+    for (int i = 0; i < 60; i++) {
+        scripts.fixedTick(world, 1.f / 60.f);
+    }
+    CHECK(ticker->fires == 1);
+}
+
+TEST_CASE("a timer set from inside a timer is fine, and zero means next tick") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<Ticker>("Ticker");
+
+    World world;
+    auto ticker = attachTo<Ticker>(world.spawn("Ticker"), "Ticker");
+    ticker->delay = 0.f;
+    ticker->chain = true;
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+
+    // The first tick fires the zero-delay timer, which sets another.
+    scripts.fixedTick(world, 1.f / 60.f);
+    CHECK(ticker->fires == 1);
+    // Not in the same tick: a timer gets its whole duration before it is next
+    // looked at, which is what makes `after(0.f, ...)` mean "next tick".
+    CHECK(ticker->chained == 0);
+
+    scripts.fixedTick(world, 1.f / 60.f);
+    CHECK(ticker->chained == 1);
+}
+
+TEST_CASE("a cancelled timer never fires") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<Ticker>("Ticker");
+
+    World world;
+    auto ticker = attachTo<Ticker>(world.spawn("Ticker"), "Ticker");
+    ticker->delay = 0.2f;
+    ticker->cancelImmediately = true;
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+    for (int i = 0; i < 120; i++) {
+        scripts.fixedTick(world, 1.f / 60.f);
+    }
+    CHECK(ticker->fires == 0);
+}
+
+TEST_CASE("a timer dies with the entity that set it") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<Ticker>("Ticker");
+
+    World world;
+    Entity entity = world.spawn("Ticker");
+    auto ticker = attachTo<Ticker>(entity, "Ticker");
+    ticker->delay = 0.5f;
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+    scripts.fixedTick(world, 1.f / 60.f);
+
+    // Despawned with the timer pending. A door that opened for something no
+    // longer there is the bug this prevents; the instance is kept alive here
+    // only so the test can read it.
+    entity.despawn();
+    for (int i = 0; i < 120; i++) {
+        scripts.fixedTick(world, 1.f / 60.f);
+    }
+    CHECK(ticker->fires == 0);
+}
+
+TEST_CASE("a behaviour's subscription ends when the behaviour does") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<Listener>("Listener");
+
+    World world;
+    Entity entity = world.spawn("Listener");
+
+    std::shared_ptr<int> heard;
+    std::shared_ptr<int> despawns;
+    {
+        auto listener = attachTo<Listener>(entity, "Listener");
+        heard = listener->heard;
+        despawns = listener->despawns;
+        // The test's own reference goes here, so that from now on the only
+        // things holding the behaviour are its component and the script
+        // system - which is the arrangement a real scene has.
+    }
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+
+    world.events().raise(Ping{1});
+    CHECK(*heard == 1);
+    CHECK(world.events().subscriberCount() == 1);
+
+    // Despawning destroys the Script component and the behaviour with it, and
+    // the behaviour ends its subscriptions on the way out. A listener that
+    // outlived its listener would be a call into freed memory.
+    entity.despawn();
+    scripts.spawnPending(world);
+
+    CHECK(*despawns == 1);
+    CHECK(world.events().subscriberCount() == 0);
+    world.events().raise(Ping{2});
+    CHECK(*heard == 1);
+}
+
+TEST_CASE("a behaviour hears about its own despawn, mid-play") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<Listener>("Listener");
+
+    World world;
+    Entity entity = world.spawn("Listener");
+    std::shared_ptr<int> despawns;
+    {
+        auto listener = attachTo<Listener>(entity, "Listener");
+        despawns = listener->despawns;
+    }
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+    CHECK(*despawns == 0);
+
+    // Not only at Stop: an entity removed while the game runs is a despawn
+    // too, and a behaviour that had a thing to undo needs to hear about it.
+    // That takes a reference the system holds itself, because the component
+    // that held the other one has just gone.
+    entity.despawn();
+    scripts.spawnPending(world);
+    CHECK(*despawns == 1);
+
+    // Once, not once per frame from then on.
+    scripts.spawnPending(world);
+    CHECK(*despawns == 1);
+}
+
+TEST_CASE("stopping play clears the listeners") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinComponents();
+    ege::BehaviorRegistry::instance().add<Listener>("Listener");
+
+    World world;
+    attachTo<Listener>(world.spawn("Listener"), "Listener");
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+    CHECK(world.events().subscriberCount() == 1);
+
+    scripts.despawnAll(world);
+    CHECK(world.events().subscriberCount() == 0);
+}
+
+TEST_CASE("a pickup, a goal and a gate that have never met") {
+    ege::registerBuiltinTypes();
+    ege::registerBuiltinSerializers();
+    ege::registerBuiltinComponents();
+
+    World world;
+
+    // The rule: three pickups make a level, then a beat, then the news.
+    Entity rules = world.spawn("Rules");
+    auto goal = attachTo<ege::Goal>(rules, "ege::Goal");
+    goal->needed = 3;
+    goal->celebrateAfter = 0.5f;
+
+    // The gate, which has never heard of a pickup.
+    Entity gate = world.spawn("Gate");
+    Transform gateTransform{};
+    gateTransform.translation = {0.f, 0.f, 0.f};
+    gate.attach<Transform>(gateTransform);
+    auto opener = attachTo<ege::OpenOnLevelComplete>(gate, "ege::OpenOnLevelComplete");
+    opener->opening = {0.f, -1.f, 0.f};
+    opener->speed = 4.f;
+
+    ScriptSystem scripts;
+    scripts.spawnPending(world);
+
+    const auto tick = [&](int steps) {
+        for (int i = 0; i < steps; i++) {
+            scripts.fixedTick(world, 1.f / 60.f);
+        }
+    };
+
+    // Two is not three.
+    world.events().raise(ege::PickupCollected{});
+    world.events().raise(ege::PickupCollected{});
+    tick(60);
+    CHECK(goal->collected() == 2);
+    CHECK(gate.fetch<Transform>().translation.y == doctest::Approx(0.f));
+
+    // The third starts the clock, and the gate has not moved yet - the beat
+    // is what makes the two read as cause and effect.
+    world.events().raise(ege::PickupCollected{});
+    tick(6);
+    CHECK(gate.fetch<Transform>().translation.y == doctest::Approx(0.f));
+
+    // Past the beat, it opens, and goes on opening until it is open.
+    tick(90);
+    CHECK(gate.fetch<Transform>().translation.y == doctest::Approx(-1.f).epsilon(0.02f));
+
+    // And a fourth pickup does not re-announce anything: the level is over
+    // once.
+    const float settled = gate.fetch<Transform>().translation.y;
+    world.events().raise(ege::PickupCollected{});
+    tick(120);
+    CHECK(gate.fetch<Transform>().translation.y == doctest::Approx(settled));
+}

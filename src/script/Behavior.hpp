@@ -4,6 +4,10 @@
 
 #include <glm/glm.hpp>
 
+#include <cstdint>
+#include <functional>
+#include <vector>
+
 namespace ege {
 
     // A touch that began this fixed step, as one entity experiences it: the
@@ -29,9 +33,16 @@ namespace ege {
     //
     // The callbacks are deliberately few. Every one of them is a promise about
     // when it runs, and a promise is easier to keep than to withdraw.
+    // What a pending timer is, to whoever wants to cancel it. Zero is nobody.
+    using TimerId = std::uint64_t;
+
+    inline constexpr TimerId invalidTimer = 0;
+
     class Behavior {
     public:
-        virtual ~Behavior() = default;
+        // Ends this behaviour's subscriptions. Pending timers go with the
+        // object, since they are the object's.
+        virtual ~Behavior();
 
         Behavior(const Behavior&) = delete;
         Behavior& operator=(const Behavior&) = delete;
@@ -81,11 +92,80 @@ namespace ege {
     protected:
         Behavior() = default;
 
+        // ---- Timers --------------------------------------------------------
+
+        // Runs `todo` once, `seconds` of simulated time from now.
+        //
+        // Simulated, not real: timers advance on the fixed tick, so a timer
+        // is as frame-rate-independent as the physics beside it and a
+        // recorded run reproduces exactly. A paused game's timers do not
+        // advance, because nothing is ticking them - which is the behaviour
+        // everybody wants and nobody has to ask for.
+        //
+        // The callback belongs to this behaviour and dies with it: an entity
+        // despawned with a timer pending is an entity whose timer never
+        // fires, which is what stops a door opening for something that is no
+        // longer there. Cancel it early with the returned handle.
+        //
+        // Timers are advanced *before* onFixedTick, so one set during a tick
+        // gets its whole duration before it is first looked at, and
+        // `after(0.f, ...)` means "next tick" rather than "later in this
+        // one".
+        TimerId after(float seconds, std::function<void()> todo);
+
+        // Ends a timer that has not fired. An id that has already fired, or
+        // was already cancelled, is a no-op.
+        void cancel(TimerId timer);
+
+        // ---- Events --------------------------------------------------------
+
+        // Listens for an event on the scene's bus until this behaviour goes.
+        //
+        // The tidying is the point: a subscription outliving its subscriber
+        // is a call into a destroyed object, and the shape that prevents it -
+        // remember every token, end them all in the destructor - is one every
+        // subscriber would otherwise have to write correctly. Subscribe from
+        // onSpawn; a reload rebuilds the instance and calls onSpawn again, so
+        // a behaviour that subscribes there keeps listening across one.
+        template<typename Event>
+        void on(std::function<void(const Event&)> handler) {
+            if (scene == nullptr) {
+                return;
+            }
+            const SubscriptionId id = scene->events().subscribe<Event>(std::move(handler));
+            if (id != invalidSubscription) {
+                subscriptions.push_back(id);
+            }
+        }
+
+        // Says that something happened. Every listener hears it before this
+        // returns - see EventBus for why immediacy is the choice.
+        template<typename Event>
+        void raise(const Event& event) {
+            if (scene != nullptr) {
+                scene->events().raise(event);
+            }
+        }
+
     private:
         friend class ScriptSystem;
 
+        // Ticks pending timers and runs the ones that came due. Called by the
+        // script system rather than by an author.
+        void advanceTimers(float deltaSeconds);
+
+        struct PendingTimer {
+            TimerId id = invalidTimer;
+            float remaining = 0.f;
+            std::function<void()> todo;
+        };
+
         Entity owner{};
         World* scene = nullptr;
+
+        std::vector<PendingTimer> timers;
+        std::vector<SubscriptionId> subscriptions;
+        TimerId nextTimer = 1;
     };
 
 }  // namespace ege

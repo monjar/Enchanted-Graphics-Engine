@@ -1,6 +1,7 @@
 #include "script/Behaviors.hpp"
 
 #include "anim/SkeletalAnimator.hpp"
+#include "core/Log.hpp"
 #include "physics/CharacterMotion.hpp"
 #include "physics/PhysicsComponents.hpp"
 #include "platform/Input.hpp"
@@ -241,6 +242,76 @@ namespace ege {
         ready = std::max(ready - deltaSeconds, 0.f);
     }
 
+    void Pickup::onContact(const Contact& contact) {
+        if (!contact.other.alive()) {
+            return;
+        }
+        // The layer, not the name: which things collect is a property of what
+        // they are, and a level that renames its player should not have to
+        // find every coin.
+        const PhysicsLayer* layer = contact.other.find<PhysicsLayer>();
+        if (collectedBy.empty() ? false : (layer == nullptr || layer->name != collectedBy)) {
+            return;
+        }
+
+        // Said before despawning, because after despawning there is nobody
+        // left to say it. The event carries who, so a listener that wants to
+        // reward the collector still can.
+        raise(PickupCollected{contact.other});
+        self().despawn();
+    }
+
+    void Goal::onSpawn() {
+        count = 0;
+        finished = false;
+
+        on<PickupCollected>([this](const PickupCollected&) {
+            count++;
+            if (finished || count < needed) {
+                return;
+            }
+            finished = true;
+            // A beat between the last pickup and the celebration, so the two
+            // read as cause and effect. Simulated seconds, so a recorded run
+            // reproduces exactly.
+            const int total = count;
+            after(celebrateAfter, [this, total]() {
+                // The only announcement there is until v0.8 grows a runtime
+                // UI to put it on the screen.
+                EGE_INFO("Level complete: {} collected", total);
+                raise(LevelComplete{total});
+            });
+        });
+    }
+
+    void OpenOnLevelComplete::onSpawn() {
+        openness = 0.f;
+        opening_ = false;
+        // Where it starts is what "closed" means, read rather than authored -
+        // so it works wherever it is dropped, and Stop putting the scene back
+        // also puts it back.
+        const Transform* transform = self().find<Transform>();
+        closed = transform != nullptr ? transform->translation : glm::vec3{0.f};
+
+        on<LevelComplete>([this](const LevelComplete&) { opening_ = true; });
+    }
+
+    void OpenOnLevelComplete::onFixedTick(float deltaSeconds) {
+        if (!opening_ || openness >= 1.f) {
+            return;
+        }
+        Transform* transform = self().find<Transform>();
+        if (transform == nullptr) {
+            return;
+        }
+
+        const float travel = glm::length(opening);
+        const float step = travel > 0.f ? speed * deltaSeconds / travel : 1.f;
+        openness = std::min(openness + step, 1.f);
+        transform->translation = closed + opening * openness;
+        hierarchy::markDirty(world(), self().id());
+    }
+
     void PressurePlate::onSpawn() {
         occupants = 0;
         openness = 0.f;
@@ -324,3 +395,6 @@ EGE_BEHAVIOR(ege::Patrol)
 EGE_BEHAVIOR(ege::CharacterAnimation)
 EGE_BEHAVIOR(ege::PressurePlate)
 EGE_BEHAVIOR(ege::Spawner)
+EGE_BEHAVIOR(ege::Pickup)
+EGE_BEHAVIOR(ege::Goal)
+EGE_BEHAVIOR(ege::OpenOnLevelComplete)

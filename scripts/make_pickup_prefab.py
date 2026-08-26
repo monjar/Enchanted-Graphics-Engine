@@ -79,6 +79,18 @@ def main():
                         "sensor": False,
                     },
                     "ege::PhysicsLayer": {"name": "Props"},
+                    # What makes it a pickup rather than a small crate: it
+                    # says it was collected and removes itself. Nothing in it
+                    # knows what happens next, which is why the same prefab
+                    # can be scenery in a level with no goal in it.
+                    "ege::Script": {
+                        "behaviors": [
+                            {
+                                "type": "ege::Pickup",
+                                "fields": {"collectedBy": "Character"},
+                            }
+                        ]
+                    },
                 },
             }
         ],

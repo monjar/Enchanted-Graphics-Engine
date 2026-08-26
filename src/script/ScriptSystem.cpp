@@ -55,6 +55,10 @@ namespace ege {
     }  // namespace
 
     std::size_t ScriptSystem::rebuildInstances(World& world) {
+        // The instances this holds are about to be replaced wholesale; the
+        // respawn below refills it.
+        spawnedByEntity.clear();
+
         const Serializer& serializer = Serializer::instance();
         std::size_t rebuilt = 0;
 
@@ -105,6 +109,7 @@ namespace ege {
         });
 
         for (const Invocation& invocation : respawned) {
+            spawnedByEntity[invocation.entity.id()].push_back(invocation.behavior);
             invocation.behavior->onSpawn();
         }
 
@@ -140,7 +145,38 @@ namespace ege {
         });
 
         for (const Invocation& invocation : starting) {
+            spawnedByEntity[invocation.entity.id()].push_back(invocation.behavior);
             invocation.behavior->onSpawn();
+        }
+
+        collectDespawned();
+    }
+
+    void ScriptSystem::collectDespawned() {
+        // A despawned entity takes its Script component - and the only other
+        // reference to its behaviours - with it, so by the time anyone could
+        // notice, there would be nothing left to tell. This map is the
+        // reference that survives long enough to make the call, which is the
+        // whole of why it exists.
+        std::vector<std::shared_ptr<Behavior>> leaving;
+        for (auto entry = spawnedByEntity.begin(); entry != spawnedByEntity.end();) {
+            const Behavior* first = entry->second.empty() ? nullptr : entry->second.front().get();
+            const bool gone =
+                first == nullptr || first->scene == nullptr || !first->scene->alive(entry->first);
+            if (gone) {
+                for (std::shared_ptr<Behavior>& behavior : entry->second) {
+                    leaving.push_back(std::move(behavior));
+                }
+                entry = spawnedByEntity.erase(entry);
+            } else {
+                ++entry;
+            }
+        }
+
+        // Outside the walk, like every other call into gameplay here: an
+        // onDespawn may despawn something else.
+        for (const std::shared_ptr<Behavior>& behavior : leaving) {
+            behavior->onDespawn();
         }
     }
 
@@ -154,6 +190,15 @@ namespace ege {
 
     void ScriptSystem::fixedTick(World& world, float deltaSeconds) {
         for (const Invocation& invocation : gather(world)) {
+            if (world.alive(invocation.entity.id())) {
+                // Timers first, so one set during this tick gets its whole
+                // duration before it is next looked at - which is what makes
+                // `after(0.f, ...)` mean "next tick" rather than "later in
+                // this one".
+                invocation.behavior->advanceTimers(deltaSeconds);
+            }
+            // Re-checked: a timer may have despawned the entity it was set
+            // on, and the dead take no calls.
             if (world.alive(invocation.entity.id())) {
                 invocation.behavior->onFixedTick(deltaSeconds);
             }
@@ -223,6 +268,17 @@ namespace ege {
                 slot.spawned = false;
             }
         });
+        // Everything has been told; what is left is this system's own
+        // references, and holding them past Stop would keep behaviours alive
+        // into a world that no longer has them.
+        spawnedByEntity.clear();
+
+        // Each behaviour ended its own subscriptions as it went, so this
+        // clears nothing in the ordinary case. It is here for the other one:
+        // something outside a behaviour subscribed - a tool, a test, an
+        // editor panel - and play ending is when those listeners stop being
+        // relevant too.
+        world.events().clear();
     }
 
 }  // namespace ege

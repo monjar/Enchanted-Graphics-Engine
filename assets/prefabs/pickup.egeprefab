@@ -50,6 +50,16 @@
         },
         "ege::PhysicsLayer": {
           "name": "Props"
+        },
+        "ege::Script": {
+          "behaviors": [
+            {
+              "type": "ege::Pickup",
+              "fields": {
+                "collectedBy": "Character"
+              }
+            }
+          ]
         }
       }
     }

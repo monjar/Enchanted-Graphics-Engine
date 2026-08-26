@@ -2,7 +2,10 @@
 
 #include "physics/PhysicsSystem.hpp"
 #include "scene/World.hpp"
+#include "script/Behavior.hpp"
 
+#include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace ege {
@@ -56,6 +59,23 @@ namespace ege {
         // are - so reload lands in the same place a fresh Play would, and
         // "reflect the state you want to keep" is a rule an author can hold.
         std::size_t rebuildInstances(World& world);
+
+    private:
+        // Calls onDespawn on the behaviours of entities that have gone, and
+        // forgets them.
+        void collectDespawned();
+
+        // The behaviours that have spawned, held by the system as well as by
+        // their component.
+        //
+        // A despawned entity takes its Script component with it, and with it
+        // the only other reference to its behaviours - so without this there
+        // would be nothing left to call onDespawn *on* by the time anyone
+        // noticed. That is why the promise the header makes about despawning
+        // mid-play needs a second reference to keep, and why it is this
+        // system's rather than the world's: the world does not know what a
+        // behaviour is.
+        std::unordered_map<EntityId, std::vector<std::shared_ptr<Behavior>>> spawnedByEntity;
     };
 
 }  // namespace ege

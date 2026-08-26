@@ -395,6 +395,37 @@ an instance link, which is a different feature and one the editor should ask
 for before it exists. A `PrefabRef` resolves like any other asset reference,
 so a behaviour can name one in a reflected field and a scene can save it.
 
+**Timers and events.** `after(seconds, fn)` schedules work on the fixed tick,
+so a timer is as frame-rate-independent as the physics beside it and a paused
+game's timers do not advance — nobody has to ask for that, because nothing is
+ticking them. The callback belongs to the behaviour and dies with it: an
+entity despawned with a timer pending is an entity whose timer never fires.
+
+Events are typed by the type itself — no base class, no registration, no
+reflection — so a subscriber that asks for the wrong one does not compile
+rather than not firing:
+
+```cpp
+void onSpawn() override {
+    on<PickupCollected>([this](const PickupCollected&) { count++; });
+}
+```
+
+Delivery is immediate, because a queue would buy re-entrancy safety at the
+price of "when does this happen" being something the author has to look up.
+Three rules make immediacy safe: a handler subscribed *during* a dispatch does
+not receive the event being dispatched (it was not listening when the thing
+happened); a handler unsubscribed during a dispatch is not called even if the
+dispatch had not reached it; and a handler may raise events, including of the
+type it handles, down to a depth after which the bus stops and logs — a cycle
+should be a log line rather than a stack overflow.
+
+`Behavior::on` ends its subscriptions when the behaviour goes, which is the
+part every subscriber would otherwise have to remember. The demo's win
+condition is three objects that have never met: a pickup says it was
+collected and removes itself, a goal counts without knowing what it counts,
+and a gate opens without having heard of a pickup.
+
 **Asset hot reload.** The engine watches the project directory while it runs:
 save a change to `assets/materials/floor.egematerial` and the demo's floor
 changes without a restart. A material is rewritten inside the object every
@@ -431,8 +462,8 @@ no longer has to happen on the frame that asked for it. And what the fixed
 step moves is drawn between its steps rather than on them, so a sixty hertz
 simulation does not look like sixty hertz on a faster display.
 
-Still to come: timers and typed events, sound, runtime UI, and the standalone
-editor and player.
+Still to come: a complete level, sound, runtime UI, and the standalone editor
+and player.
 [`docs/ROADMAP.md`](docs/ROADMAP.md) lays out the plan and tracks, per phase
 and per milestone, exactly what has landed and what has not — §11 plans the
 rest of the way to a v1.0 someone could ship a game with.
